@@ -13,5 +13,9 @@ in `wrangler.jsonc` (the city, its coordinates and time zone, the rates and thei
 - `dev.zsh`: the tests and `wrangler dev` in a throwaway container from a git archive (commit
   first), published on the Mac's LAN address, port 8787, for the PS3 and for curl.
 
-Not deployed: the deploy and the zone's per-host rule (plain HTTP for the Worker's host) wait
-for Lucas's OK.
+Deployed on `http://couch.daddiego.com.ar/board` (2026-10-10, Lucas's OK): `wrangler deploy
+--env-file ~/.config/cloudflare/personal.env` from this folder, after a commit. Plain HTTP works
+because the zone `daddiego.com.ar` has Always Use HTTPS off and one Single Redirect rule
+(HTTP to HTTPS for every host but this one): a Configuration Rule cannot change that setting.
+A new host on the zone gets the redirect by itself. Turning Always Use HTTPS on again breaks
+Couch, which has no TLS.
