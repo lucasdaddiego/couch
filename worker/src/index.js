@@ -3,7 +3,7 @@
 // so that a failed upstream gives the old values marked stale with their real age. Plain HTTP
 // on purpose: the PS3 has no TLS (the zone's per-host rule, design section 4).
 
-import { boardText } from './board.js';
+import { boardText, clean } from './board.js';
 
 const TIMEOUT_MS = 4000;
 
@@ -13,12 +13,12 @@ export const UPSTREAMS = {
     url: () => 'https://dolarapi.com/v1/dolares',
     key: () => 'https://couch.internal/usd',
     ttl: (env) => Number(env.USD_TTL) || 300,
-    valid: (d) => Array.isArray(d) && d.length > 0,
+    valid: (d) => Array.isArray(d) && d.length > 0 && d.every((x) => x !== null && typeof x === 'object'),
   },
   wx: {
     host: 'open-meteo',
     url: (env) => 'https://api.open-meteo.com/v1/forecast?' + new URLSearchParams({
-      latitude: env.LAT, longitude: env.LON, timezone: env.TZ, forecast_days: '3',
+      latitude: env.LAT, longitude: env.LON, timezone: env.TZ, forecast_days: '4',
       current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,is_day',
       daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
     }),
@@ -49,7 +49,8 @@ export async function get(name, env, now, deps) {
       let data = null;
       try {
         data = await r.json();
-      } catch {
+      } catch (e) {
+        if (!e || e.name !== 'SyntaxError') throw e;   // a body that stalls or breaks: the outer catch names it
         data = null;
       }
       if (u.valid(data)) {
@@ -77,9 +78,21 @@ export async function handle(request, env, deps) {
   }
   const now = deps.now();
   const [usd, wx] = await Promise.all([get('usd', env, now, deps), get('wx', env, now, deps)]);
-  return new Response(boardText({ now, usd, wx, env }), {
-    headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-  });
+  // Always 200 with the states in the body (design section 4): a reply that cannot be formatted
+  // gives both upstreams as none with the error, and a bad setting (TZ) the bare lines.
+  let text;
+  try {
+    text = boardText({ now, usd, wx, env });
+  } catch (e) {
+    const reason = `worker: ${clean((e && e.message) || e).slice(0, 60)}`;
+    const none = { state: 'none', reason, age: 0, data: null };
+    try {
+      text = boardText({ now, usd: none, wx: none, env });
+    } catch {
+      text = ['couch-board 1', `now=${now}`, `usd_state=none|${reason}`, `wx_state=none|${reason}`, 'end', ''].join('\n');
+    }
+  }
+  return new Response(text, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
 }
 
 export default {

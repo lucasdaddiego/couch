@@ -42,7 +42,7 @@ test('stale and none: the state lines, the old data with its age, no data lines 
   assert.equal(lines.filter((l) => l.startsWith('usd=')).length, 6);
   assert.ok(lines.includes('wx_state=none|open-meteo: no answer in 4 s'));
   assert.equal(lines.filter((l) => l.startsWith('wx_now=') || l.startsWith('day=')).length, 0);
-  assert.ok(lines.includes('offset=-10800'));                  // from the time zone when Open-Meteo is away
+  assert.ok(lines.includes('offset=-10800'));                  // from the time zone, also with no forecast
   assert.equal(lines.at(-1), 'end');
 });
 
@@ -59,6 +59,41 @@ test('the helpers', () => {
   assert.equal(tzOffset(NOW, env.TZ), -10800);
   assert.equal(tzOffset(NOW, 'UTC'), 0);
   assert.deepEqual(parseCasas('oficial:Oficial,,blue:Bl|ue'), [{ casa: 'oficial', label: 'Oficial' }, { casa: 'blue', label: 'Bl ue' }]);
+});
+
+test('the day lines start on now\'s local date, also from a forecast fetched the day before', () => {
+  const sun = 1791687840; // 2026-10-11 00:04 in Buenos Aires: the fixture's daily starts on Saturday
+  const day = (t) => t.trimEnd().split('\n').filter((l) => l.startsWith('day='));
+  assert.deepEqual(day(boardText({ now: sun, env, usd: { state: 'none', reason: 'x', age: 0, data: null }, wx: { state: 'ok', age: 840, data: wxData } })),
+    ['day=Today|Overcast|16°|9°|2%', 'day=Mon|Drizzle|16°|10°|22%']);
+  const d4 = structuredClone(wxData); // a 4-day forecast (forecast_days=4) still gives three lines
+  d4.daily.time.push('2026-10-13');
+  for (const k of ['weather_code', 'temperature_2m_max', 'temperature_2m_min', 'precipitation_probability_max']) d4.daily[k].push(d4.daily[k][2]);
+  assert.deepEqual(day(boardText({ now: sun, env, usd: { state: 'none', reason: 'x', age: 0, data: null }, wx: { state: 'stale', reason: 'x', age: 72000, data: d4 } })),
+    ['day=Today|Overcast|16°|9°|2%', 'day=Mon|Drizzle|16°|10°|22%', 'day=Tue|Drizzle|16°|10°|22%']);
+  const bad = structuredClone(wxData); // a value that is not a date is skipped, not thrown
+  bad.daily.time[1] = 'soon';
+  assert.deepEqual(day(boardText({ now: NOW, env, usd: { state: 'none', reason: 'x', age: 0, data: null }, wx: { state: 'ok', age: 0, data: bad } })),
+    ['day=Today|Rain showers|16°|11°|96%', 'day=Mon|Drizzle|16°|10°|22%']);
+});
+
+test('the offset is the time zone\'s at now, not the cached forecast\'s (a DST change)', () => {
+  const now = Date.UTC(2026, 9, 25, 1, 5) / 1000; // Madrid left summer time at 01:00 UTC
+  const t = boardText({ now, env: { ...env, TZ: 'Europe/Madrid' }, usd: { state: 'none', reason: 'x', age: 0, data: null },
+    wx: { state: 'ok', age: 600, data: { ...wxData, utc_offset_seconds: 7200 } } });
+  assert.ok(t.split('\n').includes('offset=3600'));
+});
+
+test('a rate list with a bad element keeps its good rates', () => {
+  const t = boardText({ now: NOW, env, usd: { state: 'ok', age: 0, data: [null, 7, ...usdData] }, wx: { state: 'none', reason: 'x', age: 0, data: null } });
+  assert.equal(t.split('\n').filter((l) => l.startsWith('usd=')).length, 6);
+});
+
+test('a long city is cut, so the reply stays within 4 KB with its end line', () => {
+  const t = boardText({ now: NOW, env: { ...env, CITY: 'x'.repeat(4100) }, usd: { state: 'ok', age: 0, data: usdData }, wx: { state: 'ok', age: 0, data: wxData } });
+  assert.ok(new TextEncoder().encode(t).length <= MAX_BYTES);
+  assert.ok(t.split('\n').includes(`city=${'x'.repeat(100)}`));
+  assert.ok(t.endsWith('\nend\n'));
 });
 
 test('a long reply drops lines from the end to stay within 4 KB', () => {
@@ -94,6 +129,7 @@ function deps({ cache = fakeCache(), answers = {}, now = NOW } = {}) {
       const a = answers[new URL(url).hostname];
       if (a instanceof Error) throw a;
       if (!a) throw new TypeError('no route');
+      if (a.response) return a.response;
       return new Response(typeof a.body === 'string' ? a.body : JSON.stringify(a.body), { status: a.status || 200 });
     },
   };
@@ -128,6 +164,30 @@ test('get: an old entry and a failed upstream give stale with the real age; no e
   assert.deepEqual([n.state, n.reason, n.data], ['none', 'dolarapi.com: no answer in 4 s', null]);
   const bad = await get('usd', env, NOW, deps({ answers: { 'dolarapi.com': { body: '{"not": "a list"}' } } }));
   assert.deepEqual([bad.state, bad.reason], ['none', 'dolarapi.com: bad JSON']);
+});
+
+test('get: a body that stalls is no answer, a body that breaks names its error, a bad element is bad JSON', async () => {
+  const timeout = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+  const stall = { ok: true, status: 200, json: async () => { throw timeout; } };
+  const s = await get('usd', env, NOW, deps({ answers: { 'dolarapi.com': { response: stall } } }));
+  assert.deepEqual([s.state, s.reason], ['none', 'dolarapi.com: no answer in 4 s']);
+  const broke = { ok: true, status: 200, json: async () => { throw new TypeError('terminated'); } };
+  const b = await get('usd', env, NOW, deps({ answers: { 'dolarapi.com': { response: broke } } }));
+  assert.deepEqual([b.state, b.reason], ['none', 'dolarapi.com: terminated']);
+  const d = deps({ answers: { 'dolarapi.com': { body: '[null]' } } });
+  const n = await get('usd', env, NOW, d);
+  await Promise.all(d.waits);
+  assert.deepEqual([n.state, n.reason, d.cache.m.size], ['none', 'dolarapi.com: bad JSON', 0]);
+});
+
+test('handle: a reply that cannot be formatted is still 200 with both states none', async () => {
+  const d = deps({ answers: ok });
+  const r = await handle(new Request('http://couch.test/board'), { ...env, TZ: 'Not/A_Zone' }, d);
+  assert.equal(r.status, 200);
+  const body = await r.text();
+  assert.ok(body.startsWith('couch-board 1\nnow=1791614218\n'));
+  assert.match(body, /\nusd_state=none\|worker: [^\n|]+\nwx_state=none\|worker: [^\n|]+\nend\n$/);
+  assert.ok(d.calls.some((u) => u.includes('forecast_days=4')));
 });
 
 test('handle: /board is the reply, any other path or method is 404', async () => {

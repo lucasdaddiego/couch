@@ -8,6 +8,7 @@ set -e
 R=${0:A:h:h:h}
 ctx=$(mktemp -d)
 trap 'docker rmi -f couch-worker:dev > /dev/null 2>&1; rm -rf "${ctx:?}"' EXIT
+trap 'exit 130' INT TERM HUP    # zsh skips the EXIT trap on a signal: exit runs it
 git -C $R archive -o $ctx/worker.tar HEAD:couch/worker
 cp ${0:A:h}/Dockerfile $ctx/
 docker build -q -t couch-worker:dev $ctx > /dev/null

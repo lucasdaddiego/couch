@@ -67,10 +67,14 @@ function stateLine(u) {
 // gives them: data is dolarapi's /v1/dolares array and Open-Meteo's forecast object.
 export function boardText({ now, usd, wx, env }) {
   const tz = env.TZ || 'UTC', locale = env.LOCALE || 'es-AR';
-  const offset = wx.data && Number.isFinite(wx.data.utc_offset_seconds) ? wx.data.utc_offset_seconds : tzOffset(now, tz);
-  const out = [`couch-board ${VERSION}`, `now=${now}`, `offset=${offset}`, `city=${clean(env.CITY || '')}`];
-  if (usd.data) {
-    const byCasa = new Map(usd.data.map((d) => [d.casa, d]));
+  // The offset at now, not Open-Meteo's utc_offset_seconds: a cached forecast keeps the offset of
+  // its fetch, which is wrong after a DST change. The city is cut to 100 code points, the only
+  // line that the 4 KB guard below cannot drop.
+  const offset = tzOffset(now, tz);
+  const city = Array.from(clean(env.CITY || '')).slice(0, 100).join('').trim();
+  const out = [`couch-board ${VERSION}`, `now=${now}`, `offset=${offset}`, `city=${city}`];
+  if (Array.isArray(usd.data)) {
+    const byCasa = new Map(usd.data.filter((d) => d !== null && typeof d === 'object').map((d) => [d.casa, d]));
     for (const { casa, label } of parseCasas(env.CASAS).slice(0, 8)) {
       const d = byCasa.get(casa);
       if (!d) continue;
@@ -89,9 +93,16 @@ export function boardText({ now, usd, wx, env }) {
       `${c.is_day ? 'day' : 'night'}`);
   }
   if (dy && Array.isArray(dy.time)) {
-    for (let i = 0; i < Math.min(3, dy.time.length); i++) {
-      const label = i === 0 ? 'Today'
-        : new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(new Date(`${dy.time[i]}T12:00:00Z`));
+    // Open-Meteo starts `daily` on the local date of its fetch, so a cached forecast can start on
+    // a past day: skip the days before now's local date and any value that is not a date. i stays
+    // each day's index into the other daily arrays.
+    const p = parts(now, tz), today = `${p.year}-${p.month}-${p.day}`;
+    const days = dy.time.map((d, i) => [String(d), i])
+      .filter(([d]) => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(`${d}T12:00:00Z`)) && d >= today)
+      .slice(0, 3);
+    for (const [d, i] of days) {
+      const label = d === today ? 'Today'
+        : new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(new Date(`${d}T12:00:00Z`));
       const num = (a, unit) => (a && Number.isFinite(a[i]) ? `${Math.round(a[i])}${unit}` : '-');
       out.push(`day=${label}|${wmoWords(dy.weather_code && dy.weather_code[i])}|${num(dy.temperature_2m_max, '°')}|` +
         `${num(dy.temperature_2m_min, '°')}|${num(dy.precipitation_probability_max, '%')}`);
@@ -99,7 +110,8 @@ export function boardText({ now, usd, wx, env }) {
   }
   out.push(`wx_age=${Math.max(0, wx.age | 0)}`, `wx_state=${stateLine(wx)}`, 'end');
   let text = out.join('\n') + '\n';
-  // A body over MAX_BYTES would be cut by Couch's 4 KB buffer: drop rates from the end until it fits.
+  // A body over MAX_BYTES would be cut by Couch's 4 KB buffer: drop rate and day lines from the end
+  // until it fits.
   while (new TextEncoder().encode(text).length > MAX_BYTES) {
     const i = out.findLastIndex((l) => l.startsWith('usd=') || l.startsWith('day='));
     if (i < 0) break;
