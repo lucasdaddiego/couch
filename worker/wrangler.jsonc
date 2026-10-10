@@ -1,10 +1,13 @@
-// Couch's Board Worker. No secrets: every setting is a var. The deploy and the zone's per-host
-// rule (Always Use HTTPS off for the Worker's host) wait for Lucas's OK (design section 4).
+// Couch's Board Worker. No secrets: every setting is a var. Deployed on couch.daddiego.com.ar
+// (Lucas's OK, 2026-10-10): the zone has Always Use HTTPS off and one Single Redirect (HTTP to
+// HTTPS for every other host), so this host answers plain HTTP for the PS3 (design section 4).
+//   wrangler deploy --env-file ~/.config/cloudflare/personal.env
 {
   "name": "couch-board",
   "main": "src/index.js",
   "compatibility_date": "2026-09-01",
   "workers_dev": false,
+  "routes": [{ "pattern": "couch.daddiego.com.ar", "custom_domain": true }],
   "vars": {
     "CITY": "Buenos Aires",
     "LAT": "-34.6037",
