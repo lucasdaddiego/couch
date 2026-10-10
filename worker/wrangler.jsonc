@@ -1,0 +1,18 @@
+// Couch's Board Worker. No secrets: every setting is a var. The deploy and the zone's per-host
+// rule (Always Use HTTPS off for the Worker's host) wait for Lucas's OK (design section 4).
+{
+  "name": "couch-board",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": false,
+  "vars": {
+    "CITY": "Buenos Aires",
+    "LAT": "-34.6037",
+    "LON": "-58.3816",
+    "TZ": "America/Argentina/Buenos_Aires",
+    "CASAS": "oficial:Oficial,blue:Blue,bolsa:MEP,contadoconliqui:CCL,cripto:Cripto,tarjeta:Tarjeta",
+    "LOCALE": "es-AR",
+    "USD_TTL": "300",
+    "WX_TTL": "900"
+  }
+}
