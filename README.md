@@ -236,6 +236,21 @@ range); the ages, the error words, `auto.txt`, the end line; and, in the
 sanitizer build, 20,000 mutated replies with every field inside its buffer.
 The repository's CI runs no app's C host checks, so this one is not in CI.
 
+## The console rounds
+
+Round 1, 2026-10-11: rc1 (d6e171a), unattended, on the deployed Worker (no
+`board_url.txt`): passed. `auto.txt` "60", then `ps3run round` (`pull/rc1`). The
+start did not take: `/play.ps3?COUC00001`, 19 s after the install, started the
+icon that had the XMB's focus (Cell Bench) instead of the new app. Cell Bench
+was quit with `/xmb.ps3$exit`, and webMAN's virtual pad started Couch from its
+icon (UP, CROSS). The run: `net_start` and `tz_params` done with rc 0, no
+freeze; the console resolved `couch.daddiego.com.ar` and fetched the Board in
+0.75 s (HTTP 200, 467 bytes, offset -10800); TIMEZONE -180, SUMMERTIME 0,
+TIME_FORMAT 1 (24-hour); the console's clock 27 s ahead of the Worker's; 57.3
+fps over 60 s, the 2 frames over 25 ms are the two shots (1.3 s each). Both
+shots read right: the clock, six rates and the weather with their ages, and
+the Info screen.
+
 ## The console rounds to come
 
 Round 1, unattended, with no deploy (the design's round 1 without the LP10):
