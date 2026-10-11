@@ -21,7 +21,10 @@ extern char board_url_note[160];     /* why board_url.txt was not used, or "" */
 
 int board_start(void);               /* the thread: 0, or sysThreadCreate's rc */
 int board_running(void);
-void board_stop(void);               /* at exit: board_on 0, then at most 1 s for the thread to leave */
+/* At exit: board_on 0, the open socket shut down (http_wake), then the
+ * join, with no time limit. 0 when the thread ended or never ran, -1 when
+ * the join failed and the thread had not left (no net_end then). */
+int board_stop(void);
 void board_refresh(void);            /* SQUARE: a fetch now, or 10 s after the last one began */
 void board_take(void);               /* each frame, in every screen: a new reply when the ready word is set */
 

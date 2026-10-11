@@ -2,8 +2,8 @@
  * download, which ran on this console in its job thread: DNS, a blocking
  * connect with SO_RCVTIMEO and SO_SNDTIMEO, one send, recv until the close
  * or the end line. It reads want and board_on every 50 ms and between the
- * steps of a fetch. The exit waits at most 1 s for it (board_stop): a thread
- * still in DNS, connect or recv does not hold the exit, exit() ends it. */
+ * steps of a fetch. The exit (board_stop) shuts its socket down and joins
+ * it with no time limit, so no network call is left when net_end runs. */
 #include <stdio.h>
 #include <string.h>
 #include <sys/thread.h>
@@ -125,21 +125,29 @@ int board_start(void)
 
 int board_running(void) { return started; }
 
-/* sysUsleep out of line for the exit's wait: in that loop gcc rotated the
- * code and put the call's li r11 after its sc, which Health's syscalls.py
- * cannot resolve (it looks back from each sc). */
-static void __attribute__((noinline)) nap(u32 us) { sysUsleep(us); }
-
-void board_stop(void)
+/* No time limit on the join: one that gave up would leave the thread in a
+ * network call while net_end and the process exit end the network under it.
+ * The wait, by where the thread is: in a recv or a send, the shutdown ends
+ * the call at once (SO_RCVTIMEO and SO_SNDTIMEO end it within 10 s in any
+ * case); in its 50 ms sleep, the sleep; in a DNS lookup or a connect, which
+ * a shutdown does not end, the resolver's or the TCP stack's own timeout,
+ * not measured on this console. http_get reads board_on after each step and
+ * makes no further call. */
+int board_stop(void)
 {
-    if (!started) return;
+    if (!started) return 0;
+    int in_fetch = busy;
+    s64 t0 = sysGetSystemTime();
+    couch_log("board thread: the exit stops it%s", in_fetch ? ", it is in a fetch" : "");   /* the mark of a hang in the join */
     board_on = 0;
-    for (int i = 0; i < 100 && !board_left; i++) nap(10000);   /* at most 1 s */
-    if (board_left) {
-        u64 rv = 0;
-        sysThreadJoin(tid, &rv);
-    } else couch_log("board thread: still in a network call at the exit");
-    started = 0;
+    http_wake();                             /* the fence, then netShutdown on the open socket */
+    u64 rv = 0;
+    s32 rc = sysThreadJoin(tid, &rv);
+    double sec = (double)(sysGetSystemTime() - t0) / 1e6;
+    if (rc == 0 || board_left) started = 0;  /* a thread that may still run stays started: a later call joins again, no net_end */
+    if (rc == 0) couch_log("board thread: joined in %.2f s%s", sec, in_fetch ? ", it was in a fetch" : "");
+    else couch_log("board thread: sysThreadJoin rc 0x%08x after %.2f s, %s", (unsigned)rc, sec, board_left ? "the thread had left" : "the thread may still run");
+    return rc == 0 || board_left ? 0 : -1;
 }
 
 void board_refresh(void)

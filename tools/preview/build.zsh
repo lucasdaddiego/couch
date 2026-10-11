@@ -7,6 +7,8 @@
 #   build/pv_utf8_off  the app built with -DCOUCH_UTF8_OFF: text_utf8 is not
 #                      called, as on a console where it failed (the
 #                      utf8_off scenario: the byte text and the fold)
+# Both force-include stub/pv_couch.h: the declarations the library's stub
+# headers lack (sysModuleUnload, for net_end).
 # The checkout is $PS3GFX, else $PS3DEV/src/ps3gfx, the clone PS3 Health's
 # sdk_setup.sh makes at the pinned commit; a checkout at another commit is
 # announced, since the pkg links the pin.
@@ -20,7 +22,8 @@ head=$(git -C $L rev-parse HEAD 2>/dev/null); head=${head:-unknown}
 set -e
 A=${0:A:h:h:h}
 O=${0:A:h}/build
-PV_CFLAGS="-DCOUCH_UTF8_OFF ${PV_CFLAGS:-}" zsh $L/tools/preview/build.zsh APP=$A > /dev/null
+INC="-include ${0:A:h}/stub/pv_couch.h"
+PV_CFLAGS="$INC -DCOUCH_UTF8_OFF ${PV_CFLAGS:-}" zsh $L/tools/preview/build.zsh APP=$A > /dev/null
 mv $O/pv $O/pv_utf8_off
 print "built $O/pv_utf8_off"
-PV_CFLAGS="${PV_CFLAGS:-}" exec zsh $L/tools/preview/build.zsh APP=$A
+PV_CFLAGS="$INC ${PV_CFLAGS:-}" exec zsh $L/tools/preview/build.zsh APP=$A

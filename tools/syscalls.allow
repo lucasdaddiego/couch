@@ -2,7 +2,8 @@
 # --allow checks the ELF against this file; --write rewrites it from a
 # known-good ELF and drops these notes). Written on 2026-10-11 from Couch
 # 0.1.0's second ELF (the first had one sc the scanner could not resolve: gcc
-# put sysUsleep's li r11 after the sc, so it goes through nap() now), each
+# put sysUsleep's li r11 after the sc, so it went through nap(), until the
+# exit's fix below removed that loop), each
 # number looked at before it went in: 39 numbers, 79
 # call sites, every sc resolved. They are PS3 Health's runtime set without its
 # drive, temperature and fan calls (383, 409, 600, 601, 609, 616): threads and
@@ -10,8 +11,12 @@
 # the network (700 to 714) and the file system (801 to 834), from PSL1GHT's
 # runtime and ps3gfx. Couch's own calls add no number: libnet, libnetctl,
 # sysModuleLoad and sysUtilGetSystemParamInt are SPRX imports, and
-# sysLv2FsStat (808) and sysUsleep (141) were in the set already. Never 602,
-# 604 or 870: the script refuses them whatever this file says.
+# sysLv2FsStat (808) and sysUsleep (141) were in the set already. The exit's
+# fix of 2026-10-11 (board_stop shuts the socket down and joins with no wait
+# loop, so nap() went; net_end) keeps these 39 numbers at 78 call sites,
+# every sc resolved: netShutdown, netCtlTerm, netDeinitialize and
+# sysModuleUnload add no number. Never 602, 604 or 870: the script refuses
+# them whatever this file says.
 44
 141
 142

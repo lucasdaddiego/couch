@@ -14,6 +14,7 @@
 #include <string.h>
 #include <lv2/systime.h>
 #include <sys/file.h>
+#include <sysutil/sysutil.h>
 #include <ps3gfx/ui.h>
 #include <ps3gfx/fs.h>
 #include <ps3gfx/journal.h>
@@ -52,10 +53,15 @@ void couch_log(const char *fmt, ...)
     fs_write_file(LOG, line, (u64)n, 1);
 }
 
-/* Every exit path: START, Quit Game from the PS button menu, and exit(). */
+/* Every exit path: START, Quit Game from the PS button menu, and exit().
+ * exit() runs this once (atexit), after main returned. The Board thread
+ * ends first (its socket shut down, then the join), then the network
+ * (net_end), then the picture (ui_end). A Board thread that did not end
+ * keeps the network as it is: no net_end under a network call. */
 static void leave(void)
 {
-    board_stop();
+    if (board_stop() == 0) net_end();
+    else couch_log("net_end: not run, the Board thread did not end");
     if (fs_ok) {
         ui_stat s;
         ui_stats(&s, 0);
@@ -92,15 +98,28 @@ static void log_start(void)
 
 /* The Board opens, at start and after the Info screen: the network start
  * (also after a clear of the journal), the clock's settings, the thread.
- * -1 for START at the clock's prompt. */
+ * -1 for a quit (Quit Game from the PS button menu) and for START at the
+ * clock's prompt. The quit is read before the network start and again
+ * after it, since the start's job screen draws frames, and each frame reads
+ * the system's events. */
 static int board_enter(void)
 {
+    sysUtilCheckCallback();                  /* a Quit Game sent before the first frame (no read_pad since the start) */
+    if (quit) {
+        couch_log("quit before the Board opened: %s", net_state == NET_UP ? "the network was up" : "no network start");
+        return -1;
+    }
     if (net_state != NET_UP) {
         int before = net_state;
         net_start(fs_ok);
-        if (net_state == NET_UP) couch_log("net_start: rc 0x%08x, address %s", (unsigned)net_rc, net_ip);
-        else if (net_state == NET_FAILED) couch_log("net_start: rc 0x%08x", (unsigned)net_rc);
+        if (net_state == NET_UP || net_state == NET_FAILED)
+            couch_log("net_start: rc 0x%08x, address %s; the netctl module rc 0x%08x, netCtlInit rc 0x%08x", (unsigned)net_rc, net_ip,
+                      (unsigned)net_mod_rc, (unsigned)net_ctl_rc);
         else if (before != NET_BLOCKED) couch_log("net_start: not run, the journal holds it as %s", journal_state("net_start") == J_SKIPPED ? "skipped" : "frozen");
+    }
+    if (quit) {
+        couch_log("quit during the network start: the Board thread not started");
+        return -1;
     }
     if (clock_tz() < 0) return -1;
     if (net_state == NET_UP && !board_running()) board_start();

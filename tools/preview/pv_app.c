@@ -13,16 +13,27 @@
  *                         repeats: ok, refused, silent (no answer: the
  *                         10 s SO_RCVTIMEO runs out at once), cut (the body
  *                         without its last 30 bytes), 301, v2 (line 1
- *                         "couch-board 2")
+ *                         "couch-board 2"), hang (recv waits until a
+ *                         netShutdown, at most 30 s of host time)
  *   PV_TZ, PV_SUMMER, PV_TIMEFMT  the three settings (default -180, 0, 1)
  *   PV_TZ_FAIL=1          the three calls fail
  *   PV_NOIP=1             netCtlGetInfo fails: the console has no address
  *   PV_NET_FAIL=1         netInitialize fails (rc 0x80010002)
- * The peer appends each request, as it came, to $PV_ROOT/peer.log. Only the
- * Board thread calls the socket functions, so they keep no lock. */
+ *   PV_NETCTL_FAIL=1      netCtlInit fails (rc 0x80130101)
+ *   PV_QUIT=net           netInitialize sets quit, as a Quit Game during the
+ *                         network start would (the preview's system sends
+ *                         no events)
+ * The peer appends each request, as it came, to $PV_ROOT/peer.log, and a
+ * "pv: " line for netCtlInit, for each exit call (netShutdown, netCtlTerm,
+ * netDeinitialize, sysModuleUnload) and for the end of a hang. The Board thread makes every
+ * socket call but netShutdown, which the exit makes from the main thread:
+ * it only sets the slot's flag, and they keep no lock. The library's
+ * sysModuleLoad is not weak, so the module load cannot fail here. */
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
+#include <unistd.h>
 #include "net/net.h"
 #include "net/netctl.h"
 #include "netinet/in.h"
@@ -51,12 +62,14 @@ static const char default_body[] =
     "wx_state=ok\n"
     "end\n";
 
-enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2 };
+enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2, K_HANG, K_KINDS };
+
+extern volatile int quit;                    /* ps3gfx's: Quit Game from the PS button menu */
 
 /* The kind of connect n (0 first) from PV_BOARD_FAIL. */
 static int kind_at(int n)
 {
-    static const char *const names[] = {"ok", "refused", "silent", "cut", "301", "v2"};
+    static const char *const names[K_KINDS] = {"ok", "refused", "silent", "cut", "301", "v2", "hang"};
     const char *s = getenv("PV_BOARD_FAIL");
     char tok[16] = "ok";
     for (int i = 0; s && *s; i++) {
@@ -65,15 +78,32 @@ static int kind_at(int n)
         if (i == n || !s[len]) break;
         s += len + 1;
     }
-    for (int k = 0; k < 6; k++)
+    for (int k = 0; k < K_KINDS; k++)
         if (!strcmp(tok, names[k])) return k;
     return K_OK;
+}
+
+/* One "pv: " line in peer.log. */
+static void note(const char *fmt, ...)
+{
+    char p[1024];
+    snprintf(p, sizeof p, "%s/peer.log", getenv("PV_ROOT") ? getenv("PV_ROOT") : "/tmp/pv");
+    FILE *f = fopen(p, "ab");
+    if (!f) return;
+    va_list ap;
+    va_start(ap, fmt);
+    fputs("pv: ", f);
+    vfprintf(f, fmt, ap);
+    fputc('\n', f);
+    va_end(ap);
+    fclose(f);
 }
 
 #define NSOCK 8
 #define FD0 3
 static struct {
     int used, kind, in_len, out_len, out_pos;
+    volatile int shut;                       /* netShutdown came (the main thread) */
     char in[2048];
     char *out;
 } sk[NSOCK];
@@ -207,6 +237,13 @@ ssize_t netRecv(s32 s, void *b, size_t l, s32 f)
 {
     (void)f;
     int i = slot_of(s);
+    if (i >= 0 && sk[i].kind == K_HANG) {   /* a peer that never answers, and a recv with no timeout */
+        for (int t = 0; t < 30000 && !sk[i].shut; t++) usleep(1000);
+        note(sk[i].shut ? "recv: the shutdown ended it" : "recv: no shutdown in 30 s");
+        if (sk[i].shut) return 0;            /* BSD: a read side shut down reads as the end */
+        err_val = NET_EAGAIN;
+        return -1;
+    }
     if (i < 0 || !sk[i].out || sk[i].kind == K_SILENT) {
         err_val = NET_EAGAIN;                            /* SO_RCVTIMEO ran out */
         return -1;
@@ -228,7 +265,43 @@ s32 netClose(s32 s)
     return 0;
 }
 
-s32 netInitialize(void) { return getenv("PV_NET_FAIL") ? (s32)0x80010002 : 0; }
+s32 netInitialize(void)
+{
+    if (getenv("PV_QUIT") && !strcmp(getenv("PV_QUIT"), "net")) quit = 1;
+    return getenv("PV_NET_FAIL") ? (s32)0x80010002 : 0;
+}
+
+s32 netShutdown(s32 s, s32 how)
+{
+    int i = slot_of(s);
+    note("netShutdown %d how %d%s", s, how, i < 0 ? ": no such socket" : "");
+    if (i < 0) {
+        err_val = 9;                                     /* NET_EBADF */
+        return -1;
+    }
+    sk[i].shut = 1;
+    return 0;
+}
+
+s32 netDeinitialize(void)
+{
+    note("netDeinitialize");
+    return 0;
+}
+
+s32 netCtlInit(void)
+{
+    note("netCtlInit");
+    return getenv("PV_NETCTL_FAIL") ? (s32)0x80130101 : 0;
+}
+
+void netCtlTerm(void) { note("netCtlTerm"); }
+
+s32 sysModuleUnload(u32 id)
+{
+    note("sysModuleUnload 0x%x", (unsigned)id);
+    return 0;
+}
 
 s32 netCtlGetInfo(s32 code, union net_ctl_info *info)
 {

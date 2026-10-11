@@ -81,7 +81,25 @@ console round).
   net_start`, the calls run behind ps3gfx's job counter (`run_job`), the main
   thread writes the `done`. A frozen or skipped entry runs no network call
   at all. After SQUARE twice on the Info screen, the start runs again when
-  the Board opens.
+  the Board opens. A failed `netInitialize` runs again at the next start
+  (SQUARE, or CIRCLE back from the Info screen); the netctl module load and
+  `netCtlInit` run until each succeeded once, `netCtlInit` only with the
+  module loaded, the address read only after `netCtlInit` succeeded.
+- **Quit Game** (the XMB's quit event, the `quit` flag the frame loop
+  reads): the Board's entry reads the system's events, then does not start
+  the network or the Board thread when the system asked Couch to quit, and
+  reads the flag again after the network start, whose job screen draws
+  frames (each frame reads the events). `couch.txt` says which.
+- **The exit** (`leave`, from `exit()` once main returned): `board_stop`
+  sets `board_on` to 0, shuts the open socket down (`netShutdown`,
+  `SHUT_RDWR`) and joins the thread with no time limit. Then `net_end`:
+  `netCtlTerm`, `netDeinitialize` (PSL1GHT's: `netFinalizeNetwork`, its
+  128 KB pool, the net module), then the netctl module's unload, each only
+  where its start succeeded (PSL1GHT's samples: httptest ends the libraries,
+  then unloads the modules; ps3load joins its thread, then calls
+  `netDeinitialize`, then ends the RSX). Its flags clear first, so a second
+  call does nothing. Then `ui_end`. A failed join of a thread that had not
+  left skips `net_end`.
 - **The Board thread** (`board.c`), made as Cell Bench's temps sampler
   (priority 1500, joinable; a 128 KB stack, PS3 Health's job thread's, which
   ran the same DNS and recv on this console): it fetches at start, every 5
@@ -93,9 +111,14 @@ console round).
   the body into a second record and swaps it in only when line 1 is
   `couch-board 1` and the `end` line came, then reads the console's address
   again (`netCtlGetInfo`) while the thread waits: Couch makes no two network
-  calls at once. The thread never journals and never writes a file. The exit waits at most 1 s for the thread
-  (`board_stop`); a thread still in DNS, connect or recv does not hold it,
-  and `exit()` ends the process.
+  calls at once. The thread never journals and never writes a file. At the
+  exit, a thread in a recv or a send returns at once (the shutdown; the
+  10 s socket timeouts in any case), one in its 50 ms sleep after the
+  sleep. A DNS lookup and a connect do not end at a shutdown: they run to
+  the resolver's or the TCP stack's own timeout, not measured on this
+  console, so the exit can wait that long (the last frame stays on the
+  TV). The thread reads `board_on` after each step and makes no further
+  call.
 - **The HTTP client** (`http.c`): Health's `resolve`, `tcp_connect` and GET
   loop. `GET /board HTTP/1.0` with `Host:` (with the port when it is not 80),
   `User-Agent: Couch/0.1.0` and `Connection: close`; `SO_RCVTIMEO` and
@@ -123,7 +146,7 @@ console round).
 | `gfx_init.txt` | ps3gfx, only when the picture cannot start | the failed step |
 | `board_url.txt` | FTP only, for test rounds | one `http://` line, e.g. `http://192.168.0.3:8787/board`. Absent: `http://couch.daddiego.com.ar/board`. An `https://` URL or a bad line: the default, and the note line says why |
 | `auto.txt` | FTP, for unattended rounds; Couch writes `0` at once | the seconds of a round, 60 to 600 |
-| `couch.txt` | Couch, appended | one block per start: the version and the ps3gfx stamp, the UTC time, `text_utf8`'s rc, the URL, the network start and the address, the three settings with their rcs, the first 50 fetches (time, duration, HTTP status, bytes, the result, the Worker's `now` and `offset`, the console's clock minus the Worker's), the shots, `ui_stats` and the exit. Emptied at start past 64 KB |
+| `couch.txt` | Couch, appended | one block per start: the version and the ps3gfx stamp, the UTC time, `text_utf8`'s rc, the URL, the network start (the rcs of `netInitialize`, the netctl module load and `netCtlInit`) and the address, a quit before the Board opened, the three settings with their rcs, the first 50 fetches (time, duration, HTTP status, bytes, the result, the Worker's `now` and `offset`, the console's clock minus the Worker's), the shots, the exit (a line before and after the Board thread's join, with its time; a line before and after `net_end`'s calls), `ui_stats` and the exit's time. Emptied at start past 64 KB |
 | `board.ppm`, `info.ppm` | Couch, unattended only (`ui_shot`) | the two screens |
 
 An unattended round (Cell Bench's rule): `auto.txt` holds the seconds; Couch
@@ -152,9 +175,8 @@ Health's `tools/syscalls.py --allow tools/syscalls.allow` and
 `verify_self.py`. The allowlist has 39 numbers, every `sc` resolved: PS3
 Health's runtime set without its drive, temperature and fan calls (libnet,
 libnetctl, `sysModuleLoad` and `sysUtilGetSystemParamInt` are SPRX
-imports). `board_stop`'s wait calls `sysUsleep` through an out-of-line
-function: inline, gcc rotated that loop and put the call's `li r11` after
-its `sc`, which the scanner cannot resolve. Out: `couch.gnpdrm.pkg` (about
+imports; the exit's `netShutdown`, `netDeinitialize`, `netCtlTerm` and
+`sysModuleUnload` add no number). Out: `couch.gnpdrm.pkg` (about
 240 KB) and the unstripped `couch.elf`.
 
 `art/make_icon.py <Inter variable TTF>` draws `pkgfiles/ICON0.PNG` (a sofa,
@@ -165,7 +187,7 @@ its `sc`, which the scanner cannot resolve. Out: `couch.gnpdrm.pkg` (about
 
 ```zsh
 zsh tools/preview/build.zsh                 # ps3gfx's preview: build/pv, and build/pv_utf8_off (-DCOUCH_UTF8_OFF)
-zsh tools/preview/run.zsh                   # 21 scenarios at the default visible area
+zsh tools/preview/run.zsh                   # 24 scenarios at the default visible area
 AREA=narrow zsh tools/preview/run.zsh       # the same at the narrowest area, 1600 x 900 (snapshots *_narrow; not tv)
 PASSES=2 zsh tools/preview/run.zsh          # twice, and the snapshots that differ
 ```
@@ -176,10 +198,18 @@ goes to `peer.log` in the scenario's sandbox (`build/sbx/<name>`).
 `PV_BOARD=<file>` is the body (default: the Worker test's reply), and
 `PV_BOARD_FAIL` gives each connect its answer, comma-separated, the last
 repeating: `ok`, `refused`, `silent` (the 10 s timeout at once), `cut` (the
-body without its last 30 bytes), `301`, `v2`. `PV_TZ`, `PV_SUMMER`,
+body without its last 30 bytes), `301`, `v2`, `hang` (the recv waits until a
+`netShutdown`, at most 30 s of host time). `PV_TZ`, `PV_SUMMER`,
 `PV_TIMEFMT` set the three settings (default -180, 0, 1), `PV_TZ_FAIL=1`
 fails them, `PV_NOIP=1` takes the address away, `PV_NET_FAIL=1` fails
-`netInitialize`. The preview has no DNS: the network library's host entry
+`netInitialize`, `PV_NETCTL_FAIL=1` fails `netCtlInit`, `PV_QUIT=net` sets
+`quit` inside `netInitialize` (the preview's system sends no events, so a
+quit before the first frame is not testable here). `peer.log` also gets a
+`pv: ` line for each `netCtlInit` and each exit call (`netShutdown`,
+`netCtlTerm`, `netDeinitialize`, `sysModuleUnload`) and the end of a hang;
+`board_ok`, `net_fail` and the three exit scenarios print them with their
+`couch.txt` lines. The library's `sysModuleLoad` is not weak, so a failed
+module load is not testable here. The preview has no DNS: the network library's host entry
 holds 32-bit pointers, which a 64-bit host cannot fake, so the scenarios
 write `board_url.txt` with `http://192.168.0.3:8787/board` (the console
 round's path) and `board_dns` shows the default host's DNS failure (so
@@ -203,12 +233,16 @@ and the Board fills), `tz_skip` (the prompt, CIRCLE, the Board's offset),
 `tz_12h` (CROSS, TIME_FORMAT 0 at UTC+5:30), `utf8_off` (the fold) and
 `accents` (the same reply in UTF-8), `refresh` (SQUARE 3 s after the first
 fetch: "Refresh in 7 s", then the second request at the 10 s mark),
-`net_fail`, `noip`, `nofolder` (the app folder is a file: no journal, no
-counter, no prompt), `auto` (`auto.txt` 60: the shots at 30 and 45 s, the
+`net_fail` (CIRCLE and SQUARE try again: one `netCtlInit`; the exit ends
+netctl only), `netctl_fail` (the Board runs, the address is not read, no
+`netCtlTerm`), `hang` (START while the fetch waits in recv: the shutdown
+ends the recv, the join, `net_end`), `quit_net` (Quit Game during the
+network start: no Board thread, no fetch, `net_end`), `noip`, `nofolder`
+(the app folder is a file: no journal, no counter, no prompt), `auto` (`auto.txt` 60: the shots at 30 and 45 s, the
 exit at 60 s, `couch.txt`), `tv` (Lucas's area, `0 2 1920 1078`). Every text
 fits at 1786 and at 1600 wide. With `PASSES=2`, the 41 snapshots repeat
 byte for byte except, at times, an Info screen after a fetch
-(`board_cut_info`, `board_stale301_info`, `tz_12h_info`): the Board thread
+(`board_cut_info`, `board_stale301_info`, `tz_12h_info`, `tz_skip_info`): the Board thread
 runs in host time while the preview's clock moves per frame, so a fetch's
 duration reads 0.00 or 0.02 s.
 
@@ -278,9 +312,20 @@ Round 2, on the deployed Worker:
 2. A start by hand: the visible-area screen (round 1 skipped it: CROSS
    saves the area), the clock's prompt (CROSS), the Board, the Info screen,
    SQUARE (a refresh), SQUARE again within 10 s ("Refresh in N s").
-3. Write `board_url.txt` with a dead address (`http://192.168.0.250:8787/board`)
-   and press START during a fetch: Couch must exit within 1 s. No test on
-   this console has ended a process while a thread was in a socket call.
+3. The exit during a fetch, which no round has tested (since 2026-10-11 the
+   exit shuts the socket down and waits for the thread with no limit):
+   a. On the Mac, `nc -l 8787` (it accepts and never answers), and
+      `board_url.txt` = `http://<the Mac's IP>:8787/board`. Start Couch and
+      press START while the status line says "Fetching the Board ..." (at
+      most 10 s): the thread is in its recv, the shutdown ends it, and
+      Couch exits at once (`board thread: joined in 0.0N s, it was in a
+      fetch`).
+   b. `board_url.txt` with a dead address (`http://192.168.0.250:8787/board`),
+      START during a fetch: the thread is in the connect, which a shutdown
+      may not end, so the exit waits for the console's connect timeout.
+      `couch.txt` has the time (`board thread: joined in N s, it was in a
+      fetch`): that measures the timeout. Then `net_end`'s line, and the
+      XMB.
 
 ## Layout
 

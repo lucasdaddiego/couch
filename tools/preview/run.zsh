@@ -87,10 +87,19 @@ scn() {   # name script [VAR=value ...]; JOURNAL, BODY, URL, AUTO, BIN, SAFE fro
     print -- "$name: exit ${pipestatus[1]}"
 }
 
+ends() {   # name: the start's and the exit's lines in couch.txt, and the netctl and exit calls the peer saw (its "pv: " lines)
+    local d=$P/build/sbx/$1$SFX
+    local lines=$(command grep -h -e '^quit ' -e '^net_start' -e '^board thread' -e '^net_end' -e '^exit at' $d/$DIR/couch.txt 2>/dev/null)
+    local calls=$(command grep -h '^pv: ' $d/peer.log 2>/dev/null | cut -c5-)
+    print -r -- "  couch.txt: ${(j:; :)${(f)lines}}"
+    print -r -- "  net calls: ${(j:; :)${(f)calls}}"
+}
+
 case ${1:-all} in
 board_ok|all)      # the reply of the Worker test: the clock, both cards; the Info screen; back
     scn board_ok "120:SNAP=board_ok 122:SELECT 126:SNAP=info 128:CIRCLE 132:SNAP=board_back 133:EXIT"
-    print -r -- "  the request: $(command grep -m1 '^GET' $P/build/sbx/board_ok$SFX/peer.log | tr -d '\r')" ;|
+    print -r -- "  the request: $(command grep -m1 '^GET' $P/build/sbx/board_ok$SFX/peer.log | tr -d '\r')"
+    ends board_ok ;|
 board_stale|all)   # the dollar upstream failed, the Worker kept its old rates: the card's foot in YELLOW
     BODY=stale scn board_stale "120:SNAP=board_stale 121:EXIT" ;|
 board_none|all)    # both upstreams failed with no old data
@@ -122,8 +131,18 @@ accents|all)       # the same reply with UTF-8 text
 refresh|all)       # SQUARE 3 s after the first fetch: the refresh waits for the 10 s mark, then a second request
     scn refresh "200:SQUARE 210:SNAP=refresh_wait 900:SNAP=refresh_done 901:EXIT"
     print -r -- "  requests: $(command grep -c '^GET' $P/build/sbx/refresh$SFX/peer.log)" ;|
-net_fail|all)      # netInitialize fails: SQUARE tries again
-    scn net_fail "120:SNAP=net_fail 122:SELECT 126:SNAP=net_fail_info 127:EXIT" PV_NET_FAIL=1 ;|
+net_fail|all)      # netInitialize fails: CIRCLE and SQUARE try again (netCtlInit once), the exit ends netctl only
+    scn net_fail "120:SNAP=net_fail 122:SELECT 126:SNAP=net_fail_info 128:CIRCLE 132:SQUARE 136:EXIT" PV_NET_FAIL=1
+    ends net_fail ;|
+netctl_fail|all)   # netCtlInit fails: the Board runs, the address is not read, the exit has no netCtlTerm
+    scn netctl_fail "120:EXIT" PV_NETCTL_FAIL=1
+    ends netctl_fail ;|
+hang|all)          # START while the fetch waits in recv: the exit shuts the socket down, joins the thread, ends the network
+    scn hang "60:START 400:EXIT" PV_BOARD_FAIL=hang
+    ends hang ;|
+quit_net|all)      # Quit Game during the network start: no Board thread, no fetch, the network ends at the exit
+    scn quit_net "400:EXIT" PV_QUIT=net
+    ends quit_net ;|
 noip|all)          # no address and a refused connect: the Board names the missing address
     scn noip "120:SNAP=noip 121:EXIT" PV_NOIP=1 PV_BOARD_FAIL=refused ;|
 nofolder|all)      # the app folder cannot be written: no journal (no counter, no clock prompt), the default URL
