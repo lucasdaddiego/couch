@@ -1,7 +1,9 @@
 // The Board's reply for Couch, version 1 (the design: ~/.claude/plans/2026-10-10-couch-design.md,
 // section 4): UTF-8 text that the PS3 parses with no JSON library. Line 1 is "couch-board 1",
 // then key=value lines with "|" between the fields of a value, then "end". Pure functions: the
-// Worker (index.js) gets the upstream data, this file only formats it.
+// Worker (index.js) gets the upstream data, this file only formats it. The now line comes from
+// SMN's station (smn.js) when its observation is at most 3 h old, else from Open-Meteo; the days
+// always come from Open-Meteo.
 
 export const VERSION = 1;
 export const MAX_BYTES = 4096;
@@ -21,6 +23,40 @@ export function wmoWords(code) {
 // Upstream text for a field: no "|", no control character, no space at the ends.
 export function clean(s) {
   return String(s ?? '').replace(/[|\u0000-\u001f\u007f]/g, ' ').replace(/ +/g, ' ').trim();
+}
+
+// Text for a comparison: lower case, the accents removed ("Jun\u00edn" and "JUNIN" give "junin").
+export function fold(s) {
+  return String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+// SMN's sky states by keyword, first match wins (on the folded text, so "chaparr\u00f3n" matches);
+// "nevad" because SMN writes "Cubierto con nevada". Then "nublado" and "despejado" below.
+const SKY = [
+  ['tormenta', 'Thunderstorm'], ['niev', 'Snow'], ['nevad', 'Snow'], ['chaparron', 'Rain showers'], ['lluvia', 'Rain'],
+  ['llovizna', 'Drizzle'], ['niebla', 'Fog'], ['neblina', 'Mist'], ['bruma', 'Haze'], ['humo', 'Smoke'], ['cubierto', 'Overcast'],
+];
+
+// An SMN sky state ("Cubierto con llovizna") in English words; an unknown state keeps its own
+// text, cleaned and cut to 24 code points.
+export function skyWords(state) {
+  const s = fold(clean(state));
+  for (const [k, w] of SKY) if (s.includes(k)) return w;
+  if (s.includes('nublado')) return /(parcialmente|algo) nublado/.test(s) ? 'Partly cloudy' : 'Cloudy';
+  if (s.includes('despejado')) return 'Clear';
+  return Array.from(clean(state)).slice(0, 24).join('').trim() || '-';
+}
+
+export const SMN_MAX_AGE = 3 * 3600;
+export const SMN_MAX_AHEAD = 3600;
+
+// The SMN row for the now line, or null: a row with a temperature and an observation at most 3 h
+// before now (and at most 1 h after: a date or a clock that is off).
+export function smnNow(smn, now) {
+  const r = smn && smn.data;
+  if (!r || typeof r !== 'object' || !Number.isFinite(r.at) || !Number.isFinite(r.temp)) return null;
+  const age = now - r.at;
+  return age <= SMN_MAX_AGE && age >= -SMN_MAX_AHEAD ? r : null;
 }
 
 // A price with two decimals in the locale's format ("1.535,00" in es-AR), or "-".
@@ -63,9 +99,12 @@ function stateLine(u) {
   return u.state === 'ok' ? 'ok' : `${u.state}|${clean(u.reason)}`;
 }
 
-// The reply. usd and wx are {state: 'ok'|'stale'|'none', reason, age, data}, as index.js's get()
-// gives them: data is dolarapi's /v1/dolares array and Open-Meteo's forecast object.
-export function boardText({ now, usd, wx, env }) {
+const NONE = { state: 'none', reason: '', age: 0, data: null };
+
+// The reply. usd, wx and smn are {state: 'ok'|'stale'|'none', reason, age, data}, as index.js's
+// get() gives them: data is dolarapi's /v1/dolares array, Open-Meteo's forecast object and the
+// SMN station's row (smn.js's parseRow). smn has no state line: its row's own time decides.
+export function boardText({ now, usd, wx, smn = NONE, env }) {
   const tz = env.TZ || 'UTC', locale = env.LOCALE || 'es-AR';
   // The offset at now, not Open-Meteo's utc_offset_seconds: a cached forecast keeps the offset of
   // its fetch, which is wrong after a DST change. The city is cut to 100 code points, the only
@@ -85,12 +124,22 @@ export function boardText({ now, usd, wx, env }) {
   }
   out.push(`usd_age=${Math.max(0, usd.age | 0)}`, `usd_state=${stateLine(usd)}`);
   const c = wx.data && wx.data.current, dy = wx.data && wx.data.daily;
-  if (c) {
-    const deg = (v) => (Number.isFinite(v) ? `${Math.round(v)}°` : '-');
-    out.push(`wx_now=${deg(c.temperature_2m)}|${deg(c.apparent_temperature)}|` +
-      `${Number.isFinite(c.relative_humidity_2m) ? `${Math.round(c.relative_humidity_2m)}%` : '-'}|` +
-      `${wmoWords(c.weather_code)}|${Number.isFinite(c.wind_speed_10m) ? `${Math.round(c.wind_speed_10m)} km/h` : '-'}|` +
-      `${c.is_day ? 'day' : 'night'}`);
+  const deg = (v) => (Number.isFinite(v) ? `${Math.round(v)}°` : '-');
+  const pct = (v) => (Number.isFinite(v) ? `${Math.round(v)}%` : '-');
+  const kmh = (v) => (Number.isFinite(v) ? `${Math.round(v)} km/h` : '-');
+  // The 7th field names the now line's source (Couch's footer). A Couch of before 2026-10-12 splits
+  // wx_now into 6 fields, and the 6th ends at its "|": it ignores the 7th.
+  const row = smnNow(smn, now);
+  if (row) {
+    // Day or night: Open-Meteo's is_day when it answered (ok: within WX_TTL), else now's local hour.
+    const om = wx.state === 'ok' && c && (c.is_day === 0 || c.is_day === 1);
+    const h = Number(parts(now, tz).hour), at = parts(row.at, tz);
+    const day = om ? c.is_day === 1 : h >= 6 && h < 20;
+    out.push(`wx_now=${deg(row.temp)}|${deg(row.feels)}|${pct(row.humidity)}|${skyWords(row.sky)}|${kmh(row.wind)}|` +
+      `${day ? 'day' : 'night'}|SMN ${at.hour}:${at.minute}`);
+  } else if (c) {
+    out.push(`wx_now=${deg(c.temperature_2m)}|${deg(c.apparent_temperature)}|${pct(c.relative_humidity_2m)}|` +
+      `${wmoWords(c.weather_code)}|${kmh(c.wind_speed_10m)}|${c.is_day ? 'day' : 'night'}|Open-Meteo`);
   }
   if (dy && Array.isArray(dy.time)) {
     // Open-Meteo starts `daily` on the local date of its fetch, so a cached forecast can start on

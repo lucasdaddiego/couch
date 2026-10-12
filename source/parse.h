@@ -35,8 +35,13 @@ typedef struct {
     board_usd usd[BOARD_USD];
     board_feed usd_feed;
     int has_wx;                      /* a wx_now line came */
-    char temp[12], feels[12], humidity[12], words[24], wind[16];
-    int is_day;                      /* wx_now's last field: 1 day, 0 night */
+    /* words: Open-Meteo's words, or SMN's sky state, which the Worker cuts to
+     * 24 code points when it has no English words for it (2 bytes each in
+     * Latin-1, and the NUL) */
+    char temp[12], feels[12], humidity[12], words[52], wind[16];
+    int is_day;                      /* wx_now's 6th field: 1 day, 0 night */
+    char wx_src[24];                 /* wx_now's 7th field, the now line's source: "SMN 23:00" or
+                                        "Open-Meteo"; "" when absent (a Worker before 2026-10-12) */
     int n_day;
     board_day day[BOARD_DAYS];
     board_feed wx_feed;

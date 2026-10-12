@@ -32,7 +32,7 @@ static int parse(const char *s, int fold) { return board_parse(s, (int)strlen(s)
 static int bounded(void)
 {
 #define IN(f) (memchr((f), 0, sizeof(f)) != NULL)
-    int ok = IN(b.city) && IN(b.temp) && IN(b.feels) && IN(b.humidity) && IN(b.words) && IN(b.wind) && IN(b.usd_feed.state) &&
+    int ok = IN(b.city) && IN(b.temp) && IN(b.feels) && IN(b.humidity) && IN(b.words) && IN(b.wind) && IN(b.wx_src) && IN(b.usd_feed.state) &&
              IN(b.usd_feed.reason) && IN(b.wx_feed.state) && IN(b.wx_feed.reason) && b.n_usd <= BOARD_USD && b.n_day <= BOARD_DAYS;
     for (int i = 0; i < b.n_usd; i++) ok = ok && IN(b.usd[i].label) && IN(b.usd[i].buy) && IN(b.usd[i].sell) && IN(b.usd[i].when);
     for (int i = 0; i < b.n_day; i++)
@@ -80,6 +80,7 @@ static void worker_reply(const char *w, int wn)
     STR(b.humidity, "92%");
     STR(b.words, "Overcast");
     STR(b.wind, "9 km/h");
+    STR(b.wx_src, "Open-Meteo");
     CHECK(b.n_day == 3);
     STR(b.day[0].label, "Today");
     STR(b.day[0].words, "Rain showers");
@@ -232,9 +233,40 @@ static void rules(void)
     STR(b.day[0].rain, "-");
     STR(b.temp, "5");
     STR(b.wind, "-");
-    CHECK(!b.is_day);
+    CHECK(!b.is_day && !b.wx_src[0]);               /* no 7th field: no source, not "-" */
     STR(b.usd[1].label, "-");
     group("missing and empty fields read as \"-\"", f0);
+
+    f0 = fails;
+    CHECK(parse("couch-board 1\ncity=Jun\xc3\xadn\nwx_now=10\xc2\xb0|10\xc2\xb0|84%|Cloudy|3 km/h|day|SMN 23:00\nend\n", 0) == BP_OK);
+    CHECK(b.has_wx && b.is_day);
+    STR(b.city, "Jun\xc3\xadn");
+    STR(b.temp, "10\xc2\xb0");
+    STR(b.words, "Cloudy");
+    STR(b.wind, "3 km/h");
+    STR(b.wx_src, "SMN 23:00");
+    CHECK(parse("couch-board 1\ncity=Jun\xc3\xadn\nwx_now=10\xc2\xb0|10|84%|Cloudy|3 km/h|night|SMN 23:00\nend\n", 1) == BP_OK);
+    STR(b.city, "Junin");                           /* the fold: U+00ED is i */
+    STR(b.temp, "10");
+    STR(b.wx_src, "SMN 23:00");
+    /* an 8th field is dropped and the 7th ends at its '|': the rule that makes
+     * a Couch of before 2026-10-12, which splits 6, read "day" from "day|SMN 23:00" */
+    CHECK(parse("couch-board 1\nwx_now=10|10|84%|Cloudy|3 km/h|day|SMN 23:00|later\nend\n", 0) == BP_OK && b.is_day);
+    STR(b.wx_src, "SMN 23:00");
+    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|night\nend\n", 0) == BP_OK && !b.is_day && !b.wx_src[0]);
+    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|day|\nend\n", 0) == BP_OK && b.is_day && !b.wx_src[0]);
+    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|day| \x01 \nend\n", 0) == BP_OK && !b.wx_src[0]);
+    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|day|SMN 23:00\nwx_now=11|10|92%|Overcast|9 km/h|day\nend\n", 0) == BP_OK &&
+          !b.wx_src[0]);                            /* a repeated wx_now: the last one's source */
+    CHECK(parse("couch-board 1\nwx_now=1|2|3|4|5|day|SMN-23:00-and-a-source-longer-than-its-buffer\nend\n", 0) == BP_OK && bounded() &&
+          strlen(b.wx_src) == sizeof b.wx_src - 1);
+    static char w24[128];                            /* 24 two-byte letters: an SMN state the Worker cut to 24 code points */
+    int wk = snprintf(w24, sizeof w24, "couch-board 1\nwx_now=1|2|3|");
+    for (int i = 0; i < 24; i++) wk += snprintf(w24 + wk, sizeof w24 - wk, "\xc3\xa9");
+    snprintf(w24 + wk, sizeof w24 - wk, "|5|day|SMN 23:00\nend\n");
+    CHECK(parse(w24, 0) == BP_OK && strlen(b.words) == 48 && b.is_day);
+    STR(b.wx_src, "SMN 23:00");
+    group("wx_now's 7th field: the source, absent or empty as \"\", an 8th field dropped; 24 accented letters of words", f0);
 
     f0 = fails;
     CHECK(parse("couch-board 1\ncity= \t A\x01" "B \x7f \nnow=abc\noffset=60000\nend\n", 0) == BP_OK);

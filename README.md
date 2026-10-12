@@ -7,7 +7,8 @@ design is `~/.claude/plans/2026-10-10-couch-design.md`. Lucas cut it to the
 Board on 2026-10-10, so 0.1.0 is the Board only: a clock in the console's
 time zone, the dollar rates and the weather, which come over plain HTTP from
 the Worker in `worker/` (live on `http://couch.daddiego.com.ar/board`), and
-an Info screen. 0.1.0 has not run on the console yet (the rounds to come are
+an Info screen. Since 2026-10-12 the place is Junin: the weather now comes
+from SMN's station there (else Open-Meteo), the three days from Open-Meteo. 0.1.0 has not run on the console yet (the rounds to come are
 below).
 
 Couch opens on the Board. SQUARE refreshes it, SELECT opens the Info screen,
@@ -44,7 +45,10 @@ console round).
   temperature in F_LARGE, the words, day or night, feels like, humidity,
   wind) and three days (words, max, min, the chance of rain). The foot of
   each card names its source and the data's age: the Worker's `usd_age` or
-  `wx_age` plus the seconds since Couch got the reply. A `stale` upstream
+  `wx_age` plus the seconds since Couch got the reply. The weather's source
+  is "SMN 23:00, days Open-Meteo" when the now line is SMN's (`wx_now`'s 7th
+  field, the observation's time), else "Open-Meteo"; the age stays
+  Open-Meteo's. A `stale` upstream
   shows its reason and the real age in YELLOW; a `none` upstream shows "No
   dollar data: <reason>." in the card.
 - **The status line**: "Board updated at 09:00.", or the failure: "No Board
@@ -129,7 +133,10 @@ console round).
 - **The reply** (`parse.c`, format version 1, design section 4): `key=value`
   lines after `couch-board 1`, `|` between fields, `end` last. An unknown key
   or a line with no `=` is skipped, a repeated key keeps its order, at most 8
-  rate lines and 3 day lines, a missing field reads `-`. Text fields lose the
+  rate lines and 3 day lines, a missing field reads `-`. `wx_now` has a 7th
+  field since 2026-10-12, the now line's source; absent or empty, it reads
+  as no source (the foot says "Open-Meteo"). A Couch that splits 6 fields
+  reads "day" from `day|SMN 23:00`: each field ends at its `|`. Text fields lose the
   bytes below 0x20 and 0x7f and are cut on a code point boundary.
 - **UTF-8**: Couch calls `text_utf8()` after `ui_init`. When it fails (a bad
   `latin.bin`, short RSX memory), the parser folds the text to ASCII: a
@@ -187,7 +194,7 @@ imports; the exit's `netShutdown`, `netDeinitialize`, `netCtlTerm` and
 
 ```zsh
 zsh tools/preview/build.zsh                 # ps3gfx's preview: build/pv, and build/pv_utf8_off (-DCOUCH_UTF8_OFF)
-zsh tools/preview/run.zsh                   # 24 scenarios at the default visible area
+zsh tools/preview/run.zsh                   # 26 scenarios at the default visible area
 AREA=narrow zsh tools/preview/run.zsh       # the same at the narrowest area, 1600 x 900 (snapshots *_narrow; not tv)
 PASSES=2 zsh tools/preview/run.zsh          # twice, and the snapshots that differ
 ```
@@ -223,7 +230,9 @@ second binary with `-DCOUCH_UTF8_OFF` for `utf8_off`.
 
 Scenarios: `board_ok` (the clock, both cards, the Info screen, back; the
 request line), `board_stale` (the dollar card's foot in YELLOW),
-`board_none` (both upstreams without data), `board_301`, `board_stale301` (a
+`board_none` (both upstreams without data), `board_smn` (Junin, U+00ED, with the now
+line from SMN: the foot "SMN 23:00, days Open-Meteo") and
+`board_smn_utf8_off` (the same folded: "Junin"), `board_301`, `board_stale301` (a
 good reply, SQUARE after 10 s, a 301: the status line keeps the data's time,
 the Info screen the Location), `board_cut` (a good reply, SQUARE after 10 s,
 a cut one: the old Board stays), `board_v2`,
@@ -240,7 +249,7 @@ ends the recv, the join, `net_end`), `quit_net` (Quit Game during the
 network start: no Board thread, no fetch, `net_end`), `noip`, `nofolder`
 (the app folder is a file: no journal, no counter, no prompt), `auto` (`auto.txt` 60: the shots at 30 and 45 s, the
 exit at 60 s, `couch.txt`), `tv` (Lucas's area, `0 2 1920 1078`). Every text
-fits at 1786 and at 1600 wide. With `PASSES=2`, the 41 snapshots repeat
+fits at 1786 and at 1600 wide. With `PASSES=2`, the 43 snapshots repeat
 byte for byte except, at times, an Info screen after a fetch
 (`board_cut_info`, `board_stale301_info`, `tz_12h_info`, `tz_skip_info`): the Board thread
 runs in host time while the preview's clock moves per frame, so a fetch's
@@ -262,7 +271,9 @@ that reply, the reply folded, CR LF line ends, the reply cut at every byte
 (version 2 and 10, not a Board, no end), unknown keys and lines with no `=`,
 nothing after `end`, at most 8 rate and 3 day lines, long fields cut on a
 code point boundary, a body of exactly 4096 bytes, the states and their
-reasons, missing fields, control bytes; the fold; `http_head` (the status,
+reasons, missing fields, `wx_now`'s 7th field (the source, absent or
+empty as no source, an 8th field dropped, 24 accented letters of words),
+control bytes; the fold; `http_head` (the status,
 Location, chunked, an incomplete head, not HTTP, bare LF); `url_split` (a
 port, no path, https, bad ports, spaces, a long host); the clock (dates and
 weekdays from 1969 to 2038, 12 and 24 hours, the UTC label, the TIMEZONE

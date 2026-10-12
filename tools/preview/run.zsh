@@ -42,7 +42,7 @@ usd=Cripto|1.601,81|1.606,88|Fri 18:00
 usd=Tarjeta|1.930,50|1.995,50|Fri 15:00
 usd_age=42
 usd_state=ok
-wx_now=11$D|10$D|92%|Overcast|9 km/h|night
+wx_now=11$D|10$D|92%|Overcast|9 km/h|night|Open-Meteo
 day=Today|Rain showers|16$D|11$D|96%
 day=Sun|Overcast|16$D|9$D|2%
 day=Mon|Drizzle|16$D|10$D|22%
@@ -63,6 +63,11 @@ wx_age=0
 wx_state=none|open-meteo: no answer in 4 s
 end
 "
+}
+body_smn() {   # Junin (U+00ED) with the now line from SMN's station (the Worker test's SMN reply), the days from Open-Meteo
+    local b=$(body_ok) IACUTE=$'\xc3\xad'
+    b=${b/city=Buenos Aires/city=Jun${IACUTE}n}
+    print -rn -- "${b/wx_now=11$D|10$D|92%|Overcast|9 km\/h|night|Open-Meteo/wx_now=10$D|10$D|84%|Cloudy|3 km/h|night|SMN 23:00}"$'\n'
 }
 body_accents() {   # a city with an n tilde (U+00F1) and a reason with an en dash, for the fold
     local b=$(body_ok) NTILDE=$'\xc3\xb1'
@@ -104,6 +109,9 @@ board_stale|all)   # the dollar upstream failed, the Worker kept its old rates: 
     BODY=stale scn board_stale "120:SNAP=board_stale 121:EXIT" ;|
 board_none|all)    # both upstreams failed with no old data
     BODY=none scn board_none "120:SNAP=board_none 121:EXIT" ;|
+board_smn|all)     # Junin, the now line from SMN: the weather card's foot names both sources; the same folded to ASCII
+    BODY=smn scn board_smn "120:SNAP=board_smn 121:EXIT"
+    BIN=pv_utf8_off BODY=smn scn board_smn_utf8_off "120:SNAP=board_smn_utf8_off 121:EXIT" ;|
 board_301|all)     # the host redirects plain HTTP (Always Use HTTPS back on)
     scn board_301 "120:SNAP=board_301 122:SELECT 126:SNAP=board_301_info 127:EXIT" PV_BOARD_FAIL=301 ;|
 board_stale301|all) # a good reply, then SQUARE after 10 s and a 301: the stale line keeps the data's time, the Info screen the Location

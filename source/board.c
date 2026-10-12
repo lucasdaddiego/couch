@@ -319,11 +319,18 @@ static void wx_card(float x, float y, float w, float h)
 {
     const board_data *b = &board_cur;
     float ix = x + 28, iw = w - 56, fy = y + h - 20 - (float)line_h(F_SMALL);
+    char src[48];
+    /* The foot's source: the now line's (wx_now's 7th field, "SMN 23:00") and
+     * Open-Meteo's for the days; Open-Meteo alone when the now line is
+     * Open-Meteo's too or names no source (a Worker before 2026-10-12). The
+     * age and the state stay Open-Meteo's (wx_age, wx_state). */
+    if (b->has_wx && b->wx_src[0] && strcmp(b->wx_src, "Open-Meteo")) snprintf(src, sizeof src, "%s, days Open-Meteo", b->wx_src);
+    else snprintf(src, sizeof src, "Open-Meteo");
     card(x, y, w, h);
     text(ix, y + 20, F_MED, WHITE, "Weather");
     if (!board_have || (!b->has_wx && !b->n_day)) {
         no_data(ix, y + 86, iw, "weather", &b->wx_feed);
-        if (board_have) feed_foot(ix, fy, iw, "Open-Meteo", &b->wx_feed);
+        if (board_have) feed_foot(ix, fy, iw, src, &b->wx_feed);
         return;
     }
     float ny = y + 80;
@@ -351,7 +358,7 @@ static void wx_card(float x, float y, float w, float h)
             text_r(rr, ry, F_BODY | TNUM, BLUE, "%s", d->rain);
         }
     }
-    feed_foot(ix, fy, iw, "Open-Meteo", &b->wx_feed);
+    feed_foot(ix, fy, iw, src, &b->wx_feed);
 }
 
 static void status(void)

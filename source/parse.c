@@ -177,8 +177,8 @@ int board_parse(const char *body, int n, int fold, board_data *b)
         if (!eq) continue;
         const char *k = ls, *val = eq + 1;
         int kl = (int)(eq - ls), vl = ll - kl - 1;
-        const char *f[6];
-        int fl[6], c;
+        const char *f[7];
+        int fl[7], c;
         if (key_is(k, kl, "now")) {
             if (to_long(val, vl, &v) && v > 0) b->now = v;
         } else if (key_is(k, kl, "offset")) {
@@ -198,8 +198,10 @@ int board_parse(const char *body, int n, int fold, board_data *b)
         } else if (key_is(k, kl, "usd_state")) {
             feed_state(&b->usd_feed, val, vl, fold);
         } else if (key_is(k, kl, "wx_now")) {
+            /* 7 fields: the 7th is the source. split ends each field at its
+             * '|', so a Couch that splits 6 reads "day" and drops the rest. */
             char dn[8];
-            c = split(val, vl, f, fl, 6);
+            c = split(val, vl, f, fl, 7);
             put(b->temp, sizeof b->temp, f, fl, c, 0, fold);
             put(b->feels, sizeof b->feels, f, fl, c, 1, fold);
             put(b->humidity, sizeof b->humidity, f, fl, c, 2, fold);
@@ -207,6 +209,8 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             put(b->wind, sizeof b->wind, f, fl, c, 4, fold);
             put(dn, sizeof dn, f, fl, c, 5, 1);
             b->is_day = !strcmp(dn, "day");
+            b->wx_src[0] = 0;                        /* absent or empty: "", not put's "-" */
+            if (c > 6) text_field(b->wx_src, sizeof b->wx_src, f[6], fl[6], fold);
             b->has_wx = 1;
         } else if (key_is(k, kl, "day")) {
             if (b->n_day == BOARD_DAYS) continue;
