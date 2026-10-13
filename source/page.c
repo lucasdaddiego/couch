@@ -155,7 +155,7 @@ void ambient_tick(void)
 
 /* ---- the News page --------------------------------------------------------------- */
 
-/* "Clarin and La Verdad": the sources of the headlines, each once, in order. */
+/* "Infobae and Clarin": the sources of the headlines, each once, in order. */
 static void news_sources(char *buf, int n)
 {
     const board_data *b = &board_cur;

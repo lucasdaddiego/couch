@@ -17,8 +17,8 @@ there (else Open-Meteo), the three days from Open-Meteo.
   on the weather card;
 - the money extras under the dollar rates: riesgo pais, the last monthly
   inflation (INDEC, with its month) and Banco Nacion's fixed-term rate (TNA);
-- a News page: up to 8 headlines of two RSS feeds (Clarin and La Verdad of
-  Junin), with their source and age;
+- a News page: up to 8 headlines of two RSS feeds (Clarin and Infobae,
+  which replaced La Verdad of Junin on 2026-10-13), with their source and age;
 - three pages with L1 and R1 (the Board, the News, the Info screen) and
   their dots in a new header with the clock;
 - the internet's state in the header: ok, slow, or no internet since HH:MM;
@@ -108,7 +108,7 @@ is a deploy, not a console round); no headline opens (titles only).
   age ("22 min", the Worker's age plus the seconds since the reply) on the
   left, the title in up to two lines. A row that does not fit whole is left
   off: 8 one-line rows fit at 1786 wide, 6 at 1600 wide with Clarin's long
-  titles. The foot: the sources and the age ("Clarin, La Verdad, 5 min
+  titles. The foot: the sources and the age ("Clarin, Infobae, 5 min
   old"), or the first failed feed's reason in YELLOW. No headlines: "No
   news data: <reason>.", or "The Board's Worker sends no news" for a Worker
   with no feeds (or of before 2026-10-13).
@@ -465,7 +465,7 @@ Round 3, 0.2.0 (the pkg goes up as `Couch-0.2.0-rcN.pkg`):
 1. The Worker of 2026-10-13: commit, then `zsh worker/dev.zsh test` (the
    tests run only in its container). Then either the LAN Worker (`zsh
    worker/dev.zsh` and `board_url.txt`) or the deploy, which needs Lucas's
-   OK. The LAN Worker also shows whether Clarin and La Verdad answer
+   OK. The LAN Worker also shows whether Clarin and Infobae answer
    `wrangler dev`'s fetch.
 2. Unattended, `auto.txt` = `150`, `ps3run round`: `board.ppm` with the
    money extras and the sky, `info.ppm` with the Internet row; in

@@ -118,10 +118,11 @@ static void worker_reply(const char *w, int wn)
     STR(b.sunset, "19:16");
     STR(b.moon, "Waxing crescent moon");
     CHECK(b.n_news == 8);
-    STR(b.news[0].source, "Clar\xc3\xadn");
-    CHECK(b.news[0].age == 1335 && b.news[7].age == 8869);
-    STR(b.news[3].title, "La embajadora de EEUU en Grecia dimite ante esc\xc3\xa1ndalo de presunta corrupci\xc3\xb3n");
-    STR(b.news[7].source, "La Verdad");
+    STR(b.news[0].source, "Infobae");                 /* Infobae's items are newer than the reply's now: age 0 */
+    CHECK(b.news[0].age == 0 && b.news[3].age == 0 && b.news[4].age == 1335 && b.news[7].age == 1611);
+    STR(b.news[3].title, "Galbiati: \"Hemos perdido lucidez, pero hemos aprendido una lecci\xc3\xb3n\"");
+    STR(b.news[7].source, "Clar\xc3\xadn");
+    STR(b.news[7].title, "La embajadora de EEUU en Grecia dimite ante esc\xc3\xa1ndalo de presunta corrupci\xc3\xb3n");
     STR(b.news_feed.state, "ok");
     CHECK(b.news_feed.age == 300);
     CHECK(bounded());
@@ -135,8 +136,9 @@ static void worker_reply(const char *w, int wn)
     STR(b.city, "Junin");
     STR(b.usd[5].label, "Tarjeta");
     STR(b.money[0].label, "Riesgo pais");
-    STR(b.news[3].title, "La embajadora de EEUU en Grecia dimite ante escandalo de presunta corrupcion");
-    STR(b.news[7].title, "2 Encuentro Regional de Enfermeria: mas de 300 participantes en Junin");   /* the degree sign is dropped */
+    STR(b.news[3].title, "Galbiati: \"Hemos perdido lucidez, pero hemos aprendido una leccion\"");
+    STR(b.news[6].title, "El ruido por Ramon Diaz y la respuesta de River: el plantel respaldo a Ponzio, ?que dicen los dirigentes?");   /* the inverted question mark is a "?" */
+    STR(b.news[7].title, "La embajadora de EEUU en Grecia dimite ante escandalo de presunta corrupcion");
     group("the same reply folded to ASCII (text_utf8 failed)", f0);
 
     f0 = fails;
@@ -148,7 +150,7 @@ static void worker_reply(const char *w, int wn)
     }
     crlf[k] = 0;
     CHECK(board_parse(crlf, k, 0, &b) == BP_OK && b.n_usd == 6 && b.n_day == 3 && b.n_money == 3 && b.n_news == 8 && board_has_end(crlf, k));
-    STR(b.news[0].source, "Clar\xc3\xadn");
+    STR(b.news[7].source, "Clar\xc3\xadn");
     STR(b.moon, "Waxing crescent moon");
     STR(b.usd[0].when, "Fri 15:00");
     STR(b.wx_feed.state, "ok");

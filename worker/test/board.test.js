@@ -1,8 +1,9 @@
 // node --test: the reply's format against the upstream answers of 2026-10-10 (test/fixtures),
 // SMN's zip of 2026-10-12 (tiepre.zip), the answers of 2026-10-13 17:47 UTC for Junin
 // (meteo_junin.json with the hourly rain and the sun, riesgo.json, inflacion.json: the last 24
-// entries of the 53 KB list, plazofijo.json, clarin.xml, laverdad.xml: the channel and the first 8
-// of its 40 items), and the Worker's cache and failure paths with a fake fetch and a fake Cache API.
+// entries of the 53 KB list, plazofijo.json, clarin.xml), Infobae's feed of 2026-10-13 21:32 UTC
+// (infobae.xml: the head of the 687 KB feed, its first 61440 bytes, 10 items and part of the 11th),
+// and the Worker's cache and failure paths with a fake fetch and a fake Cache API.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -11,7 +12,9 @@ import {
   rainWords, sunTimes, moonPhase, dayWords, moneyLines, newsLines, NEW_MOON_2000, SYNODIC_DAYS,
 } from '../src/board.js';
 import { zipEntry, unzipFirst, latin1, obsTime, parseRow, findRow } from '../src/smn.js';
-import { decodeEntities, elementText, cutTitle, parseFeed, parseFeeds, TITLE_MAX } from '../src/news.js';
+import {
+  decodeEntities, elementText, cutTitle, parseFeed, parseFeeds, readHead, TITLE_MAX, ITEMS_MAX, HEAD_BYTES,
+} from '../src/news.js';
 import { get, handle, newsUpstream } from '../src/index.js';
 
 const text = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
@@ -24,7 +27,7 @@ const rpData = fixture('riesgo.json');
 const ipcData = fixture('inflacion.json');
 const pfData = fixture('plazofijo.json');
 const clarinXml = text('clarin.xml');
-const lvXml = text('laverdad.xml');
+const ibXml = text('infobae.xml');
 const env = {
   CITY: 'Buenos Aires', LAT: '-34.6037', LON: '-58.3816', TZ: 'America/Argentina/Buenos_Aires',
   CASAS: 'oficial:Oficial,blue:Blue,bolsa:MEP,contadoconliqui:CCL,cripto:Cripto,tarjeta:Tarjeta',
@@ -37,7 +40,8 @@ const okR = (data, age = 0) => ({ state: 'ok', age, data });
 const junMoney = () => ({
   rp: okR(rpData), ipc: okR(ipcData.at(-1)), pf: okR({ entidad: 'BANCO DE LA NACION ARGENTINA', tna: pfData[0].tnaClientes }),
 });
-const junNews = () => [{ label: 'Clar\u00edn', r: okR(parseFeed(clarinXml), 120) }, { label: 'La Verdad', r: okR(parseFeed(lvXml), 300) }];
+// Infobae's items are from 21:32 UTC, after JUN_NOW: their age is 0, so they come first.
+const junNews = () => [{ label: 'Clar\u00edn', r: okR(parseFeed(clarinXml), 120) }, { label: 'Infobae', r: okR(parseFeed(ibXml), 300) }];
 
 // The first test's reply is the host check's (couch/tools/hostcheck/run.zsh takes this array, line
 // for line) and the preview's body_ok: it keeps its text as UTF-8, with no escapes.
@@ -68,20 +72,20 @@ test('the reply of 2026-10-13 in Junin, every upstream, line for line', () => {
     'wx_moon=Waxing crescent moon',
     'wx_age=310',
     'wx_state=ok',
+    'news=Infobae|0|EN VIVO Colombia vs. Venezuela - Hoy online: GOL de Colombia, siga aquí el último partido de la Tricolor...',
+    'news=Infobae|0|El Gobierno Vasco homenajea en Argentina a la selección de pelota en la previa del Mundial',
+    'news=Infobae|0|Turistas pagarán más por ingresar a México a partir de 2027: Diputados aprueban Ley Federal de Derechos',
+    'news=Infobae|0|Galbiati: "Hemos perdido lucidez, pero hemos aprendido una lección"',
     'news=Clarín|1335|Una granja solar de Nueva York redujo en un 24% la luz solar otoñal que recibían sus hortalizas, y los...',
     'news=Clarín|1335|Una tortuga marina en peligro de extinción de 5 kilos llamada Pancake fue encontrada aturdida por el frío...',
     'news=Clarín|1498|El ruido por Ramón Díaz y la respuesta de River: el plantel respaldó a Ponzio, ¿qué dicen los dirigentes?',
     'news=Clarín|1611|La embajadora de EEUU en Grecia dimite ante escándalo de presunta corrupción',
-    'news=La Verdad|3358|Fin de la prioridad absoluta al de la derecha: cómo es la nueva Ley en Provincia',
-    'news=La Verdad|8332|La UNNOBA convoca a una conferencia de prensa por la V Marcha Federal Universitaria',
-    'news=La Verdad|8381|Heladeras de dos puertas verticales: ¿qué se gana en comodidad y qué se pierde en espacio?',
-    'news=La Verdad|8869|2° Encuentro Regional de Enfermería: más de 300 participantes en Junín',
     'news_age=300',
     'news_state=ok',
     'end',
     '',
   ].join('\n'));
-  assert.ok(new TextEncoder().encode(t).length < MAX_BYTES / 2);  // 1595 bytes: the 4 KB guard drops nothing
+  assert.ok(new TextEncoder().encode(t).length < MAX_BYTES / 2);  // 1618 bytes: the 4 KB guard drops nothing
 });
 
 test('the reply of the design example, line for line', () => {
@@ -607,15 +611,16 @@ test('news: entities, CDATA, tags, the cut at a word', () => {
 });
 
 test('news: the live feeds of 2026-10-13', () => {
-  const c = parseFeed(clarinXml), v = parseFeed(lvXml);
-  assert.equal(c.length, 10);
+  const c = parseFeed(clarinXml), ib = parseFeed(ibXml);
+  assert.equal(c.length, ITEMS_MAX);                                  // 8 of its 10 items
   assert.deepEqual(c[3], { title: 'La embajadora de EEUU en Grecia dimite ante escándalo de presunta corrupción', at: 1791912009 });
   assert.equal(c[2].title, 'El ruido por Ramón Díaz y la respuesta de River: el plantel respaldó a Ponzio, ¿qué dicen los dirigentes?');
   assert.equal(c[4].title, 'Oficial y confirmado USCIS ratifica que todos los extranjeros que no llenen el formulario AR-11 en un...');
   assert.ok(c.every((x) => Array.from(x.title).length <= TITLE_MAX && Number.isFinite(x.at)));
-  assert.equal(v.length, 8);
-  assert.deepEqual(v[1], { title: 'La UNNOBA convoca a una conferencia de prensa por la V Marcha Federal Universitaria', at: 1791905288 });
-  assert.equal(v[0].at, 1791910262);
+  assert.equal(ib.length, ITEMS_MAX);
+  assert.deepEqual(ib[1], { title: 'El Gobierno Vasco homenajea en Argentina a la selecci\u00f3n de pelota en la previa del Mundial', at: 1791927139 });
+  assert.deepEqual([ib[0].at, ib[7].at], [1791927152, 1791927105]);   // 21:32:32 and 21:31:45 UTC
+  assert.ok(ib.every((x, i) => i === 0 || ib[i - 1].at >= x.at));     // newest first: the head holds the newest
   const odd = '<rss><channel><title>Feed</title><item><title></title></item>' +
     '<item><title>Uno &amp; dos</title><pubDate>Tue, 30 Nov -0001 00:00:00 -0353</pubDate></item>' +
     '<item><title>Tres</title><dc:date>2026-10-13T12:00:00Z</dc:date></item></channel></rss>';
@@ -624,8 +629,8 @@ test('news: the live feeds of 2026-10-13', () => {
 });
 
 test('news: NEWS_FEEDS, the fair share per feed, the newest first, the states', () => {
-  assert.deepEqual(parseFeeds('Clarín=https://www.clarin.com/rss/lo-ultimo/,La Verdad=https://laverdadonline.com/feed/'), [
-    { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/' }, { label: 'La Verdad', url: 'https://laverdadonline.com/feed/' },
+  assert.deepEqual(parseFeeds('Clarín=https://www.clarin.com/rss/lo-ultimo/,Infobae=https://www.infobae.com/arc/outboundfeeds/rss/'), [
+    { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/' }, { label: 'Infobae', url: 'https://www.infobae.com/arc/outboundfeeds/rss/' },
   ]);
   assert.deepEqual(parseFeeds(' X = https://a.example/f?x=1 ,=https://b.example/,Nolabel,Y=ftp://c.example/,Z=not a url'),
     [{ label: 'X', url: 'https://a.example/f?x=1' }]);
@@ -642,11 +647,66 @@ test('news: NEWS_FEEDS, the fair share per feed, the newest first, the states', 
   assert.deepEqual(newsLines([], 200, 8), []);
 });
 
+// A body in chunks of size bytes, as a fetch's: pulls counts the chunks read, cancelled marks a
+// body whose rest was dropped. highWaterMark 0: a chunk is made only when the reader asks for it.
+function chunked(s, size) {
+  const b = typeof s === 'string' ? new TextEncoder().encode(s) : s;
+  const st = { pulls: 0, cancelled: false, chunks: Math.ceil(b.length / size) };
+  st.body = new ReadableStream({
+    pull(c) {
+      const i = st.pulls * size;
+      if (i >= b.length) return c.close();
+      st.pulls++;
+      c.enqueue(b.slice(i, i + size));
+    },
+    cancel() { st.cancelled = true; },
+  }, { highWaterMark: 0 });
+  return st;
+}
+const bytesOf = (s) => new TextEncoder().encode(s).length;
+
+test('news: only the head of a feed is read: the end of the 8th item, the byte cap, or the end', async () => {
+  // The cut: Infobae's head (61440 bytes, 10 items) stops at the end of its 8th item, byte 50320,
+  // and the rest of the body is cancelled.
+  assert.equal(bytesOf(ibXml), 61440);
+  const s = chunked(ibXml, 4096);
+  const head = await readHead(s.body);
+  assert.equal(bytesOf(head), 50320);
+  assert.ok(ibXml.startsWith(head) && head.endsWith('</item>'));
+  assert.deepEqual([s.cancelled, s.pulls < s.chunks], [true, true]);
+  assert.deepEqual(parseFeed(head), parseFeed(ibXml));
+  // The byte cap inside an item: the 5th item ends at byte 30933, so a cut at 30000 keeps 4 items.
+  // A cut inside a character (30003: the 2nd byte of an "\u00f3") drops that character.
+  const c = chunked(ibXml, 1000);
+  const cut = await readHead(c.body, { bytes: 30000 });
+  assert.deepEqual([bytesOf(cut), c.cancelled], [30000, true]);
+  assert.deepEqual(parseFeed(cut), parseFeed(ibXml).slice(0, 4));
+  const mid = await readHead(chunked(ibXml, 1000).body, { bytes: 30003 });
+  assert.ok(bytesOf(mid) === 30002 && !mid.includes('\ufffd') && mid.endsWith('porci'));
+  // The default cap, HEAD_BYTES (96 KB), on a body with no items.
+  const x = chunked('x'.repeat(200000), 16384);
+  assert.deepEqual([(await readHead(x.body)).length, x.cancelled], [HEAD_BYTES, true]);
+  // A feed shorter than the cap: Clarin (11845 bytes, 10 items), with room for 20 items, is read
+  // whole, in 7-byte chunks that split tags and accents, every chunk read, nothing cancelled.
+  const w = chunked(clarinXml, 7);
+  assert.equal(await readHead(w.body, { items: 20 }), clarinXml);
+  assert.deepEqual([w.pulls, w.cancelled], [w.chunks, false]);
+  // A </item> split by the chunks still counts.
+  const feed = `<rss><channel>${['Uno', 'Dos', 'Tres'].map((t) => `<item><title>${t}</title></item>`).join('')}</channel></rss>`;
+  const two = feed.slice(0, feed.indexOf('Tres') - '<item><title>'.length);
+  for (const size of [1, 3, 5, 7]) {
+    const f = chunked(feed, size);
+    assert.deepEqual([await readHead(f.body, { items: 2 }), f.cancelled], [two, true]);
+    assert.equal(await readHead(chunked(feed, size).body), feed);     // 3 items: the whole feed
+  }
+  assert.equal(await readHead(null), '');
+});
+
 test('get news: one cache entry per feed URL, the parsed items; a failed feed names its host', async () => {
   const feed = { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/' };
   const d = deps({ answers: { 'www.clarin.com': { body: clarinXml } }, now: JUN_NOW });
   const r = await get(newsUpstream(feed), junEnv, JUN_NOW, d);
-  assert.deepEqual([r.state, r.data.length, r.data[3].at], ['ok', 10, 1791912009]);
+  assert.deepEqual([r.state, r.data.length, r.data[3].at], ['ok', 8, 1791912009]);
   await Promise.all(d.waits);
   assert.deepEqual([...d.cache.m.keys()], ['https://couch.internal/news?u=https%3A%2F%2Fwww.clarin.com%2Frss%2Flo-ultimo%2F']);
   const again = await get(newsUpstream(feed), junEnv, JUN_NOW + 599, d);           // NEWS_TTL 600 s by default
@@ -655,6 +715,11 @@ test('get news: one cache entry per feed URL, the parsed items; a failed feed na
   assert.deepEqual([f.state, f.reason], ['none', 'clarin.com: HTTP 403']);
   const h = await get(newsUpstream(feed), junEnv, JUN_NOW, deps({ answers: { 'www.clarin.com': { body: '<html>busy</html>' } } }));
   assert.deepEqual([h.state, h.reason], ['none', 'clarin.com: no items']);
+  // Infobae through the Worker's fetch: 8 items from the head, the rest of the body cancelled.
+  const ib = { label: 'Infobae', url: 'https://www.infobae.com/arc/outboundfeeds/rss/' };
+  const st = chunked(ibXml, 4096);
+  const g = await get(newsUpstream(ib), junEnv, JUN_NOW, deps({ answers: { 'www.infobae.com': { response: new Response(st.body) } } }));
+  assert.deepEqual([g.state, g.data.length, g.data[0].at, g.data[7].at, st.cancelled], ['ok', 8, 1791927152, 1791927105, true]);
 });
 
 test('the 4 KB guard drops the news first, then the money and the sky, then the rate and day lines', () => {
@@ -677,10 +742,10 @@ test('the 4 KB guard drops the news first, then the money and the sky, then the 
 });
 
 test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leaves the other', async () => {
-  const feeds = 'Clarín=https://www.clarin.com/rss/lo-ultimo/,La Verdad=https://laverdadonline.com/feed/';
+  const feeds = 'Clarín=https://www.clarin.com/rss/lo-ultimo/,Infobae=https://www.infobae.com/arc/outboundfeeds/rss/';
   const e = { ...junEnv, NEWS_FEEDS: feeds };
   const all = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData },
-    'www.clarin.com': { body: clarinXml }, 'laverdadonline.com': { body: lvXml } };
+    'www.clarin.com': { body: clarinXml }, 'www.infobae.com': { body: ibXml } };
   const d = deps({ answers: all, now: JUN_NOW });
   const body = await (await handle(new Request('http://couch.test/board'), e, d)).text();
   const lines = body.trimEnd().split('\n');
@@ -691,10 +756,10 @@ test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leav
   assert.ok(lines.includes('wx_rain=rain|Rain now (75%)') && lines.includes('wx_sun=06:24|19:16'));
   assert.equal(lines.filter((l) => l.startsWith('news=')).length, 8);
   assert.ok(lines.includes('news_state=ok') && body.endsWith('news_state=ok\nend\n'));
-  const dead = deps({ answers: { ...all, 'laverdadonline.com': { status: 500, body: 'x' } }, now: JUN_NOW });
+  const dead = deps({ answers: { ...all, 'www.infobae.com': { status: 500, body: 'x' } }, now: JUN_NOW });
   const half = (await (await handle(new Request('http://couch.test/board'), e, dead)).text()).trimEnd().split('\n');
   assert.equal(half.filter((l) => l.startsWith('news=Clarín|')).length, 8);  // the fair share goes to the feed that answered
-  assert.ok(half.includes('news_state=stale|laverdadonline.com: HTTP 500'));
+  assert.ok(half.includes('news_state=stale|infobae.com: HTTP 500'));
   const off = deps({ answers: all, now: JUN_NOW });
   const none = await (await handle(new Request('http://couch.test/board'), { ...junEnv, PF_BANK: ' ' }, off)).text();
   assert.ok(!/\nnews/.test(none) && !none.includes('Plazo fijo') && off.calls.length === 4);

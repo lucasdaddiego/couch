@@ -61,33 +61,55 @@ The keys of 2026-10-13 (Lucas's choices; a Couch 0.1.0 skips them, so the versio
 - The news (`news=source|age|title`, then `news_age` and `news_state`): `NEWS_FEEDS` is
   `Label=URL` pairs between commas (not `:`, which a URL holds), at most 4; `NEWS_MAX` (8) lines.
   Each feed is an upstream of its own (`https://couch.internal/news?u=<URL>`), cached as its
-  parsed items (at most 20), not as XML. `src/news.js` reads RSS 2.0 with no library (Workers have
+  parsed items (at most 8, the most news lines of a reply), not as XML. The Worker reads only the
+  head of every feed's body (`src/news.js`'s `readHead`, for the free plan's 10 ms of CPU per
+  request): it streams the body, stops at the end of the 8th `</item>` or after 96 KB, whichever
+  comes first, cancels the rest of the stream and parses only that head (the parser skips an item
+  that the 96 KB cap cuts). So the head must hold the newest items: a feed in another order loses
+  its newer items. The count is of `</item>` tags, so an item with an empty title gives one item
+  less. `src/news.js` reads RSS 2.0 with no library (Workers have
   no DOMParser): each `<item>`'s `<title>` and `<pubDate>` (or `dc:date`), CDATA kept, entities
   decoded, tags stripped, `|` removed, the title cut to 110 code points at a word with "...".
   Each feed gets a fair share in turn, then the newest first; the age is in seconds at `now`
   (`-` with no date). `news_state` is `ok` when every feed is ok, else `stale` with the first
   failed feed's reason while any feed has items, else `none`. The feeds (read with curl on
   2026-10-13): Clarin's "lo ultimo" `https://www.clarin.com/rss/lo-ultimo/` (12 KB, 10 items,
-  CDATA titles, RFC 2822 dates), and La Verdad of Junin `https://laverdadonline.com/feed/`
-  (WordPress, 188 KB, 40 items). Not used: La Nacion's and Infobae's feeds (about 800 KB each,
-  long for a 4 s budget), Pagina/12's `/rss/portada/` (404), `diariolaverdad.com.ar` (San
-  Nicolas, empty titles, dates of year -1), Democracia of Junin (no feed found).
+  CDATA titles, RFC 2822 dates: the read stops at its 8th item), and Infobae's
+  `https://www.infobae.com/arc/outboundfeeds/rss/` (Lucas's choice, 2026-10-13, in place of La
+  Verdad; the same feed as `?outputType=xml`): 687 KB, 100 items of all of Infobae's editions
+  (by link: 25 America, 20 Spain, 12 Mexico, 8 Colombia, 6 Peru, few of Argentina), each with
+  its whole article, CDATA titles, RFC 2822 dates in UTC, `cache-control: private, max-age=242`.
+  Its items are newest first (no item older than the next in all 100 at 21:32 UTC), and its 8th
+  item ends at byte 50320, so the Worker reads about 50 KB of it (the read ends at the stream's
+  next chunk; an item is 2.5 KB to 24 KB, so 8 items can pass 96 KB, and then fewer items come).
+  Infobae's sections have feeds too, also newest first, about 1 MB each, the 8th item at 64 KB to
+  74 KB: `.../rss/category/politica/`, `.../category/economia/`, `.../category/sociedad/`
+  (`.../category/argentina/` is empty). In use since 2026-10-13 (Lucas's choice, because the main feed
+  is mostly foreign news): Infobae's politics and economy feeds, then Clarin, in `NEWS_FEEDS`; the
+  tests keep the main feed's head as their Infobae fixture (the same format). Not used: La Verdad of Junin
+  (`https://laverdadonline.com/feed/`, WordPress, 188 KB, 40 items, the second feed until
+  Infobae), La Nacion's feed (about 800 KB, not read again since the head-only read),
+  Pagina/12's `/rss/portada/` (404), `diariolaverdad.com.ar` (San Nicolas, empty titles, dates of
+  year -1), Democracia of Junin (no feed found).
   Not checked: that each host answers a Worker's fetch (only curl from the Mac, with the
   Worker's user agent `couch-board`).
 - The 4 KB guard: a Couch 0.1.0 refuses a body over 4096 bytes whole, so the reply stays within
   4096 bytes. Lines drop from the end in this order: the news, then the money, then the sky,
-  then the rate and day lines. The reply of 2026-10-13 with every upstream has 1595 bytes.
+  then the rate and day lines. The reply of 2026-10-13 with every upstream has 1618 bytes.
 
 - `src/board.js`: the reply's format, the sky, the money lines, the news lines, pure functions.
 - `src/smn.js`: SMN's zip, its Latin-1 text and its rows, pure functions.
-- `src/news.js`: the RSS feeds and `NEWS_FEEDS`, pure functions.
+- `src/news.js`: the head-only read of a feed's body, then the RSS feeds and `NEWS_FEEDS`, pure
+  functions.
 - `src/index.js`: the Worker: the route, the upstreams, the cache.
 - `test/`: `node --test` against the upstream answers of 2026-10-10, SMN's zip of 2026-10-12
   (`fixtures/tiepre.zip`), the answers of 2026-10-13 17:47 UTC for Junin (`meteo_junin.json`,
   `riesgo.json`, `inflacion.json`: the last 24 entries of the list, `plazofijo.json`,
-  `clarin.xml`, `laverdad.xml`: the channel and the first 8 of its 40 items) and a fake fetch
-  and cache. The first test's reply is also the host check's and the preview's (`body_ok`), so
-  it keeps its text as UTF-8. CI runs them on every push (no npm install: the tests need only
+  `clarin.xml`), Infobae's feed of 2026-10-13 21:32 UTC (`infobae.xml`: the head of the feed,
+  its first 61440 bytes, 10 items and part of the 11th, so the tests run the cut; its items are
+  newer than the Junin fixtures' time, so their age in the first reply is 0) and a fake fetch and
+  cache, with bodies in chunks for the head-only read. The first test's reply is also the host
+  check's and the preview's (`body_ok`), so it keeps its text as UTF-8. CI runs them on every push (no npm install: the tests need only
   Node).
 - `dev.zsh`: the tests and `wrangler dev` in a throwaway container from a git archive (commit
   first), published on the Mac's LAN address, port 8787, for the PS3 and for curl.

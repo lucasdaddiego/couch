@@ -7,7 +7,7 @@
 
 import { boardText, clean, fold } from './board.js';
 import { findRow, latin1, unzipFirst } from './smn.js';
-import { parseFeed, parseFeeds, ITEMS_MAX } from './news.js';
+import { parseFeed, parseFeeds, readHead } from './news.js';
 
 const TIMEOUT_MS = 4000;
 
@@ -55,9 +55,11 @@ async function readBank(r, env) {
   return { data: row ? { entidad: clean(row.entidad), tna: row.tnaClientes } : null, bad: `no row for ${clean(env.PF_BANK)}` };
 }
 
-// A feed: {data: its items} (news.js), [] for text that is no RSS.
+// A feed: {data: its items} (news.js), [] for text that is no RSS. Only the head of the body is
+// read, for every feed: up to the end of its 8th item, at most 96 KB (news.js's readHead), and
+// the rest is cancelled.
 async function readFeed(r) {
-  return { data: parseFeed(await r.text()).slice(0, ITEMS_MAX), bad: 'no items' };
+  return { data: parseFeed(await readHead(r.body)), bad: 'no items' };
 }
 
 const dated = (d) => !!d && typeof d === 'object' && Number.isFinite(d.valor) && /^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha));
