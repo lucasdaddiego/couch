@@ -7,7 +7,7 @@
 
 import { boardText, clean, fold } from './board.js';
 import { findRow, latin1, unzipFirst } from './smn.js';
-import { parseFeed, parseFeeds, readHead } from './news.js';
+import { parseFeed, parseFeeds, readFeedHead } from './news.js';
 
 const TIMEOUT_MS = 4000;
 
@@ -56,10 +56,11 @@ async function readBank(r, env) {
 }
 
 // A feed: {data: its items} (news.js), [] for text that is no RSS. Only the head of the body is
-// read, for every feed: up to the end of its 8th item, at most 96 KB (news.js's readHead), and
-// the rest is cancelled.
+// read, for every feed (news.js's readFeedHead): up to the end of its 8th item, at most 96 KB,
+// when those items are newest first, else up to its 100th item, at most 256 KB, to sort them.
+// The rest is cancelled.
 async function readFeed(r) {
-  return { data: parseFeed(await readHead(r.body)), bad: 'no items' };
+  return { data: parseFeed(await readFeedHead(r.body)), bad: 'no items' };
 }
 
 const dated = (d) => !!d && typeof d === 'object' && Number.isFinite(d.valor) && /^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha));
@@ -189,7 +190,7 @@ export async function handle(request, env, deps) {
     String(env.SMN_STATION ?? '').trim() ? get('smn', env, now, deps) : smnOff, get('rp', env, now, deps),
     get('ipc', env, now, deps), pfOn ? get('pf', env, now, deps) : null, ...feeds.map((f) => get(newsUpstream(f), env, now, deps))]);
   const money = { rp, ipc, pf: pf || undefined };
-  const news = feeds.map((f, i) => ({ label: f.label, r: rs[i] }));
+  const news = feeds.map((f, i) => ({ label: f.label, weight: f.weight, r: rs[i] }));
   // Always 200 with the states in the body (design section 4): a reply that cannot be formatted
   // gives the upstreams as none with the error, and a bad setting (TZ) the bare lines.
   let text;
@@ -199,7 +200,7 @@ export async function handle(request, env, deps) {
     const reason = `worker: ${clean((e && e.message) || e).slice(0, 60)}`;
     const none = { state: 'none', reason, age: 0, data: null };
     try {
-      text = boardText({ now, usd: none, wx: none, smn: none, news: feeds.map((f) => ({ label: f.label, r: none })), env });
+      text = boardText({ now, usd: none, wx: none, smn: none, news: feeds.map((f) => ({ label: f.label, weight: f.weight, r: none })), env });
     } catch {
       text = ['couch-board 1', `now=${now}`, `usd_state=none|${reason}`, `wx_state=none|${reason}`,
         ...(feeds.length ? [`news_state=none|${reason}`] : []), 'end', ''].join('\n');

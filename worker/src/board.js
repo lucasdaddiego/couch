@@ -218,21 +218,25 @@ export function moneyLines({ now, tz, locale, rp, ipc, pf, pfLabel }) {
 
 // ---- the news -----------------------------------------------------------------------------------
 
-// The news lines from the feeds' results ([{label, r}], r as get() gives it, r.data the items of
-// news.js's parseFeed): a fair share of NEWS_MAX per feed in turn, then the newest first.
-// news=source|age|title, the age in seconds at now ("-" for an item with no date), then news_age
-// (the oldest feed's) and news_state: ok when every feed is ok, else stale with the first failed
-// feed's reason while any feed has items, else none.
+// The news lines from the feeds' results ([{label, weight, r}], r as get() gives it, r.data the
+// items of news.js's parseFeed): first each feed's share, its weight (1 when absent) of its newest
+// items, in the feeds' order; then one item per feed in turn until NEWS_MAX, so a feed with no
+// items leaves its share to the others. Then the newest first. With weight 1 for every feed this
+// is a fair share in turn. news=source|age|title, the age in seconds at now ("-" for an item with
+// no date), then news_age (the oldest feed's) and news_state: ok when every feed is ok, else stale
+// with the first failed feed's reason while any feed has items, else none.
 export function newsLines(feeds, now, max) {
   if (!Array.isArray(feeds) || !feeds.length) return [];
   const lists = feeds.map(({ label, r }) => ((r && Array.isArray(r.data) ? r.data : [])
     .filter((x) => x && typeof x.title === 'string' && clean(x.title))
     .map((x) => ({ label: clean(label), title: clean(x.title), at: Number.isFinite(x.at) ? x.at : null }))
     .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity))));
-  const picked = [];
-  for (let k = 0; picked.length < max && lists.some((l) => k < l.length); k++) {
-    for (const l of lists) if (k < l.length && picked.length < max) picked.push(l[k]);
-  }
+  const picked = [], taken = lists.map(() => 0);
+  const take = (j, k) => {
+    for (; k > 0 && taken[j] < lists[j].length && picked.length < max; k--) picked.push(lists[j][taken[j]++]);
+  };
+  feeds.forEach((f, j) => take(j, Number.isInteger(f.weight) && f.weight > 0 ? f.weight : 1));
+  while (picked.length < max && lists.some((l, j) => taken[j] < l.length)) lists.forEach((_, j) => take(j, 1));
   picked.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity));
   const out = picked.map((x) => `news=${x.label}|${x.at === null ? '-' : Math.max(0, now - x.at)}|${x.title}`);
   const rs = feeds.map((f) => f.r || NONE);
@@ -245,8 +249,8 @@ export function newsLines(feeds, now, max) {
 // The reply. usd, wx and smn are {state: 'ok'|'stale'|'none', reason, age, data}, as index.js's
 // get() gives them: data is dolarapi's /v1/dolares array, Open-Meteo's forecast object and the
 // SMN station's row (smn.js's parseRow). smn has no state line: its row's own time decides.
-// money is {rp, ipc, pf}, each such a result or absent (no line); news is [{label, r}], one per
-// feed of NEWS_FEEDS (none: no news lines).
+// money is {rp, ipc, pf}, each such a result or absent (no line); news is [{label, weight, r}], one
+// per feed of NEWS_FEEDS (none: no news lines).
 export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news = [], env }) {
   const tz = env.TZ || 'UTC', locale = env.LOCALE || 'es-AR';
   // The offset at now, not Open-Meteo's utc_offset_seconds: a cached forecast keeps the offset of

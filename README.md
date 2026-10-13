@@ -17,8 +17,9 @@ there (else Open-Meteo), the three days from Open-Meteo.
   on the weather card;
 - the money extras under the dollar rates: riesgo pais, the last monthly
   inflation (INDEC, with its month) and Banco Nacion's fixed-term rate (TNA);
-- a News page: up to 8 headlines of two RSS feeds (Clarin and Infobae,
-  which replaced La Verdad of Junin on 2026-10-13), with their source and age;
+- a News page: up to 8 headlines of RSS feeds (since 2026-10-13: 3 of economy,
+  3 of politics, 2 of the world, from Infobae through Google News, Ambito,
+  Clarin and BBC; worker/README.md), with their source and age;
 - three pages with L1 and R1 (the Board, the News, the Info screen) and
   their dots in a new header with the clock;
 - the internet's state in the header: ok, slow, or no internet since HH:MM;
@@ -465,8 +466,9 @@ Round 3, 0.2.0 (the pkg goes up as `Couch-0.2.0-rcN.pkg`):
 1. The Worker of 2026-10-13: commit, then `zsh worker/dev.zsh test` (the
    tests run only in its container). Then either the LAN Worker (`zsh
    worker/dev.zsh` and `board_url.txt`) or the deploy, which needs Lucas's
-   OK. The LAN Worker also shows whether Clarin and Infobae answer
-   `wrangler dev`'s fetch.
+   OK. The LAN Worker also shows whether the feeds answer `wrangler dev`'s
+   fetch, from the Mac: not what Cloudflare's egress gets (Infobae's own
+   feed answered 200 to the Mac and 403 to the deployed Worker).
 2. Unattended, `auto.txt` = `150`, `ps3run round`: `board.ppm` with the
    money extras and the sky, `info.ppm` with the Internet row; in
    `couch.txt`, the fetch lines with "connect N s" and "8 news".

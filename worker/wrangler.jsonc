@@ -6,9 +6,13 @@
 // CITY keeps the accent (U+00ED): Couch draws it with text_utf8 and folds it to "i" without.
 // Since 2026-10-13: the money extras of argentinadatos.com (PF_BANK names the bank of the
 // fixed-term rate as its table writes it, case and accents not counted; empty: no such line) and
-// the news of NEWS_FEEDS ("Label=URL" pairs between commas, at most 4; empty: no news), at most
-// NEWS_MAX (8) headlines. Of each feed the Worker reads only the head: up to the end of its 8th
-// item, at most 96 KB (Infobae's feed is 687 KB). Infobae replaces La Verdad since 2026-10-13.
+// the news of NEWS_FEEDS ("Label=URL" or "Label*weight=URL" between commas, at most 6; empty: no
+// news), at most NEWS_MAX (8) headlines, the weight a feed's share of them. Of each feed the
+// Worker reads only the head: up to the end of its 8th item, at most 96 KB, when those items are
+// newest first, else up to its 100th item, at most 256 KB, sorted by date. The mix (Lucas's
+// choice, 2026-10-13): 3 economy (Infobae 2, Ambito 1), 3 politics (Infobae 2, Clarin 1), 2 world
+// (Clarin 1, BBC 1), the label the publisher. Infobae through Google News' RSS search: Infobae's
+// own feed answers HTTP 403 to the Worker (Cloudflare's egress).
 //   wrangler deploy --env-file ~/.config/cloudflare/personal.env
 {
   "name": "couch-board",
@@ -29,7 +33,7 @@
     "SMN_TTL": "600",
     "PF_BANK": "Banco de la Nación Argentina",
     "PF_LABEL": "Plazo fijo BNA (TNA)",
-    "NEWS_FEEDS": "Infobae=https://www.infobae.com/arc/outboundfeeds/rss/category/politica/,Infobae=https://www.infobae.com/arc/outboundfeeds/rss/category/economia/,Clarín=https://www.clarin.com/rss/lo-ultimo/",
+    "NEWS_FEEDS": "Infobae*2=https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419,Ámbito=https://www.ambito.com/rss/pages/economia.xml,Infobae*2=https://news.google.com/rss/search?q=site:infobae.com/politica+when:1d&hl=es-419&gl=AR&ceid=AR:es-419,Clarín=https://www.clarin.com/rss/politica/,Clarín=https://www.clarin.com/rss/mundo/,BBC=https://feeds.bbci.co.uk/news/world/rss.xml",
     "NEWS_MAX": "8",
     "RP_TTL": "900",
     "IPC_TTL": "21600",

@@ -1,34 +1,51 @@
 // The Board's news (index.js's news upstreams, one per feed of NEWS_FEEDS): an RSS 2.0 feed's
 // items as [{title, at}], with no XML library (Workers have no DOMParser): each <item>'s <title>
-// and <pubDate>, the CDATA unwrapped, the tags stripped, the entities decoded, the title cut to
-// TITLE_MAX code points at a word. The Worker reads only the head of a feed's body (readHead):
-// Infobae's feed is 687 KB, and the free plan gives about 10 ms of CPU per request. Then pure
-// functions: the Worker caches the parsed items, not the XML (Clarin's feed is 12 KB).
+// and <pubDate>, the CDATA unwrapped, the tags stripped, the entities decoded, the publisher that
+// Google News appends removed, the title cut to TITLE_MAX code points at a word, then the newest
+// first. The Worker reads only the head of a feed's body (readFeedHead): a feed can be 1 MB, and
+// the free plan gives about 10 ms of CPU per request. Then pure functions: the Worker caches the
+// parsed items, not the XML.
 
 import { clean } from './board.js';
 
-export const TITLE_MAX = 110;        // code points: two lines of the TV's News page
-export const ITEMS_MAX = 8;          // items read and kept per feed: a reply has at most 8 news lines
-export const HEAD_BYTES = 96 * 1024; // bytes read per feed, at most
+export const TITLE_MAX = 110;          // code points: two lines of the TV's News page
+export const ITEMS_MAX = 8;            // items kept per feed: a reply has at most 8 news lines
+export const HEAD_BYTES = 96 * 1024;   // bytes read of a feed that is newest first, at most
+export const SORT_ITEMS = 100;         // items read of a feed that is not newest first, at most
+export const SORT_BYTES = 256 * 1024;  // bytes read of such a feed, at most
+export const FEEDS_MAX = 6;            // feeds of NEWS_FEEDS, at most
+export const WEIGHT_MAX = 8;           // a feed's weight, at most: NEWS_MAX's 8 lines
 
 // The head of a feed's body (a ReadableStream of bytes, as UTF-8): the text up to the end of its
 // items-th </item>, else up to bytes bytes (an item cut there is not complete, and parseFeed
-// skips it), else the whole body. The rest of the stream is cancelled, not read. A </item> that
-// two chunks split counts too. A stall or a break of the body throws, as r.text() did.
-export async function readHead(body, { items = ITEMS_MAX, bytes = HEAD_BYTES } = {}) {
+// skips it), else the whole body. At the items-th </item>, more(head) can raise both limits once
+// ({items, bytes}, or null to stop there). The rest of the stream is cancelled, not read. A
+// </item> that two chunks split counts too. A stall or a break of the body throws, as r.text() did.
+export async function readHead(body, { items = ITEMS_MAX, bytes = HEAD_BYTES, more = null } = {}) {
   if (!body) return '';
   const reader = body.getReader(), dec = new TextDecoder();
-  let text = '', n = 0, seen = 0, from = 0;
+  let text = '', n = 0, seen = 0, from = 0, left = null;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return text + dec.decode();
+      let value = left;
+      left = null;
+      if (!value) {
+        const r = await reader.read();
+        if (r.done) return text + dec.decode();
+        value = r.value;
+      }
       const chunk = value.subarray(0, bytes - n);
+      if (chunk.length < value.length) left = value.subarray(chunk.length);  // kept for a raised cap
       n += chunk.length;
       text += dec.decode(chunk, { stream: true });
       for (let i; (i = text.indexOf('</item>', from)) !== -1;) {
         from = i + 7;
-        if (++seen >= items) return text.slice(0, from);
+        if (++seen < items) continue;
+        const next = more && more(text.slice(0, from));
+        more = null;
+        if (!next) return text.slice(0, from);
+        items = next.items;
+        bytes = Math.max(next.bytes, n);
       }
       from = Math.max(from, text.length - 6);     // a "</item" split at the chunk's end
       if (n >= bytes) return text;
@@ -36,6 +53,14 @@ export async function readHead(body, { items = ITEMS_MAX, bytes = HEAD_BYTES } =
   } finally {
     reader.cancel().catch(() => {});             // no-op on a body read to its end
   }
+}
+
+// The head of a feed for parseFeed: up to the end of its ITEMS_MAX-th item (at most HEAD_BYTES)
+// when those items are newest first, else up to SORT_ITEMS items (at most SORT_BYTES), so that
+// parseFeed can sort them. Google News' search sorts by relevance, BBC's feeds are not in order:
+// for them the head of a feed in its own order does not hold its newest items.
+export function readFeedHead(body) {
+  return readHead(body, { more: (head) => (newestFirst(head) ? null : { items: SORT_ITEMS, bytes: SORT_BYTES }) });
 }
 
 // The named entities of the feeds read on 2026-10-13 (&bull;, &nbsp;) and of Spanish text.
@@ -81,17 +106,28 @@ export function cutTitle(s, max = TITLE_MAX) {
   return cut.replace(/[\s,.;:–—-]+$/, '') + '...';
 }
 
-// A feed's items, at most ITEMS_MAX, in the feed's order: {title, at}, at the item's pubDate (or
-// dc:date) as Unix seconds, null when absent or before 2000 (a feed that writes "30 Nov -0001").
-// An item with an empty title is skipped. [] for text that is no RSS.
-export function parseFeed(xml) {
-  const out = [], src = String(xml ?? '');
-  const items = /<item\b[^>]*>([\s\S]*?)<\/item>/g;
+// A title without the publisher at its end: Google News writes "Title - Infobae" and names the
+// publisher in the item's <source>. Only that exact end goes ("-", "–" or "—" between spaces); a
+// title that is only the publisher stays.
+export function dropPublisher(title, publisher) {
+  if (!publisher) return title;
+  for (const sep of [' - ', ' – ', ' — ']) {
+    const end = sep + publisher;
+    if (title.length > end.length && title.endsWith(end)) return title.slice(0, -end.length).trim();
+  }
+  return title;
+}
+
+// The items of a feed's text, in the feed's order, at most SORT_ITEMS: {title, at}, at the item's
+// pubDate (or dc:date) as Unix seconds, null when absent or before 2000 (a feed that writes
+// "30 Nov -0001"). The title is '' when the item has none.
+function items(xml) {
+  const out = [], re = /<item\b[^>]*>([\s\S]*?)<\/item>/g;
   let m;
-  while (out.length < ITEMS_MAX && (m = items.exec(src))) {
+  while (out.length < SORT_ITEMS && (m = re.exec(xml))) {
     const t = /<title\b[^>]*>([\s\S]*?)<\/title>/.exec(m[1]);
-    const title = t ? cutTitle(elementText(t[1])) : '';
-    if (!title) continue;
+    const s = /<source\b[^>]*>([\s\S]*?)<\/source>/.exec(m[1]);
+    const title = t ? cutTitle(dropPublisher(elementText(t[1]), s ? elementText(s[1]) : '')) : '';
     const d = /<(pubDate|dc:date)\b[^>]*>([\s\S]*?)<\/\1>/.exec(m[1]);
     const ms = d ? Date.parse(elementText(d[2])) : NaN;
     out.push({ title, at: Number.isFinite(ms) && ms >= Date.UTC(2000, 0, 1) ? Math.floor(ms / 1000) : null });
@@ -99,21 +135,46 @@ export function parseFeed(xml) {
   return out;
 }
 
-// NEWS_FEEDS, "Label=https://url,Label=https://url" (not CASAS's ':', which a URL holds): at most 4
-// feeds, each {label, url} with an http or https URL; a bad entry is skipped.
+// True when the dated items of a feed's text are newest first (an item with no date is not
+// counted; equal dates are in order).
+export function newestFirst(xml) {
+  let last = Infinity;
+  for (const { at } of items(String(xml ?? ''))) {
+    if (at === null) continue;
+    if (at > last) return false;
+    last = at;
+  }
+  return true;
+}
+
+// A feed's items, the newest first, at most ITEMS_MAX: {title, at}. Items with equal dates keep
+// the feed's order, items with no date come last. An item with an empty title is skipped. [] for
+// text that is no RSS.
+export function parseFeed(xml) {
+  return items(String(xml ?? '')).filter((x) => x.title)
+    .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, ITEMS_MAX);
+}
+
+// NEWS_FEEDS, "Label=https://url,Label*2=https://url" (not CASAS's ':', which a URL holds): at most
+// FEEDS_MAX feeds, each {label, url, weight} with an http or https URL. The weight ("*2" after
+// the label, 1 to WEIGHT_MAX) is the feed's share of the news lines; no "*": weight 1. A bad
+// entry is skipped. A URL with a comma cannot be written here.
 export function parseFeeds(spec) {
   const out = [];
   for (const part of String(spec ?? '').split(',')) {
     const i = part.indexOf('=');
     if (i < 1) continue;
-    const label = clean(part.slice(0, i)), url = part.slice(i + 1).trim();
+    const m = /^(.*?)(?:\*\s*(\d+))?\s*$/.exec(part.slice(0, i));
+    const label = clean(m[1]), weight = m[2] === undefined ? 1 : Number(m[2]), url = part.slice(i + 1).trim();
     let u;
     try {
       u = new URL(url);
     } catch {
       continue;
     }
-    if (label && (u.protocol === 'https:' || u.protocol === 'http:') && out.length < 4) out.push({ label, url: u.href });
+    if (label && weight >= 1 && weight <= WEIGHT_MAX && (u.protocol === 'https:' || u.protocol === 'http:') && out.length < FEEDS_MAX) {
+      out.push({ label, url: u.href, weight });
+    }
   }
   return out;
 }

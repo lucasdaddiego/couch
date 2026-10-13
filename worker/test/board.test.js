@@ -3,7 +3,12 @@
 // (meteo_junin.json with the hourly rain and the sun, riesgo.json, inflacion.json: the last 24
 // entries of the 53 KB list, plazofijo.json, clarin.xml), Infobae's feed of 2026-10-13 21:32 UTC
 // (infobae.xml: the head of the 687 KB feed, its first 61440 bytes, 10 items and part of the 11th),
-// and the Worker's cache and failure paths with a fake fetch and a fake Cache API.
+// the feeds of NEWS_FEEDS of 2026-10-13 22:04:30 UTC (MIX_NOW: Google News' RSS search for
+// Infobae's economy and politics sections, Ambito's economy, Clarin's politics and world, BBC's
+// world; every item kept, in the feed's order, but only the first item of a Google News or BBC
+// feed whole, the others only their title, link, pubDate and source; Ambito's first 12 items of
+// 99; Clarin's feeds whole), and the Worker's cache and failure paths with a fake fetch and a
+// fake Cache API.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -13,7 +18,8 @@ import {
 } from '../src/board.js';
 import { zipEntry, unzipFirst, latin1, obsTime, parseRow, findRow } from '../src/smn.js';
 import {
-  decodeEntities, elementText, cutTitle, parseFeed, parseFeeds, readHead, TITLE_MAX, ITEMS_MAX, HEAD_BYTES,
+  decodeEntities, elementText, cutTitle, parseFeed, parseFeeds, readHead, readFeedHead, dropPublisher, newestFirst,
+  TITLE_MAX, ITEMS_MAX, HEAD_BYTES, SORT_ITEMS, SORT_BYTES, FEEDS_MAX, WEIGHT_MAX,
 } from '../src/news.js';
 import { get, handle, newsUpstream } from '../src/index.js';
 
@@ -28,6 +34,14 @@ const ipcData = fixture('inflacion.json');
 const pfData = fixture('plazofijo.json');
 const clarinXml = text('clarin.xml');
 const ibXml = text('infobae.xml');
+const mix = {
+  gnEco: text('gn_infobae_economia.xml'), gnPol: text('gn_infobae_politica.xml'), ambito: text('ambito_economia.xml'),
+  clarinPol: text('clarin_politica.xml'), clarinMundo: text('clarin_mundo.xml'), bbc: text('bbc_world.xml'),
+};
+const MIX_NOW = 1791929070; // 2026-10-13 22:04:30 UTC: the time of the NEWS_FEEDS fixtures
+// wrangler.jsonc's vars: its comment lines (each starts with //) removed, then JSON.
+const wranglerVars = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')
+  .split('\n').filter((l) => !l.trimStart().startsWith('//')).join('\n')).vars;
 const env = {
   CITY: 'Buenos Aires', LAT: '-34.6037', LON: '-58.3816', TZ: 'America/Argentina/Buenos_Aires',
   CASAS: 'oficial:Oficial,blue:Blue,bolsa:MEP,contadoconliqui:CCL,cripto:Cripto,tarjeta:Tarjeta',
@@ -199,7 +213,8 @@ function deps({ cache = fakeCache(), answers = {}, now = NOW } = {}) {
     async fetch(url) {
       calls.push(url);
       const u = new URL(url);
-      const a = answers[u.hostname + u.pathname] ?? answers[u.hostname];   // a path when one host serves several upstreams
+      // a path (or a path and a query) when one host serves several upstreams
+      const a = answers[u.hostname + u.pathname + u.search] ?? answers[u.hostname + u.pathname] ?? answers[u.hostname];
       if (a instanceof Error) throw a;
       if (!a) throw new TypeError('no route');
       if (a.response) return a.response;
@@ -624,17 +639,19 @@ test('news: the live feeds of 2026-10-13', () => {
   const odd = '<rss><channel><title>Feed</title><item><title></title></item>' +
     '<item><title>Uno &amp; dos</title><pubDate>Tue, 30 Nov -0001 00:00:00 -0353</pubDate></item>' +
     '<item><title>Tres</title><dc:date>2026-10-13T12:00:00Z</dc:date></item></channel></rss>';
-  assert.deepEqual(parseFeed(odd), [{ title: 'Uno & dos', at: null }, { title: 'Tres', at: Date.UTC(2026, 9, 13, 12) / 1000 }]);
+  // the newest first, an item with no date last
+  assert.deepEqual(parseFeed(odd), [{ title: 'Tres', at: Date.UTC(2026, 9, 13, 12) / 1000 }, { title: 'Uno & dos', at: null }]);
   assert.deepEqual(parseFeed('<html>busy</html>'), []);
 });
 
 test('news: NEWS_FEEDS, the fair share per feed, the newest first, the states', () => {
   assert.deepEqual(parseFeeds('Clarín=https://www.clarin.com/rss/lo-ultimo/,Infobae=https://www.infobae.com/arc/outboundfeeds/rss/'), [
-    { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/' }, { label: 'Infobae', url: 'https://www.infobae.com/arc/outboundfeeds/rss/' },
+    { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/', weight: 1 },
+    { label: 'Infobae', url: 'https://www.infobae.com/arc/outboundfeeds/rss/', weight: 1 },
   ]);
   assert.deepEqual(parseFeeds(' X = https://a.example/f?x=1 ,=https://b.example/,Nolabel,Y=ftp://c.example/,Z=not a url'),
-    [{ label: 'X', url: 'https://a.example/f?x=1' }]);
-  assert.equal(parseFeeds(Array.from({ length: 6 }, (_, i) => `F${i}=https://f${i}.example/`).join(',')).length, 4);
+    [{ label: 'X', url: 'https://a.example/f?x=1', weight: 1 }]);
+  assert.equal(parseFeeds(Array.from({ length: 8 }, (_, i) => `F${i}=https://f${i}.example/`).join(',')).length, FEEDS_MAX);
   assert.deepEqual(parseFeeds(''), []);
   const a = Array.from({ length: 10 }, (_, i) => ({ title: `A${i}`, at: 109 - i }));
   const b = [{ title: 'B0', at: null }, { title: 'B1', at: 150 }, { title: ' ', at: 160 }];
@@ -763,4 +780,130 @@ test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leav
   const off = deps({ answers: all, now: JUN_NOW });
   const none = await (await handle(new Request('http://couch.test/board'), { ...junEnv, PF_BANK: ' ' }, off)).text();
   assert.ok(!/\nnews/.test(none) && !none.includes('Plazo fijo') && off.calls.length === 4);
+});
+
+// ---- 2026-10-13: the mix of NEWS_FEEDS (Infobae through Google News, Ambito, Clarin, BBC) ------------
+
+test('news: the publisher that Google News appends goes; the weights of NEWS_FEEDS', () => {
+  assert.equal(dropPublisher('Dólar hoy - Infobae', 'Infobae'), 'Dólar hoy');
+  assert.equal(dropPublisher('Dólar hoy – Infobae', 'Infobae'), 'Dólar hoy');
+  assert.equal(dropPublisher('Sobre Infobae - Infobae', 'Infobae'), 'Sobre Infobae');
+  assert.equal(dropPublisher('Dólar hoy - Infobae', ''), 'Dólar hoy - Infobae');           // no <source>: no change
+  assert.equal(dropPublisher('Dólar hoy - Infobae', 'Clarín'), 'Dólar hoy - Infobae');
+  assert.equal(dropPublisher('Infobae', 'Infobae'), 'Infobae');                              // only the publisher: it stays
+  const gn = '<rss><channel><item><title>Uno - Infobae</title><source url="https://www.infobae.com">Infobae</source></item>' +
+    `<item><title>${'palabra '.repeat(13)}fin - Infobae</title><source url="https://www.infobae.com">Infobae</source></item>` +
+    '<item><title>Dos - Infobae</title></item></channel></rss>';
+  // the publisher goes before the cut: 13 words and "fin" are 107 code points (whole), 117 with the publisher
+  assert.deepEqual(parseFeed(gn).map((x) => x.title), ['Uno', `${'palabra '.repeat(13)}fin`, 'Dos - Infobae']);
+  assert.equal(Array.from(`${'palabra '.repeat(13)}fin`).length, 107);
+  assert.deepEqual(parseFeeds(`Infobae*2=https://a.example/rss?q=site:x.com/y+when:1d&hl=es-419, Ámbito * 3 =https://b.example/,C*0=https://c.example/,D*${WEIGHT_MAX + 1}=https://d.example/,E*x=https://e.example/`), [
+    { label: 'Infobae', url: 'https://a.example/rss?q=site:x.com/y+when:1d&hl=es-419', weight: 2 },
+    { label: 'Ámbito', url: 'https://b.example/', weight: 3 },
+    { label: 'E*x', url: 'https://e.example/', weight: 1 },                 // no number after "*": part of the label
+  ]);
+  // wrangler.jsonc: 3 economy, 3 politics, 2 world, 8 lines in all
+  const live = parseFeeds(wranglerVars.NEWS_FEEDS);
+  assert.deepEqual(live.map((f) => `${f.label}*${f.weight}`), ['Infobae*2', 'Ámbito*1', 'Infobae*2', 'Clarín*1', 'Clarín*1', 'BBC*1']);
+  assert.equal(live.reduce((a, f) => a + f.weight, 0), Number(wranglerVars.NEWS_MAX));
+  assert.equal(live[0].url, 'https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419');
+  // the weights: first each feed's share, then one per feed in turn; with no weight, 1
+  const f = (p, n, t0) => Array.from({ length: n }, (_, i) => ({ title: `${p}${i}`, at: t0 - i }));
+  assert.deepEqual(newsLines([{ label: 'A', weight: 2, r: okR(f('A', 5, 100)) }, { label: 'B', r: okR(f('B', 5, 50)) },
+    { label: 'C', weight: 1, r: okR(f('C', 1, 10)) }], 200, 8), [
+    'news=A|100|A0', 'news=A|101|A1', 'news=A|102|A2', 'news=A|103|A3', 'news=B|150|B0', 'news=B|151|B1', 'news=B|152|B2', 'news=C|190|C0',
+    'news_age=0', 'news_state=ok',
+  ]);
+  // weights over NEWS_MAX: the feeds earlier in NEWS_FEEDS first
+  assert.deepEqual(newsLines([{ label: 'A', weight: 6, r: okR(f('A', 8, 100)) }, { label: 'B', weight: 6, r: okR(f('B', 8, 50)) }], 200, 8)
+    .filter((l) => l.startsWith('news=')).map((l) => l.split('|')[2]), ['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'B0', 'B1']);
+});
+
+// The end of the n-th </item> of a text.
+function itemEnd(s, n) {
+  let i = -1;
+  for (let k = 0; k < n; k++) i = s.indexOf('</item>', i + 1);
+  return i + 7;
+}
+
+test('news: a feed that is not newest first is read further and sorted; one that is stops at its 8th item', async () => {
+  // Ambito is newest first: the read stops at the end of its 8th item, byte 6702, and the rest is cancelled.
+  const a = chunked(mix.ambito, 1024);
+  const ah = await readFeedHead(a.body);
+  assert.deepEqual([bytesOf(ah), ah.endsWith('</item>'), a.cancelled, newestFirst(ah)], [6702, true, true, true]);
+  // Google News sorts by relevance: its first 8 items are not in order, so all 45 are read
+  // (13876 bytes here, 100245 live), and sorted. Its head in its own order has 2 of its 8 newest.
+  const g = chunked(mix.gnEco, 1024);
+  const gh = await readFeedHead(g.body);
+  assert.deepEqual([gh === mix.gnEco, newestFirst(mix.gnEco.slice(0, itemEnd(mix.gnEco, 8))), g.pulls, g.chunks], [true, false, g.chunks, g.chunks]);
+  const eco = parseFeed(gh);
+  assert.deepEqual(eco[0], { title: "Carrefour lanzó descuentos de hasta 50% y cuotas sin interés por el Día de la Madre", at: 1791927993 });
+  assert.ok(eco.every((x, i) => (i === 0 || eco[i - 1].at >= x.at) && MIX_NOW - x.at < 86400 && !x.title.endsWith('Infobae')));
+  assert.ok(gh.includes('<pubDate>Mon, 09 Dec 2019 03:01:53 GMT</pubDate>'));         // an old item that "when:1d" gives: last
+  const own = new Set(parseFeed(gh.slice(0, itemEnd(gh, 8))).map((x) => x.title));
+  assert.equal(eco.filter((x) => own.has(x.title)).length, 2);
+  // BBC's world feed: its newest item is its 20th of 23; read whole.
+  const bh = await readFeedHead(chunked(mix.bbc, 1024).body);
+  assert.deepEqual([bh === mix.bbc, parseFeed(bh)[0]], [true, { title: "Why the lonely in China are hiring 'temporary children'", at: 1791928820 }]);
+  // The caps of a feed that is not in order: SORT_ITEMS items (here 150, the oldest first) ...
+  const item = (i, pad = '') => `<item><title>T${i}</title><pubDate>${new Date(Date.UTC(2026, 9, 13, 0, i)).toUTCString()}</pubDate>${pad}</item>`;
+  const many = (pad) => `<rss><channel>${Array.from({ length: 150 }, (_, i) => item(i, pad)).join('')}</channel></rss>`;
+  const o = chunked(many(''), 4096);
+  const oh = await readFeedHead(o.body);
+  assert.deepEqual([oh.split('</item>').length - 1, oh.endsWith('</item>'), o.cancelled], [SORT_ITEMS, true, true]);
+  assert.deepEqual(parseFeed(oh).map((x) => x.title), Array.from({ length: ITEMS_MAX }, (_, k) => `T${SORT_ITEMS - 1 - k}`));
+  // ... else SORT_BYTES bytes (items of about 4 KB): the newest complete items of the head.
+  const big = chunked(many(`<description>${'x'.repeat(4000)}</description>`), 4096);
+  const bigHead = await readFeedHead(big.body);
+  const done = bigHead.split('</item>').length - 1;
+  assert.deepEqual([bytesOf(bigHead), big.cancelled, done < SORT_ITEMS], [SORT_BYTES, true, true]);
+  assert.deepEqual(parseFeed(bigHead).map((x) => x.title), Array.from({ length: ITEMS_MAX }, (_, k) => `T${done - 1 - k}`));
+  // A raised cap reads the rest of the chunk that the first cap cut (one chunk of 130 bytes, cut at 80).
+  const feed = `<rss><channel>${['Uno', 'Dos', 'Tres'].map((t) => `<item><title>${t}</title></item>`).join('')}</channel></rss>`;
+  const raise = () => ({ items: 3, bytes: 1000 });
+  assert.equal(await readHead(chunked(feed, 4096).body, { items: 2, bytes: 80, more: raise }), feed.slice(0, feed.indexOf('</channel>')));
+  assert.equal(await readHead(chunked(feed, 4096).body, { items: 2, bytes: 80 }), feed.slice(0, itemEnd(feed, 2)));
+  assert.equal(await readHead(chunked(feed, 4096).body, { items: 2, bytes: 80, more: () => null }), feed.slice(0, itemEnd(feed, 2)));
+});
+
+test('handle: the NEWS_FEEDS of wrangler.jsonc: 3 economy, 3 politics, 2 world; a dead feed leaves its share to the others', async () => {
+  const e = { ...junEnv, NEWS_FEEDS: wranglerVars.NEWS_FEEDS, NEWS_MAX: wranglerVars.NEWS_MAX };
+  const gn = (s) => `news.google.com/rss/search?q=site:infobae.com/${s}+when:1d&hl=es-419&gl=AR&ceid=AR:es-419`;
+  const all = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData },
+    [gn('economia')]: { body: mix.gnEco }, [gn('politica')]: { body: mix.gnPol }, 'www.ambito.com': { body: mix.ambito },
+    'www.clarin.com/rss/politica/': { body: mix.clarinPol }, 'www.clarin.com/rss/mundo/': { body: mix.clarinMundo }, 'feeds.bbci.co.uk': { body: mix.bbc } };
+  const news = async (answers) => {
+    const d = deps({ answers, now: MIX_NOW });
+    const body = await (await handle(new Request('http://couch.test/board'), e, d)).text();
+    assert.ok(bytesOf(body) <= MAX_BYTES && body.endsWith('\nend\n'));
+    return { calls: d.calls, lines: body.trimEnd().split('\n').filter((l) => l.startsWith('news')) };
+  };
+  const fine = await news(all);
+  assert.equal(fine.calls.length, 11);                            // usd, wx, riesgo pais, inflation, plazo fijo, six feeds: no SMN_STATION
+  assert.deepEqual(fine.lines, [
+    "news=BBC|250|Why the lonely in China are hiring 'temporary children'",
+    "news=Infobae|964|Tomaron la Facultad de Filosofía y Letras de la UBA y permanecerá así hasta la marcha del 15 de octubre",
+    "news=Infobae|1077|Carrefour lanzó descuentos de hasta 50% y cuotas sin interés por el Día de la Madre",
+    "news=Infobae|1078|“Elegimos Estar”: Arcor presentó su nueva campaña para celebrar el 75° aniversario del grupo",
+    "news=Infobae|2069|La mesa política retomó las reuniones: persisten las diferencias y no hubo avances con la reforma electoral",
+    "news=Clarín|3932|Vialidad: la Cámara de Casación rechazó darle la prisión domiciliaria a otro ex funcionario K",
+    "news=Ámbito|3990|Aumentó la venta de viviendas usadas en EEUU, pero la tasa hipotecaria a 30 años se disparó",
+    "news=Clarín|5898|Qué dice el comunicado completo que confirma el diagnóstico de cáncer de pulmón del papa León XIV",
+    'news_age=0',
+    'news_state=ok',
+  ]);
+  // Infobae's economy feed dead: its 2 lines go to the others in turn (Ambito, then Infobae's politics).
+  const dead = await news({ ...all, [gn('economia')]: { status: 503, body: 'x' } });
+  assert.deepEqual(dead.lines, [
+    "news=BBC|250|Why the lonely in China are hiring 'temporary children'",
+    "news=Infobae|964|Tomaron la Facultad de Filosofía y Letras de la UBA y permanecerá así hasta la marcha del 15 de octubre",
+    "news=Infobae|2069|La mesa política retomó las reuniones: persisten las diferencias y no hubo avances con la reforma electoral",
+    "news=Clarín|3932|Vialidad: la Cámara de Casación rechazó darle la prisión domiciliaria a otro ex funcionario K",
+    "news=Ámbito|3990|Aumentó la venta de viviendas usadas en EEUU, pero la tasa hipotecaria a 30 años se disparó",
+    "news=Ámbito|5010|Inflación de septiembre: cuáles fueron los productos básicos que más subieron en el mes",
+    "news=Infobae|5660|El Gobierno celebró el dato de inflación de septiembre: “Es un buen número comparando de dónde venimos”",
+    "news=Clarín|5898|Qué dice el comunicado completo que confirma el diagnóstico de cáncer de pulmón del papa León XIV",
+    'news_age=0',
+    'news_state=stale|news.google.com: HTTP 503',
+  ]);
 });

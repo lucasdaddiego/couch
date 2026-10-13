@@ -59,40 +59,72 @@ The keys of 2026-10-13 (Lucas's choices; a Couch 0.1.0 skips them, so the versio
   `/tasas/depositos30Dias` (BCRA's 30-day rate, dated, but 366 KB), and no `/ultimo` for
   inflation or deposits (both 404).
 - The news (`news=source|age|title`, then `news_age` and `news_state`): `NEWS_FEEDS` is
-  `Label=URL` pairs between commas (not `:`, which a URL holds), at most 4; `NEWS_MAX` (8) lines.
+  `Label=URL` or `Label*weight=URL` entries between commas (not `:`, which a URL holds; a URL
+  with a comma cannot be written), at most 6; `NEWS_MAX` (8) lines. The weight (1 to 8, 1 when
+  absent) is the feed's share of the lines: first each feed gives its weight of its newest items,
+  in the order of `NEWS_FEEDS`, then each feed gives one item in turn until 8 lines, so a feed
+  with no items leaves its share to the others; then the lines are sorted newest first. With
+  weight 1 for every feed (the old `Label=URL` form) this is the fair share in turn of before.
   Each feed is an upstream of its own (`https://couch.internal/news?u=<URL>`), cached as its
   parsed items (at most 8, the most news lines of a reply), not as XML. The Worker reads only the
-  head of every feed's body (`src/news.js`'s `readHead`, for the free plan's 10 ms of CPU per
-  request): it streams the body, stops at the end of the 8th `</item>` or after 96 KB, whichever
-  comes first, cancels the rest of the stream and parses only that head (the parser skips an item
-  that the 96 KB cap cuts). So the head must hold the newest items: a feed in another order loses
-  its newer items. The count is of `</item>` tags, so an item with an empty title gives one item
-  less. `src/news.js` reads RSS 2.0 with no library (Workers have
-  no DOMParser): each `<item>`'s `<title>` and `<pubDate>` (or `dc:date`), CDATA kept, entities
-  decoded, tags stripped, `|` removed, the title cut to 110 code points at a word with "...".
-  Each feed gets a fair share in turn, then the newest first; the age is in seconds at `now`
-  (`-` with no date). `news_state` is `ok` when every feed is ok, else `stale` with the first
-  failed feed's reason while any feed has items, else `none`. The feeds (read with curl on
-  2026-10-13): Clarin's "lo ultimo" `https://www.clarin.com/rss/lo-ultimo/` (12 KB, 10 items,
-  CDATA titles, RFC 2822 dates: the read stops at its 8th item), and Infobae's
-  `https://www.infobae.com/arc/outboundfeeds/rss/` (Lucas's choice, 2026-10-13, in place of La
-  Verdad; the same feed as `?outputType=xml`): 687 KB, 100 items of all of Infobae's editions
-  (by link: 25 America, 20 Spain, 12 Mexico, 8 Colombia, 6 Peru, few of Argentina), each with
-  its whole article, CDATA titles, RFC 2822 dates in UTC, `cache-control: private, max-age=242`.
-  Its items are newest first (no item older than the next in all 100 at 21:32 UTC), and its 8th
-  item ends at byte 50320, so the Worker reads about 50 KB of it (the read ends at the stream's
-  next chunk; an item is 2.5 KB to 24 KB, so 8 items can pass 96 KB, and then fewer items come).
-  Infobae's sections have feeds too, also newest first, about 1 MB each, the 8th item at 64 KB to
-  74 KB: `.../rss/category/politica/`, `.../category/economia/`, `.../category/sociedad/`
-  (`.../category/argentina/` is empty). In use since 2026-10-13 (Lucas's choice, because the main feed
-  is mostly foreign news): Infobae's politics and economy feeds, then Clarin, in `NEWS_FEEDS`; the
-  tests keep the main feed's head as their Infobae fixture (the same format). Not used: La Verdad of Junin
-  (`https://laverdadonline.com/feed/`, WordPress, 188 KB, 40 items, the second feed until
-  Infobae), La Nacion's feed (about 800 KB, not read again since the head-only read),
-  Pagina/12's `/rss/portada/` (404), `diariolaverdad.com.ar` (San Nicolas, empty titles, dates of
-  year -1), Democracia of Junin (no feed found).
-  Not checked: that each host answers a Worker's fetch (only curl from the Mac, with the
-  Worker's user agent `couch-board`).
+  head of every feed's body (`src/news.js`'s `readFeedHead`, for the free plan's 10 ms of CPU per
+  request): it streams the body, and at the end of the 8th `</item>` it checks the dates of those
+  8 items. When they are newest first, the read stops there (or after 96 KB, whichever comes
+  first). Else (Google News' search sorts by relevance, BBC's world feed is not in order) the read goes on
+  to the end of the 100th `</item>` or 256 KB. Then the rest of the stream is cancelled, and
+  `parseFeed` sorts all the items that it read newest first (equal dates keep the feed's order,
+  an item with no date goes last) and keeps 8. A feed whose first 8 items are in order by chance,
+  but not its later items, loses its newer items. The count is of `</item>` tags, so an item with
+  an empty title gives one item less. `src/news.js` reads RSS 2.0 with no library (Workers have
+  no DOMParser): each `<item>`'s `<title>`, `<pubDate>` (or `dc:date`) and `<source>`, CDATA
+  kept, entities decoded, tags stripped, `|` removed. When the item has a `<source>` (Google News
+  names the publisher there), a title that ends with " - " and that publisher loses that end
+  (also with "–" or "—"; a title that is only the publisher stays). Then the title is cut to 110
+  code points at a word with "...". The age is in seconds at `now` (`-` with no date).
+  `news_state` is `ok` when every feed is ok, else `stale` with the first failed feed's reason
+  while any feed has items, else `none`.
+  The mix (Lucas's choice, 2026-10-13: Infobae and a mix of sources, mostly economy and politics,
+  also world affairs; English is acceptable): 3 economy lines (Infobae 2, Ambito 1), 3 politics
+  lines (Infobae 2, Clarin 1), 2 world lines (Clarin 1, BBC 1). The label is the publisher's short
+  name: the TV's source column has 99 px at the widest age ("23 h 59 min") in the 22 px font, and
+  "Infobae" is 77 px, "Ámbito" 72, "Clarín" 59, "BBC" 44 (a section name such as "Economía", 100
+  px, does not fit). The feeds, read with curl on 2026-10-13 22:04 UTC with the Worker's user
+  agent `couch-board` (each answered 200 with it, no browser user agent needed):
+  - Infobae's economy and politics through Google News' RSS search,
+    `https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419`
+    and the same with `/politica`. Why: Infobae's own RSS (`https://www.infobae.com/arc/
+    outboundfeeds/rss/...`) answers HTTP 403 to the deployed Worker (Cloudflare's egress), though
+    it answers 200 from the Mac. Economy: 100 KB, 45 items; politics: 66 KB, 25 items. Both by
+    relevance: 17 and 10 items newer than the item before them, and only 2 and 1 of the 8 newest
+    items in the first 8 (6 of the 8 newest are items 30 to 37 of 45, 5 are items 21 to 25 of
+    25), so both are read whole and sorted. `when:1d` also lets through old pages that Google
+    keeps current (one dated 2019-12-09, one 2023-06-24): the sort puts them last. Each title
+    ends with " - Infobae", and each item names `<source url="https://www.infobae.com">Infobae
+    </source>`. The channel's copyright line allows the feed "for personal, non-commercial use"
+    in a feed reader: Couch is a personal use.
+  - Ambito's economy, `https://www.ambito.com/rss/pages/economia.xml`: 70 KB, 99 items, newest
+    first, the 8th item ends at byte 6695, so the Worker reads about 7 KB. Ambito is behind
+    Cloudflare (`server: cloudflare`, `cf-ray`).
+  - Clarin's politics and world, `https://www.clarin.com/rss/politica/` (11.7 KB, 10 items, the
+    8th ends at byte 9572) and `https://www.clarin.com/rss/mundo/` (10.9 KB, 10 items, the 8th
+    at byte 8747): newest first, CDATA titles, RFC 2822 dates.
+  - BBC's world news, `https://feeds.bbci.co.uk/news/world/rss.xml`: 18 KB, 23 items, not in
+    order (its newest item was its 20th, 6 of the 8 newest in its first 8), read whole.
+  A refresh of every feed reads about 210 KB and 117 items (Google News 100 + 66 KB, BBC 18 KB,
+  Ambito 6.7 KB, Clarin 9.6 + 8.7 KB). Not used: Infobae's own feeds (403 to the Worker; the
+  main feed is 687 KB of all of its editions, the section feeds about 1 MB each), Clarin's "lo
+  ultimo" (the Board's feed until this mix), The Guardian's `/world/rss` (158 KB, not in order,
+  its first 5 items 4 to 5 days old, with Australian and US home news), Al Jazeera's
+  `/xml/rss/all.xml` (sport and video items in it), BBC Mundo's `/mundo/rss.xml` (Spanish, but
+  of every topic), Google News for `infobae.com/america/mundo` (science and curiosities), La
+  Nacion's economy feed (747 KB), El Cronista's `/files/rss/economia.xml` (404), Pagina/12's
+  `/rss/secciones/el-pais/notas` (404), La Verdad of Junin (`https://laverdadonline.com/feed/`,
+  local news), `diariolaverdad.com.ar` (San Nicolas, empty titles, dates of year -1), Democracia
+  of Junin (no feed found).
+  Not checked: that Google News, Ambito and BBC answer the deployed Worker. A 200 from the Mac
+  does not prove it (Infobae gave 200 to the Mac and 403 to the Worker); only Clarin is known to
+  answer the Worker. A feed that fails gives `news_state=stale|<host>: HTTP <status>` and leaves
+  its share to the other feeds.
 - The 4 KB guard: a Couch 0.1.0 refuses a body over 4096 bytes whole, so the reply stays within
   4096 bytes. Lines drop from the end in this order: the news, then the money, then the sky,
   then the rate and day lines. The reply of 2026-10-13 with every upstream has 1618 bytes.
@@ -107,8 +139,14 @@ The keys of 2026-10-13 (Lucas's choices; a Couch 0.1.0 skips them, so the versio
   `riesgo.json`, `inflacion.json`: the last 24 entries of the list, `plazofijo.json`,
   `clarin.xml`), Infobae's feed of 2026-10-13 21:32 UTC (`infobae.xml`: the head of the feed,
   its first 61440 bytes, 10 items and part of the 11th, so the tests run the cut; its items are
-  newer than the Junin fixtures' time, so their age in the first reply is 0) and a fake fetch and
-  cache, with bodies in chunks for the head-only read. The first test's reply is also the host
+  newer than the Junin fixtures' time, so their age in the first reply is 0), the feeds of
+  `NEWS_FEEDS` of 2026-10-13 22:04:30 UTC (`gn_infobae_economia.xml`, `gn_infobae_politica.xml`,
+  `bbc_world.xml`: every item in the feed's order, the first item whole, the others only their
+  title, link (none for Google News), pubDate and source, 7 KB to 14 KB; `ambito_economia.xml`:
+  its first 12 items of 99; `clarin_politica.xml`, `clarin_mundo.xml`: whole; the handle test
+  reads `NEWS_FEEDS` from `wrangler.jsonc`) and a fake fetch and cache, with bodies in chunks for
+  the head-only read. The first test still uses `clarin.xml` and `infobae.xml`: its reply is the
+  host check's (`board_check.c` names its lines). The first test's reply is also the host
   check's and the preview's (`body_ok`), so it keeps its text as UTF-8. CI runs them on every push (no npm install: the tests need only
   Node).
 - `dev.zsh`: the tests and `wrangler dev` in a throwaway container from a git archive (commit
