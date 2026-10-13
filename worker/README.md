@@ -129,15 +129,94 @@ The keys of 2026-10-13 (Lucas's choices; a Couch 0.1.0 skips them, so the versio
   does not prove it (Infobae gave 200 to the Mac and 403 to the Worker); only Clarin is known to
   answer the Worker. A feed that fails gives `news_state=stale|<host>: HTTP <status>` and leaves
   its share to the other feeds.
-- The 4 KB guard: a Couch 0.1.0 refuses a body over 4096 bytes whole, so the reply stays within
-  4096 bytes. Lines drop from the end in this order: the news, then the money, then the sky,
-  then the rate and day lines. The reply of 2026-10-13 with every upstream has 1618 bytes.
+
+The keys of Couch 0.3.0 (`~/.claude/plans/2026-10-13-couch-revamp-design.md`, section 5; new keys
+only, which Couch 0.1.0 and 0.2.0 skip, so the version stays 1). Numbers use a dot for decimals
+and no thousands mark, `-` for a missing one; only a change's percent and amount are `LOCALE`
+text with a sign.
+- `geo=-34.58|-60.94`: `LAT` and `LON` with 4 decimals, after `city`. No line when either
+  is not a number in range.
+- `wx_fx=3|100|0|111|10|27`: the WMO code now, the cloud cover %, the precipitation in mm per
+  hour, the wind's direction in degrees (where it comes from, 0 to 359), its speed and gusts in
+  km/h, after `wx_now`. Open-Meteo's `current` (now also `cloud_cover`, `precipitation`,
+  `wind_direction_10m`, `wind_gusts_10m`). The current precipitation is the sum of 15 minutes
+  (`interval` 900), so the Worker scales it to an hour (design 3.5 counts the drops from an
+  hourly rate). When the now line is SMN's, the code comes from SMN's sky words (`smnCode`:
+  Cloudy and Overcast 3, Partly cloudy 2, Mist 45 as fog, haze and smoke take Open-Meteo's code);
+  the wind stays Open-Meteo's (SMN's row has no gusts).
+- `wx_hours=15|19 19 ...|55 63 ...|51 3 ...`: the first whole hour after now (local), then 12
+  temperatures (deg C), 12 chances (%) and 12 WMO codes, each the value at that hour's stamp
+  (`hourly` adds `temperature_2m` and `weather_code`). The hours count by their times, as
+  `wx_rain`'s do; an hour past the forecast is `-`; no line when no hour has a temperature (a
+  forecast cached before the deploy, for at most `WX_TTL`).
+- `days_fx=51|3|51`: the WMO code of each `day` line, in order (`daily.weather_code`).
+- `usd_chg=Cripto|down|-0,2%|-3,29|12 Oct`: per rate with a `usd` line and a previous close, its
+  sell against the close of the previous calendar day (Lucas's choice): `up`, `down` or `flat`
+  (equal in cents), the change in % (1 decimal, 2 when 1 decimal shows 0,0 for a change that is
+  not 0) and in pesos, and the compared close's date. No line without a close. **Which entry
+  holds a close:** argentinadatos.com's daily job (GitHub Actions, cron 22:10 UTC) copies
+  dolarapi's rates and dates them with its run's UTC date, and GitHub starts it late: the
+  entries dated 2026-10-06 to 2026-10-13 were written between 22:27 and 00:17 ART on the day
+  before (commit times of `datos/v1/cotizaciones/dolares/oficial/...`). So the entry dated D
+  holds the close of the local day before D (the entry of Friday 9 Oct has Thursday's 1.540 for
+  the oficial, the entry of Saturday 10 Oct Friday's 1.535). The Worker fetches the entries
+  dated today, one per rate of `CASAS` (`/v1/cotizaciones/dolares/<casa>/<yyyy>/<mm>/<dd>`, about
+  85 B each), in parallel, and caches them as one entry
+  (`https://couch.internal/closes?d=<today>&c=<casas>`) for 7 days (a past close does not change;
+  the key holds the date). A rate with no entry yet (404: the job has not run) is fetched again
+  with all the others after 15 minutes; no entry at all is `none`. On a Monday the entry dated
+  Monday holds Sunday's close, which is Friday's rate. If GitHub starts the job on time one day
+  (before 21:00 ART), the entry dated today holds today's close in the evening: that evening's
+  chips show flat. Blue takes its close from the same fetch (one fetch more than the design: the
+  series is cached 6 h and can lack today's entry).
+- `money_chg=Riesgo país|flat|0,0%|0|9 Oct`: riesgo pais against the entry of its list before the
+  current value's date (the list has no weekend or holiday entries: a Monday compares with
+  Friday), whole points. The list is `/v1/finanzas/indices/riesgo-pais` (413 KB, 7,721 entries),
+  read by its tail, its 10 newest entries cached 6 h (`https://couch.internal/rplist`); a newest
+  entry more than 7 days old is a bad read.
+- `spark=Blue|2026-09-14|1555 1560 ... 1540`: the Blue dollar's sell at the close of each of the
+  30 local days to today, whole pesos, oldest first, from the first day's date, `-` for a missing
+  day. A past day X is the series' entry dated X + 1 (above); yesterday falls back to the closes'
+  Blue; today is the live sell of dolarapi (argentinadatos copies it once a day: at 19:38 ART on
+  2026-10-13 its entry of today had 1.540, dolarapi 1.550). The series is
+  `/v1/cotizaciones/dolares/blue` (523 KB, 5,763 entries since 2011, 25 KB with gzip), never
+  `JSON.parse`d: `src/series.js` streams the body, keeps only its last 8 KB (about 90 entries),
+  and reads the whole `{...}` objects there with regular expressions (the cut first object is
+  skipped). Its 31 newest entries are cached 6 h (`https://couch.internal/blue30`). Fewer than 25
+  entries in the tail, or a newest entry more than 3 days old, is a bad read: the old entry stays
+  as `stale`.
+- No KV: argentinadatos keeps dated history, so the Cache API only saves fetches (design 5.3).
+
+The negative cache: a failed upstream (an HTTP error, no answer in 4 s, a bad body) is remembered
+in its cache entry (`fail: {at, reason}`, next to the old data, if any). While it is, a request
+does not wait for that upstream: it answers at once with the old data (`stale`) or `none`, with the
+failure's reason, and at most once per 300 s (`RETRY_S`) it tries the upstream again after the
+reply (`waitUntil`). A success removes the mark, and the next Board has the data. 300 s because
+Couch asks every 5 minutes and `USD_TTL` is 300 s: a dead upstream gets one try per Board fetch at
+most, in the background. So a dead feed costs its 4 s timeout on its first failure only (and once
+a day, when the Cache API drops the entry), not on every request as before (Google News made every
+Board 4.1 s).
+
+The free plan's limits: the Cache API's `match` and `put` count with `fetch` in the 50
+subrequests of a request. With the vars of `wrangler.jsonc` and a cold cache: 18 fetches (usd,
+wx, smn, riesgo pais, inflation, plazo fijo, 4 feeds, 6 closes, the 2 lists), 13 reads and 13
+writes, 44 in all (a test counts them); warm, 13 reads. With 6 feeds (`FEEDS_MAX`) it is 50,
+the limit. CPU: the two tail reads run once per 6 h. Measure after the deploy (the dashboard's CPU
+time, or `wrangler tail`).
+
+The 4 KB guard: a Couch 0.1.0 refuses a body over 4096 bytes whole, so the reply stays within
+4096 bytes. Lines drop from the end in this order (design 5.5): the news, the Blue series, the 12
+hours, the changes (`usd_chg`, `money_chg`), the money lines, the sky lines (`wx_rain`, `wx_sun`,
+`wx_moon`, `wx_fx`, `days_fx`), then the rate and day lines. `geo` stays with `city`. The reply of
+2026-10-13 with every upstream has 2219 bytes (1618 without the keys of 0.3.0); with 8 titles of
+110 three-byte characters it has 4050 bytes and nothing drops.
 
 - `src/board.js`: the reply's format, the sky, the money lines, the news lines, pure functions.
 - `src/smn.js`: SMN's zip, its Latin-1 text and its rows, pure functions.
 - `src/news.js`: the head-only read of a feed's body, then the RSS feeds and `NEWS_FEEDS`, pure
   functions.
-- `src/index.js`: the Worker: the route, the upstreams, the cache.
+- `src/series.js`: the tail read of a long list and its dated entries.
+- `src/index.js`: the Worker: the route, the upstreams, the cache and the negative cache.
 - `test/`: `node --test` against the upstream answers of 2026-10-10, SMN's zip of 2026-10-12
   (`fixtures/tiepre.zip`), the answers of 2026-10-13 17:47 UTC for Junin (`meteo_junin.json`,
   `riesgo.json`, `inflacion.json`: the last 24 entries of the list, `plazofijo.json`,
@@ -147,16 +226,21 @@ The keys of 2026-10-13 (Lucas's choices; a Couch 0.1.0 skips them, so the versio
   `NEWS_FEEDS` of 2026-10-13 22:04:30 UTC (`gn_infobae_economia.xml`, `gn_infobae_politica.xml`,
   `bbc_world.xml`: every item in the feed's order, the first item whole, the others only their
   title, link (none for Google News), pubDate and source, 7 KB to 14 KB; `ambito_economia.xml`:
-  its first 12 items of 99; `clarin_politica.xml`, `clarin_mundo.xml`: whole; the handle test
-  reads `NEWS_FEEDS` from `wrangler.jsonc`) and a fake fetch and cache, with bodies in chunks for
-  the head-only read. The first test still uses `clarin.xml` and `infobae.xml`: its reply is the
+  its first 12 items of 99; `clarin_politica.xml`, `clarin_mundo.xml`: whole; the mix test
+  keeps the `NEWS_FEEDS` of those fixtures, the cold-cache test reads `wrangler.jsonc`'s), the
+  answers of 2026-10-13 22:38 UTC for the keys of 0.3.0 (`meteo_junin.json` with the new current
+  and hourly fields; `dolares_dia.json`: the per-day entries of the six rates dated 2026-10-12
+  and 2026-10-13; `blue_tail.json` and `riesgo_tail.json`: the last 45 and 15 entries of the two
+  lists, as the API writes them) and a fake fetch and cache (the cache counts its calls), with
+  bodies in chunks for the head-only and the tail reads. The first test still uses `clarin.xml` and `infobae.xml`: its reply is the
   host check's (`board_check.c` names its lines). The first test's reply is also the host
   check's and the preview's (`body_ok`), so it keeps its text as UTF-8. CI runs them on every push (no npm install: the tests need only
   Node).
 - `dev.zsh`: the tests and `wrangler dev` in a throwaway container from a git archive (commit
   first), published on the Mac's LAN address, port 8787, for the PS3 and for curl.
 
-The Worker of 2026-10-13 (the keys above) is not deployed yet: the live one sends none of them.
+The keys of Couch 0.3.0 and the negative cache are not deployed yet: the live Worker sends none
+of them (the deploy waits for Lucas's OK).
 Deployed on `http://couch.daddiego.com.ar/board` (2026-10-10, Lucas's OK): `wrangler deploy
 --env-file ~/.config/cloudflare/personal.env` from this folder, after a commit. Plain HTTP works
 because the zone `daddiego.com.ar` has Always Use HTTPS off and one Single Redirect rule

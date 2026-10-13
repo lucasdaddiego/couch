@@ -206,7 +206,7 @@ export function moneyLines({ now, tz, locale, rp, ipc, pf, pfLabel }) {
     if (u.state === 'none' || !u.data) out.push(`money=${label}|-|-|none|${clean(u.reason)}`);
     else out.push(`money=${label}|${value(u.data)}|${date(u)}|${u.state === 'ok' ? 'ok' : `stale|${clean(u.reason)}`}`);
   };
-  line('Riesgo pa\u00eds', rp, (d) => num(d.valor, locale, 0, 0), (u) => dayWords(u.data.fecha, now, tz));
+  line(RP_LABEL, rp, (d) => num(d.valor, locale, 0, 0), (u) => dayWords(u.data.fecha, now, tz));
   line('Inflaci\u00f3n mensual', ipc, (d) => (Number.isFinite(d.valor) ? `${num(d.valor, locale, 1, 1)}%` : '-'), (u) => {
     const m = /^(\d{4})-(\d{2})/.exec(String(u.data.fecha ?? ''));
     return m && +m[2] >= 1 && +m[2] <= 12 ? `${MONTHS[+m[2] - 1]} ${m[1]}` : '-';
@@ -214,6 +214,176 @@ export function moneyLines({ now, tz, locale, rp, ipc, pf, pfLabel }) {
   line(clean(pfLabel) || 'Plazo fijo', pf, (d) => (Number.isFinite(d.tna) ? `${num(d.tna * 100, locale, 0, 2)}%` : '-'),
     (u) => localWhen(now - Math.max(0, u.age | 0), now, tz));
   return out;
+}
+
+// ---- the keys of 0.3.0 (design of 2026-10-13, section 5) ----------------------------------------
+// New keys only, so the version stays 1. Numbers in the C form (a dot for decimals, no thousands
+// mark), "-" for a missing one; only the changes' pct and abs are LOCALE text with a sign.
+
+export const RP_LABEL = 'Riesgo pa\u00eds';
+
+// "2026-10-13" n days later (n < 0: before), by the calendar.
+export function addDays(ymd, n) {
+  return new Date(Date.parse(`${ymd}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+}
+
+// now's local date in tz, "2026-10-13".
+export function localDate(now, tz) {
+  const p = parts(now, tz);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+// "2026-10-12" as "12 Oct" (the compared close's date), "-" for a value that is not a date.
+export function shortDate(ymd) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd ?? ''));
+  return m && +m[2] >= 1 && +m[2] <= 12 ? `${+m[3]} ${MONTHS[+m[2] - 1]}` : '-';
+}
+
+// A whole number in lo..hi (rounded), else "-".
+function whole(v, lo, hi) {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-';
+  const r = Math.round(v);
+  return r >= lo && r <= hi ? String(r === 0 ? 0 : r) : '-';      // no "-0"
+}
+
+// A WMO code (0 to 99, whole), else "-".
+function wmoCode(v) {
+  return Number.isInteger(v) && v >= 0 && v <= 99 ? String(v) : '-';
+}
+
+// geo=lat|lon from LAT and LON (4 decimals, about 11 m), or null when either is not a number in
+// range.
+export function geoLine(env) {
+  const n = (s, max) => {
+    const t = String(s ?? '').trim();
+    const v = /^[-+]?\d+(\.\d+)?$/.test(t) ? Number(t) : NaN;
+    return Math.abs(v) <= max ? String(Math.round(v * 1e4) / 1e4 || 0) : null;
+  };
+  const la = n(env.LAT, 90), lo = n(env.LON, 180);
+  return la !== null && lo !== null ? `geo=${la}|${lo}` : null;
+}
+
+// SMN's sky words (skyWords) as a WMO code, for wx_fx when the now line is SMN's; null for words
+// with no code (haze, smoke, a state SMN added): Open-Meteo's code then. Mist takes fog's code,
+// the nearest one Couch draws (WMO's own 10 has no icon of its own).
+const SKY_CODE = {
+  Thunderstorm: 95, Snow: 71, 'Rain showers': 80, Rain: 61, Drizzle: 51, Fog: 45, Mist: 45, Overcast: 3, Cloudy: 3,
+  'Partly cloudy': 2, Clear: 0,
+};
+export function smnCode(sky) {
+  const w = skyWords(sky);
+  return Object.hasOwn(SKY_CODE, w) ? SKY_CODE[w] : null;
+}
+
+// wx_fx=code|cover|mm|dir|speed|gusts from Open-Meteo's current values (c) and, when the now
+// line is SMN's, its row (the code from SMN's words). mm is the rate in mm per hour: Open-Meteo's
+// current precipitation is the sum of its interval (900 s), so it is scaled to an hour (design 3.5
+// counts the rain drops from an hourly rate). dir is where the wind comes from, 0 to 359. null
+// with neither.
+export function fxLine(c, row) {
+  if (!c && !row) return null;
+  c = c || {};
+  const sc = row ? smnCode(row.sky) : null;
+  const code = sc !== null ? String(sc) : wmoCode(c.weather_code);
+  const p = c.precipitation, iv = Number.isFinite(c.interval) && c.interval > 0 ? c.interval : 3600;
+  const rate = typeof p === 'number' && Number.isFinite(p) && p >= 0 ? Math.round((p * 3600) / iv * 10) / 10 : NaN;
+  const mm = rate >= 0 && rate <= 1000 ? String(rate) : '-';
+  const d = c.wind_direction_10m, dir = whole(d, 0, 360) === '-' ? '-' : String(Math.round(d) % 360);
+  return `wx_fx=${code}|${whole(c.cloud_cover, 0, 100)}|${mm}|${dir}|${whole(c.wind_speed_10m, 0, 500)}|${whole(c.wind_gusts_10m, 0, 500)}`;
+}
+
+export const HOURS = 12;
+
+// wx_hours=start|t1 .. t12|p1 .. p12|c1 .. c12 from Open-Meteo's hourly arrays: the 12 hours
+// from the first whole hour after now (local), by the times, not the index (as rainWords): each
+// list holds the value at that hour's stamp ("-" for an hour the forecast does not hold).
+// Temperatures in deg C, whole; chances in %; WMO codes. null when no hour has a temperature.
+export function hoursLine(h, now, tz) {
+  if (!h || !Array.isArray(h.time)) return null;
+  const from = localStamp(now, tz);
+  const first = Date.parse(`${from.slice(0, 13)}:00:00Z`) + 3600000;   // the wall clock, as UTC
+  const at = new Map(h.time.map((t, i) => [String(t), i]));
+  const arr = (k) => (Array.isArray(h[k]) ? h[k] : []);
+  const temps = [], pops = [], codes = [];
+  for (let k = 0; k < HOURS; k++) {
+    const i = at.get(new Date(first + k * 3600000).toISOString().slice(0, 16));
+    temps.push(i === undefined ? '-' : whole(arr('temperature_2m')[i], -90, 70));
+    pops.push(i === undefined ? '-' : whole(arr('precipitation_probability')[i], 0, 100));
+    codes.push(i === undefined ? '-' : wmoCode(arr('weather_code')[i]));
+  }
+  if (temps.every((t) => t === '-')) return null;
+  return `wx_hours=${new Date(first).getUTCHours()}|${temps.join(' ')}|${pops.join(' ')}|${codes.join(' ')}`;
+}
+
+// The change of cur against prev, compared at `dec` decimals (2 for a peso rate, 0 for riesgo
+// pais): {dir, pct, abs}, dir up, down or flat (equal at those decimals), pct with 1 decimal (2
+// when 1 would show 0,0 for a change that is not 0) and abs with `dec`, both in the locale with a
+// sign ("+0,3%", "-3,29"; flat: "0,0%", "0,00"). null when either value is missing.
+export function change(cur, prev, dec, locale) {
+  if (typeof cur !== 'number' || typeof prev !== 'number' || !Number.isFinite(cur) || !Number.isFinite(prev) || prev <= 0) return null;
+  const k = 10 ** dec, d = Math.round(cur * k) - Math.round(prev * k);
+  const sign = d > 0 ? '+' : d < 0 ? '-' : '';
+  const p = (Math.abs(d) / k / prev) * 100, pd = d !== 0 && Math.round(p * 10) === 0 ? 2 : 1;
+  return {
+    dir: d > 0 ? 'up' : d < 0 ? 'down' : 'flat',
+    pct: `${sign}${num(p, locale, pd, pd)}%`,
+    abs: `${sign}${num(Math.abs(d) / k, locale, dec, dec)}`,
+  };
+}
+
+// The previous closes come from argentinadatos.com, whose daily job copies dolarapi's rates at
+// 19:10 ART or later and dates them with the job's UTC date. GitHub starts it 3 to 5 h late (the
+// entries of 2026-10-06 to 2026-10-13 were written between 22:27 and 00:17 ART), so the entry
+// dated D holds the close of the local day before D. The close of a local day X is the entry dated
+// X + 1. index.js's closes upstream fetches the entries dated today: the closes of yesterday.
+
+// usd_chg=label|dir|pct|abs|date per rate of CASAS with a usd line and a previous close: its sell
+// against the close of the previous calendar day (Lucas's choice: flat when equal; on a Monday,
+// Sunday's close, which holds Friday's rate). closes.data: {day, rates: {casa: sell}}.
+export function usdChgLines({ rates, closes, locale }) {
+  const c = closes && closes.data;
+  if (!c || !c.rates || typeof c.rates !== 'object') return [];
+  const out = [];
+  for (const { casa, label, d } of rates) {
+    const g = change(d.venta, c.rates[casa], 2, locale);
+    if (g) out.push(`usd_chg=${label}|${g.dir}|${g.pct}|${g.abs}|${shortDate(c.day)}`);
+  }
+  return out;
+}
+
+export const SPARK_DAYS = 30;
+
+// spark=label|yyyy-mm-dd|v1 .. v30: the Blue dollar's sell at the close of each of the 30 local
+// days up to today, whole pesos, oldest first, from the first day's date; "-" for a day with no
+// value. A past day X is the series' entry dated X + 1 (yesterday's falls back to the closes);
+// today is the live sell (dolarapi), so the last point is the price on the Board: argentinadatos
+// updates its entry once a day. null with no series.
+export function sparkLine({ label, live, series, closes, now, tz }) {
+  const s = series && series.data;
+  if (!label || !Array.isArray(s) || !s.length) return null;
+  const byDate = new Map(s.filter((x) => x && typeof x === 'object').map((x) => [x.fecha, x.venta]));
+  const today = localDate(now, tz), start = addDays(today, 1 - SPARK_DAYS);
+  const c = closes && closes.data && closes.data.rates;
+  const v = [];
+  for (let k = 0; k < SPARK_DAYS; k++) {
+    const day = addDays(start, k);
+    let x = k === SPARK_DAYS - 1 ? live : byDate.get(addDays(day, 1));
+    if (x === undefined && k === SPARK_DAYS - 2 && c) x = c.blue;
+    v.push(whole(x, 0, 100000000));
+  }
+  return v.every((x) => x === '-') ? null : `spark=${label}|${start}|${v.join(' ')}`;
+}
+
+// money_chg=Riesgo pais|dir|pct|abs|date: riesgo pais against the entry of its list before the
+// current value's date (the list has no weekend entries: a Monday compares with Friday), whole
+// points. null with no value or no such entry.
+export function rpChgLine({ rp, list, locale }) {
+  const d = rp && rp.data, l = list && list.data;
+  if (!d || !Array.isArray(l) || !/^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha))) return null;
+  let prev = null;
+  for (const x of l) if (x && typeof x === 'object' && x.fecha < d.fecha && (!prev || x.fecha > prev.fecha)) prev = x;
+  const g = prev && change(d.valor, prev.valor, 0, locale);
+  return g ? `money_chg=${RP_LABEL}|${g.dir}|${g.pct}|${g.abs}|${shortDate(prev.fecha)}` : null;
 }
 
 // ---- the news -----------------------------------------------------------------------------------
@@ -250,27 +420,40 @@ export function newsLines(feeds, now, max) {
 // get() gives them: data is dolarapi's /v1/dolares array, Open-Meteo's forecast object and the
 // SMN station's row (smn.js's parseRow). smn has no state line: its row's own time decides.
 // money is {rp, ipc, pf}, each such a result or absent (no line); news is [{label, weight, r}], one
-// per feed of NEWS_FEEDS (none: no news lines).
-export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news = [], env }) {
+// per feed of NEWS_FEEDS (none: no news lines). chg is {closes, blue, rpList}, results too (absent:
+// no change or spark lines): closes.data {day, rates: {casa: sell}} (index.js's closes), blue.data
+// and rpList.data the series' entries ([{fecha, venta}], [{fecha, valor}], series.js).
+export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news = [], chg = {}, env }) {
   const tz = env.TZ || 'UTC', locale = env.LOCALE || 'es-AR';
   // The offset at now, not Open-Meteo's utc_offset_seconds: a cached forecast keeps the offset of
   // its fetch, which is wrong after a DST change. The city is cut to 100 code points, the only
-  // line that the 4 KB guard below cannot drop.
+  // line that the 4 KB guard below cannot drop (with geo).
   const offset = tzOffset(now, tz);
   const city = Array.from(clean(env.CITY || '')).slice(0, 100).join('').trim();
   const out = [`couch-board ${VERSION}`, `now=${now}`, `offset=${offset}`, `city=${city}`];
+  const geo = geoLine(env);
+  if (geo) out.push(geo);
+  const casas = parseCasas(env.CASAS).slice(0, 8), rates = [];
   if (Array.isArray(usd.data)) {
     const byCasa = new Map(usd.data.filter((d) => d !== null && typeof d === 'object').map((d) => [d.casa, d]));
-    for (const { casa, label } of parseCasas(env.CASAS).slice(0, 8)) {
+    for (const { casa, label } of casas) {
       const d = byCasa.get(casa);
       if (!d) continue;
       const t = Date.parse(d.fechaActualizacion);
       const when = Number.isFinite(t) ? localWhen(Math.floor(t / 1000), now, tz) : '-';
       out.push(`usd=${label}|${money(d.compra, locale)}|${money(d.venta, locale)}|${when}`);
+      rates.push({ casa, label, d });
     }
   }
+  // The changes and the Blue series, after the rate lines (Couch matches them by label).
+  out.push(...usdChgLines({ rates, closes: chg.closes, locale }));
+  const blue = casas.find((x) => x.casa === 'blue'), blueRate = rates.find((x) => x.casa === 'blue');
+  const spark = blue ? sparkLine({ label: blue.label, live: blueRate && blueRate.d.venta, series: chg.blue, closes: chg.closes, now, tz }) : null;
+  if (spark) out.push(spark);
   out.push(`usd_age=${Math.max(0, usd.age | 0)}`, `usd_state=${stateLine(usd)}`);
   out.push(...moneyLines({ now, tz, locale, ...extras, pfLabel: env.PF_LABEL }));
+  const rc = rpChgLine({ rp: extras.rp, list: chg.rpList, locale });
+  if (rc) out.push(rc);
   const c = wx.data && wx.data.current, dy = wx.data && wx.data.daily;
   const deg = (v) => (Number.isFinite(v) ? `${Math.round(v)}°` : '-');
   const pct = (v) => (Number.isFinite(v) ? `${Math.round(v)}%` : '-');
@@ -289,6 +472,9 @@ export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news =
     out.push(`wx_now=${deg(c.temperature_2m)}|${deg(c.apparent_temperature)}|${pct(c.relative_humidity_2m)}|` +
       `${wmoWords(c.weather_code)}|${kmh(c.wind_speed_10m)}|${c.is_day ? 'day' : 'night'}|Open-Meteo`);
   }
+  // wx_fx with the now line: SMN's code when the now line is SMN's, the rest from Open-Meteo.
+  const fx = row || c ? fxLine(c, row) : null;
+  if (fx) out.push(fx);
   if (dy && Array.isArray(dy.time)) {
     // Open-Meteo starts `daily` on the local date of its fetch, so a cached forecast can start on
     // a past day: skip the days before now's local date and any value that is not a date. i stays
@@ -304,23 +490,31 @@ export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news =
       out.push(`day=${label}|${wmoWords(dy.weather_code && dy.weather_code[i])}|${num(dy.temperature_2m_max, '°')}|` +
         `${num(dy.temperature_2m_min, '°')}|${num(dy.precipitation_probability_max, '%')}`);
     }
+    // days_fx: the WMO code of each day line, in order.
+    if (days.length) out.push(`days_fx=${days.map(([, i]) => wmoCode(dy.weather_code && dy.weather_code[i])).join('|')}`);
   }
   // The sky, from the same forecast: the rain of the next 12 h (wx_rain=rain|words or dry|words),
-  // today's sunrise and sunset, and the moon from the date (also with no forecast).
+  // today's sunrise and sunset, the next 12 hours (wx_hours), and the moon from the date (also
+  // with no forecast).
+  let hours = null;
   if (wx.data) {
     const p = parts(now, tz), rain = rainWords(wx.data.hourly, now, tz), sun = sunTimes(dy, `${p.year}-${p.month}-${p.day}`);
     if (rain) out.push(`wx_rain=${rain.wet ? 'rain' : 'dry'}|${rain.words}`);
     if (sun) out.push(`wx_sun=${sun.rise}|${sun.set}`);
+    hours = hoursLine(wx.data.hourly, now, tz);
   }
   out.push(`wx_moon=${moonPhase(now)}`);
+  if (hours) out.push(hours);
   out.push(`wx_age=${Math.max(0, wx.age | 0)}`, `wx_state=${stateLine(wx)}`);
   out.push(...newsLines(news, now, Math.min(8, Number(env.NEWS_MAX) || 8)), 'end');
   let text = out.join('\n') + '\n';
   // A body over MAX_BYTES would be refused whole by a Couch 0.1.0 ("the reply is over 4 KB": its
-  // buffer is 4 KB) and cut by a newer one, so lines drop from the end until it fits: the news
-  // first, then the money and the sky lines (a Couch 0.1.0 skips all three, so its Board stays
-  // as it was), then the rate and day lines.
-  const drop = [['news='], ['money='], ['wx_rain=', 'wx_sun=', 'wx_moon='], ['usd=', 'day=']];
+  // buffer is 4 KB) and cut by a newer one, so lines drop from the end until it fits (design 5.5):
+  // the news first, then the Blue series, the 12 hours, the changes, the money lines, the sky lines
+  // (a Couch 0.1.0 skips all of these, so its Board stays as it was), then the rate and day lines.
+  // geo stays with city (26 bytes).
+  const drop = [['news='], ['spark='], ['wx_hours='], ['usd_chg=', 'money_chg='], ['money='],
+    ['wx_rain=', 'wx_sun=', 'wx_moon=', 'wx_fx=', 'days_fx='], ['usd=', 'day=']];
   for (const keys of drop) {
     while (new TextEncoder().encode(text).length > MAX_BYTES) {
       const i = out.findLastIndex((l) => keys.some((k) => l.startsWith(k)));

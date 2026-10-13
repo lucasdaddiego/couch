@@ -467,35 +467,35 @@ static void new_reply(const char *w, int wn, const char *w2, int w2n)
     STR(b.money[0].value, "589");
     STR(b.moon, "Waxing crescent moon");
     CHECK(b.has_geo && fabs(b.lat + 34.58) < 1e-9 && fabs(b.lon + 60.94) < 1e-9);
-    CHECK(b.has_fx && b.fx_code == 3 && b.fx_cover == 88 && fabs(b.fx_mm - 0.4) < 1e-9 && b.fx_dir == 135 && b.fx_speed == 10 && b.fx_gusts == 22);
+    CHECK(b.has_fx && b.fx_code == 3 && b.fx_cover == 100 && b.fx_mm == 0 && b.fx_dir == 111 && b.fx_speed == 10 && b.fx_gusts == 27);
     CHECK(b.hours_start == 15 && b.n_hours == 12);
-    CHECK(b.hour_temp[0] == 19 && b.hour_temp[3] == 21 && b.hour_temp[11] == 12);
-    CHECK(b.hour_pop[0] == 10 && b.hour_pop[3] == 70 && b.hour_pop[11] == 0);
-    CHECK(b.hour_code[0] == 3 && b.hour_code[2] == 61 && b.hour_code[11] == 0);
-    CHECK(b.n_day_code == 3 && b.day_code[0] == 53 && b.day_code[1] == 3 && b.day_code[2] == 51);
+    CHECK(b.hour_temp[0] == 19 && b.hour_temp[3] == 18 && b.hour_temp[11] == 12);
+    CHECK(b.hour_pop[0] == 55 && b.hour_pop[3] == 75 && b.hour_pop[11] == 0);
+    CHECK(b.hour_code[0] == 51 && b.hour_code[2] == 3 && b.hour_code[11] == 1);
+    CHECK(b.n_day_code == 3 && b.day_code[0] == 51 && b.day_code[1] == 3 && b.day_code[2] == 51);
     CHECK(b.n_usd_chg == 6 && b.n_money_chg == 1);
     int found = 0;
     for (int i = 0; i < b.n_usd; i++) found += board_chg_find(&b, 0, b.usd[i].label) != NULL;
     CHECK(found == 6);
     const board_chg *g = board_chg_find(&b, 0, "Blue");
     CHECK(g && g->dir == CHG_FLAT);
-    g = board_chg_find(&b, 0, "MEP");
-    CHECK(g && g->dir == CHG_UP && !strcmp(g->pct, "+0,3%") && !strcmp(g->abs, "+4,60") && !strcmp(g->when, "12 Oct"));
+    g = board_chg_find(&b, 0, "Cripto");
+    CHECK(g && g->dir == CHG_DOWN && !strcmp(g->pct, "-0,2%") && !strcmp(g->abs, "-3,29") && !strcmp(g->when, "12 Oct"));
     g = board_chg_find(&b, 0, "CCL");
-    CHECK(g && g->dir == CHG_DOWN && !strcmp(g->pct, "-0,2%") && !strcmp(g->abs, "-3,20"));
+    CHECK(g && g->dir == CHG_FLAT && !strcmp(g->pct, "0,0%") && !strcmp(g->abs, "0,00"));
     g = board_chg_find(&b, 1, b.money[0].label);
-    CHECK(g && g->dir == CHG_UP && !strcmp(g->pct, "+0,2%") && !strcmp(g->abs, "+1") && !strcmp(g->when, "9 Oct"));
+    CHECK(g && g->dir == CHG_FLAT && !strcmp(g->pct, "0,0%") && !strcmp(g->abs, "0") && !strcmp(g->when, "9 Oct"));
     CHECK(!board_chg_find(&b, 1, b.money[1].label) && !board_chg_find(&b, 0, b.money[0].label));   /* no line: no chip */
     const board_spark *sp = board_spark_find(&b, "Blue");
     int lo = 0, hi = 0;
-    CHECK(sp && sp->n == 30 && sp->v[0] == 1545 && sp->v[16] == 1565 && sp->v[29] == 1540 && sp->start_day == days_from_civil(2026, 9, 14));
+    CHECK(sp && sp->n == 30 && sp->v[0] == 1555 && sp->v[14] == 1565 && sp->v[29] == 1540 && sp->start_day == days_from_civil(2026, 9, 14));
     CHECK(sp && spark_range(sp, &lo, &hi) == 30 && lo == 1540 && hi == 1565);
     CHECK(!board_spark_find(&b, "Oficial"));
     CHECK(round_trips());
     CHECK(wmo_kind(b.fx_code) == WK_CLOUD && wx_icon(wmo_kind(b.day_code[0]), 1) == WI_CLOUD_RAIN && !wmo_wet(b.fx_code));
     char ww[32];
     wind_words(ww, sizeof ww, b.fx_dir, b.fx_gusts);
-    STR(ww, "SE, gusts 22");
+    STR(ww, "E, gusts 27");
     CHECK(bounded());
     printf("  %d bytes, %d more than the Worker test's reply\n", w2n, w2n - wn);
     group("the reply with the keys of 0.3.0: every new field, the old ones as before, the chips and the series by label", f0);
@@ -504,7 +504,7 @@ static void new_reply(const char *w, int wn, const char *w2, int w2n)
     CHECK(board_parse(w2, w2n, 1, &b) == BP_OK);
     STR(b.money[0].label, "Riesgo pais");
     g = board_chg_find(&b, 1, b.money[0].label);
-    CHECK(g && g->dir == CHG_UP && !strcmp(g->label, "Riesgo pais"));
+    CHECK(g && g->dir == CHG_FLAT && !strcmp(g->label, "Riesgo pais"));
     CHECK(board_spark_find(&b, "Blue") && b.n_hours == 12 && b.has_geo);
     group("the same folded to ASCII: the money_chg label still matches its money line", f0);
 
@@ -517,7 +517,7 @@ static void new_reply(const char *w, int wn, const char *w2, int w2n)
     }
     crlf[k] = 0;
     CHECK(board_parse(crlf, k, 0, &b) == BP_OK && b.n_usd_chg == 6 && b.n_spark == 1 && b.spark[0].n == 30 && b.n_hours == 12 &&
-          b.hour_code[11] == 0 && b.n_day_code == 3 && b.day_code[2] == 51 && b.fx_gusts == 22 && b.has_geo);
+          b.hour_code[11] == 1 && b.n_day_code == 3 && b.day_code[2] == 51 && b.fx_gusts == 27 && b.has_geo);
     CHECK(board_spark_find(&b, "Blue") && board_spark_find(&b, "Blue")->v[29] == 1540);
     STR(b.money_chg[0].when, "9 Oct");
     free(crlf);

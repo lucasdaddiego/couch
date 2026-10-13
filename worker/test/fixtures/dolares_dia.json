@@ -1,0 +1,78 @@
+{
+ "2026-10-12": [
+  {
+   "casa": "oficial",
+   "compra": 1485,
+   "venta": 1535,
+   "fecha": "2026-10-12"
+  },
+  {
+   "casa": "blue",
+   "compra": 1520,
+   "venta": 1540,
+   "fecha": "2026-10-12"
+  },
+  {
+   "casa": "bolsa",
+   "compra": 1535.9,
+   "venta": 1542.9,
+   "fecha": "2026-10-12"
+  },
+  {
+   "casa": "contadoconliqui",
+   "compra": 1605.5,
+   "venta": 1606.6,
+   "fecha": "2026-10-12"
+  },
+  {
+   "casa": "cripto",
+   "compra": 1600.75,
+   "venta": 1604.39,
+   "fecha": "2026-10-12"
+  },
+  {
+   "casa": "tarjeta",
+   "compra": 1930.5,
+   "venta": 1995.5,
+   "fecha": "2026-10-12"
+  }
+ ],
+ "2026-10-13": [
+  {
+   "casa": "oficial",
+   "compra": 1485,
+   "venta": 1535,
+   "fecha": "2026-10-13"
+  },
+  {
+   "casa": "blue",
+   "compra": 1520,
+   "venta": 1540,
+   "fecha": "2026-10-13"
+  },
+  {
+   "casa": "bolsa",
+   "compra": 1535.9,
+   "venta": 1542.9,
+   "fecha": "2026-10-13"
+  },
+  {
+   "casa": "contadoconliqui",
+   "compra": 1605.5,
+   "venta": 1606.6,
+   "fecha": "2026-10-13"
+  },
+  {
+   "casa": "cripto",
+   "compra": 1605.97,
+   "venta": 1610.17,
+   "fecha": "2026-10-13"
+  },
+  {
+   "casa": "tarjeta",
+   "compra": 1930.5,
+   "venta": 1995.5,
+   "fecha": "2026-10-13"
+  }
+ ]
+}

@@ -8,20 +8,28 @@
 // world; every item kept, in the feed's order, but only the first item of a Google News or BBC
 // feed whole, the others only their title, link, pubDate and source; Ambito's first 12 items of
 // 99; Clarin's feeds whole), and the Worker's cache and failure paths with a fake fetch and a
-// fake Cache API.
+// fake Cache API. Since the keys of 0.3.0 (2026-10-13 22:38 UTC): meteo_junin.json's current
+// cloud_cover, precipitation, wind_direction_10m and wind_gusts_10m (Open-Meteo's 15-minute values
+// at 14:45 local, the same model's hours as the fixture) and its hourly temperature_2m and
+// weather_code; argentinadatos.com's per-day entries of the six rates dated 2026-10-12 and
+// 2026-10-13 (dolares_dia.json, each as the API gives it), the tails of the Blue list (blue_tail.json:
+// its last 45 entries of 5,763, as the API writes them) and of riesgo pais (riesgo_tail.json: 15 of
+// 7,721).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   boardText, wmoWords, clean, money, localWhen, tzOffset, parseCasas, MAX_BYTES, fold, skyWords, smnNow,
   rainWords, sunTimes, moonPhase, dayWords, moneyLines, newsLines, NEW_MOON_2000, SYNODIC_DAYS,
+  geoLine, smnCode, fxLine, hoursLine, change, usdChgLines, sparkLine, rpChgLine, addDays, localDate, shortDate,
 } from '../src/board.js';
 import { zipEntry, unzipFirst, latin1, obsTime, parseRow, findRow } from '../src/smn.js';
 import {
   decodeEntities, elementText, cutTitle, parseFeed, parseFeeds, readHead, readFeedHead, dropPublisher, newestFirst,
   TITLE_MAX, ITEMS_MAX, HEAD_BYTES, SORT_ITEMS, SORT_BYTES, FEEDS_MAX, WEIGHT_MAX,
 } from '../src/news.js';
-import { get, handle, newsUpstream } from '../src/index.js';
+import { readTail, tailEntries, TAIL_BYTES } from '../src/series.js';
+import { get, handle, newsUpstream, RETRY_S, CLOSES_MISS_TTL } from '../src/index.js';
 
 const text = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
 const fixture = (f) => JSON.parse(text(f));
@@ -39,6 +47,11 @@ const mix = {
   clarinPol: text('clarin_politica.xml'), clarinMundo: text('clarin_mundo.xml'), bbc: text('bbc_world.xml'),
 };
 const MIX_NOW = 1791929070; // 2026-10-13 22:04:30 UTC: the time of the NEWS_FEEDS fixtures
+// NEWS_FEEDS of 2664c55, the mix that those fixtures were fetched for (with Infobae through Google News)
+const MIX_FEEDS = 'Infobae*2=https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419,' +
+  '\u00c1mbito=https://www.ambito.com/rss/pages/economia.xml,' +
+  'Infobae*2=https://news.google.com/rss/search?q=site:infobae.com/politica+when:1d&hl=es-419&gl=AR&ceid=AR:es-419,' +
+  'Clar\u00edn=https://www.clarin.com/rss/politica/,Clar\u00edn=https://www.clarin.com/rss/mundo/,BBC=https://feeds.bbci.co.uk/news/world/rss.xml';
 // wrangler.jsonc's vars: its comment lines (each starts with //) removed, then JSON.
 const wranglerVars = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')
   .split('\n').filter((l) => !l.trimStart().startsWith('//')).join('\n')).vars;
@@ -49,41 +62,73 @@ const env = {
 };
 const NOW = 1791614218; // 2026-10-10 06:36:58 UTC, 03:36 in Buenos Aires (a Saturday)
 const JUN_NOW = 1791913620; // 2026-10-13 17:47 UTC, 14:47 in Junin (a Tuesday): the time of the Junin fixtures
-const junEnv = { ...env, CITY: 'Jun\u00edn', PF_BANK: 'Banco de la Naci\u00f3n Argentina', PF_LABEL: 'Plazo fijo BNA (TNA)' };
+const junEnv = {
+  ...env, CITY: 'Jun\u00edn', LAT: '-34.58', LON: '-60.94', PF_BANK: 'Banco de la Naci\u00f3n Argentina', PF_LABEL: 'Plazo fijo BNA (TNA)',
+};
 const okR = (data, age = 0) => ({ state: 'ok', age, data });
 const junMoney = () => ({
   rp: okR(rpData), ipc: okR(ipcData.at(-1)), pf: okR({ entidad: 'BANCO DE LA NACION ARGENTINA', tna: pfData[0].tnaClientes }),
+});
+// The keys of 0.3.0: the per-day entries by date, the lists' tails as the API writes them.
+const dayData = fixture('dolares_dia.json');
+const blueText = text('blue_tail.json'), rpText = text('riesgo_tail.json');
+const CASAS6 = ['oficial', 'blue', 'bolsa', 'contadoconliqui', 'cripto', 'tarjeta'];
+// The closes of the day before `stamp` (the entries dated stamp hold them, board.js), as get() caches them.
+const closesOf = (stamp) => ({
+  day: addDays(stamp, -1), rates: Object.fromEntries(dayData[stamp].map((x) => [x.casa, x.venta])), missing: [],
+});
+const junChg = () => ({
+  closes: okR(closesOf('2026-10-13'), 600), blue: okR(tailEntries(blueText, 'venta').slice(-31), 3000),
+  rpList: okR(tailEntries(rpText, 'valor').slice(-10), 3000),
 });
 // Infobae's items are from 21:32 UTC, after JUN_NOW: their age is 0, so they come first.
 const junNews = () => [{ label: 'Clar\u00edn', r: okR(parseFeed(clarinXml), 120) }, { label: 'Infobae', r: okR(parseFeed(ibXml), 300) }];
 
 // The first test's reply is the host check's (couch/tools/hostcheck/run.zsh takes this array, line
-// for line) and the preview's body_ok: it keeps its text as UTF-8, with no escapes.
+// for line) and the preview's body_ok: it keeps its text as UTF-8, with no escapes. REPLY_BYTES is
+// its size, the design's normal reply (5.5: about 2.3 KB). The keys of
+// 0.3.0 (design section 5) are in it: the dollar rates are Friday's (dolares.json), the closes of
+// Monday 12 Oct the entries dated 2026-10-13, so only Cripto moved.
+const REPLY_BYTES = 2219;
 test('the reply of 2026-10-13 in Junin, every upstream, line for line', () => {
-  const t = boardText({ now: JUN_NOW, env: junEnv, usd: okR(usdData, 42), wx: okR(junData, 310), money: junMoney(), news: junNews() });
+  const t = boardText({
+    now: JUN_NOW, env: junEnv, usd: okR(usdData, 42), wx: okR(junData, 310), money: junMoney(), news: junNews(), chg: junChg(),
+  });
   assert.equal(t, [
     'couch-board 1',
     'now=1791913620',
     'offset=-10800',
     'city=Junín',
+    'geo=-34.58|-60.94',
     'usd=Oficial|1.485,00|1.535,00|Fri 15:00',
     'usd=Blue|1.520,00|1.540,00|Fri 18:00',
     'usd=MEP|1.535,90|1.542,90|Fri 18:00',
     'usd=CCL|1.605,50|1.606,60|Fri 18:00',
     'usd=Cripto|1.601,81|1.606,88|Fri 18:00',
     'usd=Tarjeta|1.930,50|1.995,50|Fri 15:00',
+    'usd_chg=Oficial|flat|0,0%|0,00|12 Oct',
+    'usd_chg=Blue|flat|0,0%|0,00|12 Oct',
+    'usd_chg=MEP|flat|0,0%|0,00|12 Oct',
+    'usd_chg=CCL|flat|0,0%|0,00|12 Oct',
+    'usd_chg=Cripto|down|-0,2%|-3,29|12 Oct',
+    'usd_chg=Tarjeta|flat|0,0%|0,00|12 Oct',
+    'spark=Blue|2026-09-14|1555 1560 1560 1555 1550 1550 1550 1550 1555 1560 1560 1560 1560 1560 1565 1560 1560 1555 1560 1560 1560 1545 1550 1555 1540 1540 1540 1540 1540 1540',
     'usd_age=42',
     'usd_state=ok',
     'money=Riesgo país|589|12 Oct|ok',
     'money=Inflación mensual|1,7%|Aug 2026|ok',
     'money=Plazo fijo BNA (TNA)|19,25%|14:47|ok',
+    'money_chg=Riesgo país|flat|0,0%|0|9 Oct',
     'wx_now=19°|17°|61%|Overcast|10 km/h|day|Open-Meteo',
+    'wx_fx=3|100|0|111|10|27',
     'day=Today|Drizzle|19°|9°|75%',
     'day=Wed|Overcast|20°|10°|2%',
     'day=Thu|Drizzle|19°|12°|48%',
+    'days_fx=51|3|51',
     'wx_rain=rain|Rain now (75%)',
     'wx_sun=06:24|19:16',
     'wx_moon=Waxing crescent moon',
+    'wx_hours=15|19 19 19 18 16 15 14 14 13 13 13 12|55 63 72 75 67 52 37 24 11 2 0 0|51 3 3 3 3 51 51 2 1 1 0 1',
     'wx_age=310',
     'wx_state=ok',
     'news=Infobae|0|EN VIVO Colombia vs. Venezuela - Hoy online: GOL de Colombia, siga aquí el último partido de la Tricolor...',
@@ -99,19 +144,19 @@ test('the reply of 2026-10-13 in Junin, every upstream, line for line', () => {
     'end',
     '',
   ].join('\n'));
-  assert.ok(new TextEncoder().encode(t).length < MAX_BYTES / 2);  // 1618 bytes: the 4 KB guard drops nothing
+  assert.equal(new TextEncoder().encode(t).length, REPLY_BYTES);  // the 4 KB guard drops nothing
 });
 
 test('the reply of the design example, line for line', () => {
   const t = boardText({ now: NOW, env, usd: { state: 'ok', age: 42, data: usdData }, wx: { state: 'ok', age: 310, data: wxData } });
   assert.equal(t, [
-    'couch-board 1', 'now=1791614218', 'offset=-10800', 'city=Buenos Aires',
+    'couch-board 1', 'now=1791614218', 'offset=-10800', 'city=Buenos Aires', 'geo=-34.6037|-58.3816',
     'usd=Oficial|1.485,00|1.535,00|Fri 15:00', 'usd=Blue|1.520,00|1.540,00|Fri 18:00',
     'usd=MEP|1.535,90|1.542,90|Fri 18:00', 'usd=CCL|1.605,50|1.606,60|Fri 18:00',
     'usd=Cripto|1.601,81|1.606,88|Fri 18:00', 'usd=Tarjeta|1.930,50|1.995,50|Fri 15:00',
     'usd_age=42', 'usd_state=ok',
-    'wx_now=11°|10°|92%|Overcast|9 km/h|night|Open-Meteo',
-    'day=Today|Rain showers|16°|11°|96%', 'day=Sun|Overcast|16°|9°|2%', 'day=Mon|Drizzle|16°|10°|22%',
+    'wx_now=11°|10°|92%|Overcast|9 km/h|night|Open-Meteo', 'wx_fx=3|-|-|-|9|-',   // the forecast of 2026-10-10 has fewer fields
+    'day=Today|Rain showers|16°|11°|96%', 'day=Sun|Overcast|16°|9°|2%', 'day=Mon|Drizzle|16°|10°|22%', 'days_fx=81|3|51',
     'wx_moon=New moon', 'wx_age=310', 'wx_state=ok', 'end', '',
   ].join('\n'));
 });
@@ -195,12 +240,13 @@ test('a long reply drops lines from the end to stay within 4 KB', () => {
 
 // ---- the Worker with fakes --------------------------------------------------------
 
+// ops counts the calls: the Cache API shares the free plan's 50 subrequests with fetch().
 function fakeCache() {
   const m = new Map();
   return {
-    m,
-    async match(k) { return m.has(k) ? new Response(m.get(k)) : undefined; },
-    async put(k, r) { m.set(k, await r.text()); },
+    m, ops: 0,
+    async match(k) { this.ops++; return m.has(k) ? new Response(m.get(k)) : undefined; },
+    async put(k, r) { this.ops++; m.set(k, await r.text()); },
   };
 }
 
@@ -266,7 +312,9 @@ test('get: a body that stalls is no answer, a body that breaks names its error, 
   const d = deps({ answers: { 'dolarapi.com': { body: '[null]' } } });
   const n = await get('usd', env, NOW, d);
   await Promise.all(d.waits);
-  assert.deepEqual([n.state, n.reason, d.cache.m.size], ['none', 'dolarapi.com: bad JSON', 0]);
+  assert.deepEqual([n.state, n.reason], ['none', 'dolarapi.com: bad JSON']);
+  // no data cached, only the failure (the negative cache)
+  assert.deepEqual(JSON.parse(d.cache.m.get('https://couch.internal/usd')), { at: null, data: null, fail: { at: NOW, reason: 'dolarapi.com: bad JSON' } });
 });
 
 test('handle: a reply that cannot be formatted is still 200 with both states none', async () => {
@@ -447,10 +495,10 @@ test('the reply with SMN and Open-Meteo, line for line; SMN alone gives the now 
   const e = { ...env, CITY: 'Jun\u00edn' };
   const t = boardText({ now: SMN_NOW, env: e, usd: NONE, wx: { state: 'ok', age: 120, data: wxData }, smn: { state: 'ok', age: 60, data: JUNIN_ROW } });
   assert.equal(t, [
-    'couch-board 1', `now=${SMN_NOW}`, 'offset=-10800', 'city=Jun\u00edn',
+    'couch-board 1', `now=${SMN_NOW}`, 'offset=-10800', 'city=Jun\u00edn', 'geo=-34.6037|-58.3816',
     'usd_age=0', 'usd_state=none|x',
-    'wx_now=10°|10°|84%|Cloudy|3 km/h|night|SMN 23:00',
-    'day=Today|Overcast|16°|9°|2%', 'day=Mon|Drizzle|16°|10°|22%',
+    'wx_now=10°|10°|84%|Cloudy|3 km/h|night|SMN 23:00', 'wx_fx=3|-|-|-|9|-',   // SMN's code (Nublado), Open-Meteo's wind
+    'day=Today|Overcast|16°|9°|2%', 'day=Mon|Drizzle|16°|10°|22%', 'days_fx=3|51',
     'wx_moon=New moon', 'wx_age=120', 'wx_state=ok', 'end', '',
   ].join('\n'));
   const alone = boardText({ now: SMN_NOW, env: e, usd: NONE, wx: { state: 'none', reason: 'open-meteo: HTTP 503', age: 0, data: null },
@@ -484,7 +532,7 @@ test('get smn: no row, a bad zip, no answer: none with the host', async () => {
   const d = deps({ answers: { 'ssl.smn.gob.ar': { body: '<html>busy</html>' } } });
   const z = await get('smn', smnEnv, SMN_NOW, d);
   await Promise.all(d.waits);
-  assert.deepEqual([z.state, z.reason, d.cache.m.size], ['none', 'ssl.smn.gob.ar: bad zip', 0]);
+  assert.deepEqual([z.state, z.reason, JSON.parse(d.cache.m.get('https://couch.internal/smn?station=junin')).data], ['none', 'ssl.smn.gob.ar: bad zip', null]);
   const timeout = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
   const t = await get('smn', smnEnv, SMN_NOW, deps({ answers: { 'ssl.smn.gob.ar': timeout } }));
   assert.deepEqual([t.state, t.reason], ['none', 'ssl.smn.gob.ar: no answer in 4 s']);
@@ -500,7 +548,8 @@ test('handle: SMN for the now line, Open-Meteo for the days; SMN down or no SMN_
   assert.ok(lines.includes('wx_now=10°|10°|84%|Cloudy|3 km/h|night|SMN 23:00'));
   assert.deepEqual(lines.filter((l) => l.startsWith('day=')), ['day=Today|Overcast|16°|9°|2%', 'day=Mon|Drizzle|16°|10°|22%']);
   assert.ok(lines.includes('wx_state=ok') && lines.includes('usd_state=ok'));
-  assert.equal(d.calls.length, 5);                              // usd, wx, smn, riesgo pais, inflation: no PF_BANK, no NEWS_FEEDS
+  assert.equal(d.calls.length, 13);                             // usd, wx, smn, riesgo pais, inflation, 6 closes, the Blue
+  // series, the riesgo pais list: no PF_BANK, no NEWS_FEEDS
   const down = deps({ answers: { ...ok, 'ssl.smn.gob.ar': { status: 503, body: 'down' } }, now: SMN_NOW });
   const body = await (await handle(new Request('http://couch.test/board'), smnEnv, down)).text();
   assert.equal(wxNow(body), OM_NOW);
@@ -754,7 +803,7 @@ test('the 4 KB guard drops the news first, then the money and the sky, then the 
   const ul = u.trimEnd().split('\n');
   assert.ok(new TextEncoder().encode(u).length <= MAX_BYTES);
   assert.ok(ul.filter((l) => l.startsWith('usd=')).length < 8);
-  assert.equal(ul.filter((l) => /^(news|money|wx_rain|wx_sun|wx_moon)=/.test(l)).length, 0);
+  assert.equal(ul.filter((l) => /^(news|money|wx_rain|wx_sun|wx_moon|wx_fx|days_fx|wx_hours)=/.test(l)).length, 0);
   assert.ok(ul.includes('usd_state=ok') && ul.includes('news_state=ok') && ul.at(-1) === 'end');
 });
 
@@ -766,7 +815,8 @@ test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leav
   const d = deps({ answers: all, now: JUN_NOW });
   const body = await (await handle(new Request('http://couch.test/board'), e, d)).text();
   const lines = body.trimEnd().split('\n');
-  assert.equal(d.calls.length, 7);                              // usd, wx, riesgo pais, inflation, plazo fijo, two feeds: no SMN_STATION
+  assert.equal(d.calls.length, 15);                             // usd, wx, riesgo pais, inflation, plazo fijo, two feeds,
+  // 6 closes, the Blue series, the riesgo pais list: no SMN_STATION
   assert.ok(d.calls.some((u) => u.includes('hourly=precipitation_probability%2Cprecipitation') && u.includes('sunrise%2Csunset')));
   assert.deepEqual(lines.filter((l) => l.startsWith('money=')),
     ['money=Riesgo país|589|12 Oct|ok', 'money=Inflación mensual|1,7%|Aug 2026|ok', 'money=Plazo fijo BNA (TNA)|19,25%|14:47|ok']);
@@ -779,7 +829,7 @@ test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leav
   assert.ok(half.includes('news_state=stale|infobae.com: HTTP 500'));
   const off = deps({ answers: all, now: JUN_NOW });
   const none = await (await handle(new Request('http://couch.test/board'), { ...junEnv, PF_BANK: ' ' }, off)).text();
-  assert.ok(!/\nnews/.test(none) && !none.includes('Plazo fijo') && off.calls.length === 4);
+  assert.ok(!/\nnews/.test(none) && !none.includes('Plazo fijo') && off.calls.length === 12);   // 4 and the 8 of the changes
 });
 
 // ---- 2026-10-13: the mix of NEWS_FEEDS (Infobae through Google News, Ambito, Clarin, BBC) ------------
@@ -802,11 +852,16 @@ test('news: the publisher that Google News appends goes; the weights of NEWS_FEE
     { label: 'Ámbito', url: 'https://b.example/', weight: 3 },
     { label: 'E*x', url: 'https://e.example/', weight: 1 },                 // no number after "*": part of the label
   ]);
-  // wrangler.jsonc: 3 economy, 3 politics, 2 world, 8 lines in all
+  // the mix of the fixtures (MIX_FEEDS): 3 economy, 3 politics, 2 world, 8 lines in all
+  const mixed = parseFeeds(MIX_FEEDS);
+  assert.deepEqual(mixed.map((f) => `${f.label}*${f.weight}`), ['Infobae*2', 'Ámbito*1', 'Infobae*2', 'Clarín*1', 'Clarín*1', 'BBC*1']);
+  assert.equal(mixed[0].url, 'https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419');
+  // wrangler.jsonc since 3d98a41 (Google News gave no answer to the Worker): Ambito x3, Clarin
+  // politics x3, Clarin world, BBC world, 8 lines in all
   const live = parseFeeds(wranglerVars.NEWS_FEEDS);
-  assert.deepEqual(live.map((f) => `${f.label}*${f.weight}`), ['Infobae*2', 'Ámbito*1', 'Infobae*2', 'Clarín*1', 'Clarín*1', 'BBC*1']);
+  assert.deepEqual(live.map((f) => `${f.label}*${f.weight}`), ['Ámbito*3', 'Clarín*3', 'Clarín*1', 'BBC*1']);
   assert.equal(live.reduce((a, f) => a + f.weight, 0), Number(wranglerVars.NEWS_MAX));
-  assert.equal(live[0].url, 'https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419');
+  assert.equal(live[0].url, 'https://www.ambito.com/rss/pages/economia.xml');
   // the weights: first each feed's share, then one per feed in turn; with no weight, 1
   const f = (p, n, t0) => Array.from({ length: n }, (_, i) => ({ title: `${p}${i}`, at: t0 - i }));
   assert.deepEqual(newsLines([{ label: 'A', weight: 2, r: okR(f('A', 5, 100)) }, { label: 'B', r: okR(f('B', 5, 50)) },
@@ -866,8 +921,8 @@ test('news: a feed that is not newest first is read further and sorted; one that
   assert.equal(await readHead(chunked(feed, 4096).body, { items: 2, bytes: 80, more: () => null }), feed.slice(0, itemEnd(feed, 2)));
 });
 
-test('handle: the NEWS_FEEDS of wrangler.jsonc: 3 economy, 3 politics, 2 world; a dead feed leaves its share to the others', async () => {
-  const e = { ...junEnv, NEWS_FEEDS: wranglerVars.NEWS_FEEDS, NEWS_MAX: wranglerVars.NEWS_MAX };
+test('handle: the mix of the fixtures (MIX_FEEDS): 3 economy, 3 politics, 2 world; a dead feed leaves its share to the others', async () => {
+  const e = { ...junEnv, NEWS_FEEDS: MIX_FEEDS, NEWS_MAX: wranglerVars.NEWS_MAX };
   const gn = (s) => `news.google.com/rss/search?q=site:infobae.com/${s}+when:1d&hl=es-419&gl=AR&ceid=AR:es-419`;
   const all = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData },
     [gn('economia')]: { body: mix.gnEco }, [gn('politica')]: { body: mix.gnPol }, 'www.ambito.com': { body: mix.ambito },
@@ -879,7 +934,8 @@ test('handle: the NEWS_FEEDS of wrangler.jsonc: 3 economy, 3 politics, 2 world; 
     return { calls: d.calls, lines: body.trimEnd().split('\n').filter((l) => l.startsWith('news')) };
   };
   const fine = await news(all);
-  assert.equal(fine.calls.length, 11);                            // usd, wx, riesgo pais, inflation, plazo fijo, six feeds: no SMN_STATION
+  assert.equal(fine.calls.length, 19);                            // usd, wx, riesgo pais, inflation, plazo fijo, six feeds,
+  // 6 closes, the Blue series, the riesgo pais list: no SMN_STATION
   assert.deepEqual(fine.lines, [
     "news=BBC|250|Why the lonely in China are hiring 'temporary children'",
     "news=Infobae|964|Tomaron la Facultad de Filosofía y Letras de la UBA y permanecerá así hasta la marcha del 15 de octubre",
@@ -906,4 +962,304 @@ test('handle: the NEWS_FEEDS of wrangler.jsonc: 3 economy, 3 politics, 2 world; 
     'news_age=0',
     'news_state=stale|news.google.com: HTTP 503',
   ]);
+});
+
+// ---- 2026-10-13: the keys of 0.3.0 (design section 5) ---------------------------------------------
+
+const ADC_PATH = 'api.argentinadatos.com/v1/cotizaciones/dolares';
+// The fake fetch's routes for the per-day entries dated stamp, and for the two lists.
+const dayRoutes = (stamp) => Object.fromEntries(dayData[stamp].map((x) => [`${ADC_PATH}/${x.casa}/${stamp.replaceAll('-', '/')}`, { body: x }]));
+const seriesRoutes = { [`${ADC_PATH}/blue`]: { body: blueText }, [`${AD}/indices/riesgo-pais`]: { body: rpText } };
+const SPARK_JUN = '1555 1560 1560 1555 1550 1550 1550 1550 1555 1560 1560 1560 1560 1560 1565 1560 1560 1555 1560 1560 1560 1545 1550 1555 1540 1540 1540 1540 1540 1540';
+const lineOf = (t, k) => t.split('\n').find((l) => l.startsWith(`${k}=`));
+
+test('0.3.0: geo, the dates, the change words', () => {
+  assert.equal(geoLine(junEnv), 'geo=-34.58|-60.94');
+  assert.equal(geoLine({ LAT: ' -34.58 ', LON: '-60.94' }), 'geo=-34.58|-60.94');   // 4 decimals
+  assert.equal(geoLine({ LAT: '90', LON: '-180' }), 'geo=90|-180');
+  assert.equal(geoLine({ LAT: '-0', LON: '0.00001' }), 'geo=0|0');
+  for (const [la, lo] of [['91', '0'], ['0', '180.5'], ['', '0'], ['x', '1'], ['1e3', '1'], [undefined, '1'], ['0x1', '2'], ['1', ' ']]) {
+    assert.equal(geoLine({ LAT: la, LON: lo }), null, `${la} ${lo}`);
+  }
+  assert.deepEqual([addDays('2026-10-13', -1), addDays('2026-03-01', -1), addDays('2026-12-31', 1)], ['2026-10-12', '2026-02-28', '2027-01-01']);
+  assert.deepEqual([localDate(JUN_NOW, env.TZ), localDate(Date.UTC(2026, 9, 13, 2) / 1000, env.TZ)], ['2026-10-13', '2026-10-12']);  // 23:00 of the 12th
+  assert.deepEqual([shortDate('2026-10-09'), shortDate('2026-13-01'), shortDate(undefined)], ['9 Oct', '-', '-']);
+  const c = (a, b, dec) => change(a, b, dec, 'es-AR');
+  assert.deepEqual(c(1542.9, 1538.3, 2), { dir: 'up', pct: '+0,3%', abs: '+4,60' });
+  assert.deepEqual(c(1606.6, 1609.8, 2), { dir: 'down', pct: '-0,2%', abs: '-3,20' });
+  assert.deepEqual(c(1540.5, 1540, 2), { dir: 'up', pct: '+0,03%', abs: '+0,50' });        // 0,0% would hide a move: 2 decimals
+  assert.deepEqual(c(2000, 900, 2), { dir: 'up', pct: '+122,2%', abs: '+1.100,00' });
+  assert.deepEqual(c(589, 588, 0), { dir: 'up', pct: '+0,2%', abs: '+1' });
+  assert.deepEqual(c(589, 589, 0), { dir: 'flat', pct: '0,0%', abs: '0' });
+  assert.deepEqual(c(1535, 1535.004, 2), { dir: 'flat', pct: '0,0%', abs: '0,00' });         // equal in cents: flat
+  for (const [a, b] of [[null, 1], [1, 0], [1, -1], [NaN, 1], [1, undefined], ['1', 1]]) assert.equal(c(a, b, 2), null, `${a} ${b}`);
+});
+
+test('0.3.0: wx_fx (SMN\'s code when the now line is SMN\'s, the rate per hour), wx_hours by the times, days_fx', () => {
+  assert.equal(fxLine(junData.current, null), 'wx_fx=3|100|0|111|10|27');
+  assert.equal(fxLine(junData.current, { ...JUNIN_ROW, sky: 'Cubierto con llovizna' }), 'wx_fx=51|100|0|111|10|27');
+  assert.equal(fxLine(junData.current, { ...JUNIN_ROW, sky: 'Bruma' }), 'wx_fx=3|100|0|111|10|27');   // no code for haze: Open-Meteo's
+  assert.equal(fxLine(null, JUNIN_ROW), 'wx_fx=3|-|-|-|-|-');                                      // Nublado, no forecast
+  assert.equal(fxLine(null, null), null);
+  // 0.3 mm in 15 minutes is 1.2 mm an hour; 359.6 deg rounds to north (0); a missing gust is "-"
+  const c = { weather_code: 61, interval: 900, precipitation: 0.3, cloud_cover: 88.4, wind_direction_10m: 359.6, wind_speed_10m: 20.4, wind_gusts_10m: null };
+  assert.equal(fxLine(c, null), 'wx_fx=61|88|1.2|0|20|-');
+  assert.equal(fxLine({ precipitation: 2.5, weather_code: 100, cloud_cover: 101, wind_direction_10m: -1, wind_speed_10m: 501 }, null), 'wx_fx=-|-|2.5|-|-|-');
+  assert.deepEqual(['Despejado', 'Chaparrón', 'Nublado con tormenta', 'Cubierto con neblina', 'Algo nublado', 'Humo', 'Polvo'].map(smnCode),
+    [0, 80, 95, 45, 2, null, null]);
+  const h = junData.hourly, line = (now) => hoursLine(h, now, env.TZ);
+  assert.equal(line(JUN_NOW), 'wx_hours=15|19 19 19 18 16 15 14 14 13 13 13 12|55 63 72 75 67 52 37 24 11 2 0 0|51 3 3 3 3 51 51 2 1 1 0 1');
+  assert.equal(line(Date.UTC(2026, 9, 13, 18) / 1000).split('|')[0], 'wx_hours=16');                 // 15:00 sharp: the next hour
+  // Fri 15:30: the forecast ends at 23:00, the last 4 hours are "-"
+  assert.equal(line(Date.UTC(2026, 9, 16, 18, 30) / 1000), 'wx_hours=16|17 17 16 14 12 11 12 10 - - - -|7 6 4 3 1 0 0 0 - - - -|3 2 2 1 0 3 0 1 - - - -');
+  assert.equal(line(Date.UTC(2026, 9, 17, 3) / 1000), null);                                        // past the forecast
+  assert.equal(hoursLine(undefined, JUN_NOW, env.TZ), null);
+  assert.equal(hoursLine(wxData.hourly, JUN_NOW, env.TZ), null);
+  const { temperature_2m: _t, ...noTemp } = h;                                                        // a forecast cached before 0.3.0
+  assert.equal(hoursLine(noTemp, JUN_NOW, env.TZ), null);
+  const { precipitation_probability: _p, weather_code: _w, ...tempOnly } = h;
+  assert.equal(hoursLine(tempOnly, JUN_NOW, env.TZ), 'wx_hours=15|19 19 19 18 16 15 14 14 13 13 13 12|- - - - - - - - - - - -|- - - - - - - - - - - -');
+  // days_fx follows the day lines, "-" for a code that is not one
+  const odd = structuredClone(junData);
+  odd.daily.weather_code[1] = 3.5;
+  const t = boardText({ now: JUN_NOW, env: junEnv, usd: NONE, wx: okR(odd) });
+  assert.equal(lineOf(t, 'days_fx'), 'days_fx=51|-|51');
+  assert.equal(lineOf(boardText({ now: JUN_NOW, env: junEnv, usd: NONE, wx: NONE }), 'wx_fx'), undefined);   // no now line: no wx_fx
+});
+
+test('0.3.0: usd_chg per rate with a close, the Blue series by the closes\' dates, riesgo pais against the entry before', () => {
+  const rates = usdData.filter((d) => d.casa !== 'mayorista').map((d) => ({ casa: d.casa, label: d.casa, d }));
+  const closes = okR({ day: '2026-10-12', rates: { cripto: 1610.17, oficial: 1535 }, missing: ['blue'] });
+  assert.deepEqual(usdChgLines({ rates, closes, locale: 'es-AR' }),
+    ['usd_chg=oficial|flat|0,0%|0,00|12 Oct', 'usd_chg=cripto|down|-0,2%|-3,29|12 Oct']);       // in CASAS's order, only with a close
+  assert.deepEqual(usdChgLines({ rates, closes: NONE, locale: 'es-AR' }), []);
+  assert.deepEqual(usdChgLines({ rates, closes: undefined, locale: 'es-AR' }), []);
+  const series = okR(tailEntries(blueText, 'venta').slice(-31));
+  const spark = (o) => sparkLine({ label: 'Blue', live: 1540, series, closes: junChg().closes, now: JUN_NOW, tz: env.TZ, ...o });
+  assert.equal(spark({}), `spark=Blue|2026-09-14|${SPARK_JUN}`);
+  // the day 2026-10-04 is the entry dated 2026-10-05: without it, "-"
+  const gap = SPARK_JUN.split(' ');
+  gap[20] = '-';
+  assert.equal(spark({ series: okR(series.data.filter((x) => x.fecha !== '2026-10-05')) }), `spark=Blue|2026-09-14|${gap.join(' ')}`);
+  // yesterday is the entry dated today; a series read before it was written takes the closes' Blue
+  const y = SPARK_JUN.split(' ');
+  y[28] = '1541';
+  assert.equal(spark({ series: okR(series.data.slice(0, -1)), closes: okR({ day: '2026-10-12', rates: { blue: 1541 } }) }), `spark=Blue|2026-09-14|${y.join(' ')}`);
+  const nl = SPARK_JUN.split(' ');
+  nl[29] = '-';
+  assert.equal(spark({ live: undefined }), `spark=Blue|2026-09-14|${nl.join(' ')}`);            // no rate now: "-" today
+  assert.equal(spark({ series: NONE }), null);
+  assert.equal(spark({ series: okR([{ fecha: '2020-01-01', venta: 1 }]), live: undefined, closes: undefined }), null);   // no value in 30 days
+  const list = okR(tailEntries(rpText, 'valor').slice(-10));
+  assert.equal(rpChgLine({ rp: okR(rpData), list, locale: 'es-AR' }), 'money_chg=Riesgo país|flat|0,0%|0|9 Oct');
+  assert.equal(rpChgLine({ rp: okR({ fecha: '2026-10-09', valor: 589 }), list, locale: 'es-AR' }), 'money_chg=Riesgo país|up|+0,2%|+1|8 Oct');
+  assert.equal(rpChgLine({ rp: okR({ fecha: '2026-09-01', valor: 589 }), list, locale: 'es-AR' }), null);   // no entry before it
+  assert.equal(rpChgLine({ rp: NONE, list, locale: 'es-AR' }), null);
+  assert.equal(rpChgLine({ rp: okR(rpData), list: NONE, locale: 'es-AR' }), null);
+});
+
+const MON = Date.UTC(2026, 9, 12, 14) / 1000;   // 11:00 in Junin on Monday 12 Oct (a holiday)
+
+test('handle on a Monday: the closes of Sunday (Friday\'s rates, in the entries dated Monday), riesgo pais against Friday', async () => {
+  const answers = { ...moneyOk, [`${AD}/indices/riesgo-pais/ultimo`]: { body: { valor: 589, fecha: '2026-10-09' } },
+    'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData }, ...dayRoutes('2026-10-12'), ...seriesRoutes };
+  const d = deps({ answers, now: MON });
+  const lines = (await (await handle(new Request('http://couch.test/board'), junEnv, d)).text()).trimEnd().split('\n');
+  assert.deepEqual(d.calls.filter((u) => /\/dolares\/[a-z]+\/2026\//.test(u)), CASAS6.map((c) => `https://${ADC_PATH}/${c}/2026/10/12`));
+  assert.deepEqual(lines.filter((l) => l.startsWith('usd_chg=')), [
+    'usd_chg=Oficial|flat|0,0%|0,00|11 Oct', 'usd_chg=Blue|flat|0,0%|0,00|11 Oct', 'usd_chg=MEP|flat|0,0%|0,00|11 Oct',
+    'usd_chg=CCL|flat|0,0%|0,00|11 Oct', 'usd_chg=Cripto|up|+0,2%|+2,49|11 Oct', 'usd_chg=Tarjeta|flat|0,0%|0,00|11 Oct',
+  ]);
+  assert.ok(lines.includes('money=Riesgo país|589|9 Oct|ok') && lines.includes('money_chg=Riesgo país|up|+0,2%|+1|8 Oct'));
+  assert.equal(lineOf(lines.join('\n'), 'spark'),
+    'spark=Blue|2026-09-13|1545 1555 1560 1560 1555 1550 1550 1550 1550 1555 1560 1560 1560 1560 1560 1565 1560 1560 1555 1560 1560 1560 1545 1550 1555 1540 1540 1540 1540 1540');
+});
+
+test('get closes: the entries dated today in one cache entry; a rate with no entry is fetched again after 15 min', async () => {
+  const d = deps({ answers: dayRoutes('2026-10-13'), now: JUN_NOW });
+  const a = await get('closes', junEnv, JUN_NOW, d);
+  assert.deepEqual([a.state, a.data], ['ok', closesOf('2026-10-13')]);
+  assert.deepEqual(d.calls, CASAS6.map((c) => `https://${ADC_PATH}/${c}/2026/10/13`));
+  await Promise.all(d.waits);
+  assert.deepEqual([...d.cache.m.keys()], ['https://couch.internal/closes?d=2026-10-13&c=oficial%2Cblue%2Cbolsa%2Ccontadoconliqui%2Ccripto%2Ctarjeta']);
+  assert.deepEqual([(await get('closes', junEnv, JUN_NOW + 8 * 3600, d)).state, d.calls.length], ['ok', 6]);   // 22:47: no fetch
+  // the next local day has its own key
+  await get('closes', junEnv, JUN_NOW + 86400, d);
+  assert.equal(d.calls.length, 12);
+  // Tarjeta's entry is not written yet (404): the others count, and all are fetched again after CLOSES_MISS_TTL
+  const part = { ...dayRoutes('2026-10-13'), [`${ADC_PATH}/tarjeta/2026/10/13`]: { status: 404, body: '{"error":"Not found"}' } };
+  const p = deps({ answers: part, now: JUN_NOW });
+  const b = await get('closes', junEnv, JUN_NOW, p);
+  assert.deepEqual([b.state, b.data.missing, Object.keys(b.data.rates).length], ['ok', ['tarjeta'], 5]);
+  await Promise.all(p.waits);
+  assert.equal((await get('closes', junEnv, JUN_NOW + CLOSES_MISS_TTL - 1, p)).state, 'ok');
+  assert.equal(p.calls.length, 6);
+  await get('closes', junEnv, JUN_NOW + CLOSES_MISS_TTL, p);
+  assert.equal(p.calls.length, 12);
+  // no entry for any rate: none with the first rate's reason; an entry of another date is no close
+  const n = await get('closes', junEnv, JUN_NOW, deps({ answers: {}, now: JUN_NOW }));
+  assert.deepEqual([n.state, n.reason], ['none', 'argentinadatos.com: no route']);
+  const wrong = Object.fromEntries(Object.entries(dayRoutes('2026-10-12')).map(([k, v]) => [k.replace('/12', '/13'), v]));
+  const w = await get('closes', junEnv, JUN_NOW, deps({ answers: wrong, now: JUN_NOW }));
+  assert.deepEqual([w.state, w.reason], ['none', 'argentinadatos.com: bad JSON']);
+  const all404 = Object.fromEntries(CASAS6.map((c) => [`${ADC_PATH}/${c}/2026/10/13`, { status: 404, body: '{"error":"Not found"}' }]));
+  const f = await get('closes', junEnv, JUN_NOW, deps({ answers: all404, now: JUN_NOW }));
+  assert.deepEqual([f.state, f.reason], ['none', 'argentinadatos.com: HTTP 404']);
+});
+
+test('series: the tail of a long list, cut inside an entry; a list cut at its end; no entries', async () => {
+  // 300 old entries before the fixture's 45: the last TAIL_BYTES start inside an old entry
+  const body = '[\n' + '  {"casa": "blue", "compra": 4, "venta": 4, "fecha": "2011-01-03"},\n'.repeat(300) + blueText.slice(1);
+  const s = chunked(body, 1000);
+  const tail = await readTail(s.body);
+  assert.deepEqual([tail.length, body.endsWith(tail), tail.indexOf('{') > 0, s.pulls, s.cancelled], [TAIL_BYTES, true, true, s.chunks, false]);
+  const e = tailEntries(tail, 'venta');
+  assert.deepEqual([e.length, e[0], e.at(-1)], [46, { fecha: '2011-01-03', venta: 4 }, { fecha: '2026-10-13', venta: 1540 }]);
+  assert.deepEqual(e.slice(1), tailEntries(blueText, 'venta'));
+  assert.equal(await readTail(chunked(blueText, 7).body), blueText);                       // shorter than the tail: whole
+  assert.equal(await readTail(null), '');
+  // a list cut inside its last entry: that entry is not whole and is skipped
+  assert.equal(tailEntries(blueText.slice(0, -40), 'venta').at(-1).fecha, '2026-10-12');
+  assert.deepEqual(tailEntries('<html>busy</html>', 'venta'), []);
+  assert.deepEqual(tailEntries(rpText, 'valor').slice(-2), [{ fecha: '2026-10-09', valor: 589 }, { fecha: '2026-10-12', valor: 589 }]);
+  assert.deepEqual(tailEntries('{"fecha":"2026-01-02","venta":2}{"fecha":"2026-01-01","venta":1}{"fecha":"2026-01-02","venta":3}', 'venta'),
+    [{ fecha: '2026-01-01', venta: 1 }, { fecha: '2026-01-02', venta: 3 }]);              // oldest first, a repeated date keeps its last
+});
+
+test('get blue30 and rplist: the newest entries cached; a short tail or a stale list is a bad read', async () => {
+  const d = deps({ answers: seriesRoutes, now: JUN_NOW });
+  const b = await get('blue30', junEnv, JUN_NOW, d), r = await get('rplist', junEnv, JUN_NOW, d);
+  assert.deepEqual([b.state, b.data.length, b.data[0].fecha, b.data.at(-1)], ['ok', 31, '2026-09-13', { fecha: '2026-10-13', venta: 1540 }]);
+  assert.deepEqual([r.state, r.data.length, r.data.at(-1)], ['ok', 10, { fecha: '2026-10-12', valor: 589 }]);
+  await Promise.all(d.waits);
+  assert.ok(d.cache.m.has('https://couch.internal/blue30') && d.cache.m.has('https://couch.internal/rplist'));
+  // 5 days later the Blue list's newest entry is 5 days old (more than 3): stale, the old entry kept
+  const later = JUN_NOW + 5 * 86400;
+  const s = await get('blue30', junEnv, later, deps({ cache: d.cache, answers: seriesRoutes, now: later }));
+  assert.deepEqual([s.state, s.reason, s.data.length], ['stale', 'argentinadatos.com: a tail of 31 entries to 2026-10-13', 31]);
+  // riesgo pais has no weekend entries: 7 days are allowed
+  assert.equal((await get('rplist', junEnv, later, deps({ answers: seriesRoutes, now: later }))).state, 'ok');
+  const short = '[' + blueText.slice(blueText.lastIndexOf('\n  {', blueText.length - 900));
+  const n = await get('blue30', junEnv, JUN_NOW, deps({ answers: { [`${ADC_PATH}/blue`]: { body: short } }, now: JUN_NOW }));
+  assert.equal(n.state, 'none');
+  assert.match(n.reason, /^argentinadatos\.com: a tail of \d+ entries to 2026-10-13$/);
+  const html = await get('rplist', junEnv, JUN_NOW, deps({ answers: { [`${AD}/indices/riesgo-pais`]: { body: '<html>busy</html>' } }, now: JUN_NOW }));
+  assert.deepEqual([html.state, html.reason], ['none', 'argentinadatos.com: no entries in the tail']);
+});
+
+test('get: the negative cache: a failed upstream is not waited for, and is tried again after the reply each RETRY_S', async () => {
+  const cache = fakeCache();
+  const timeout = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+  const down = { 'dolarapi.com': timeout };
+  // the first failure costs its fetch, and is remembered
+  const d1 = deps({ cache, answers: down });
+  const a = await get('usd', env, NOW, d1);
+  await Promise.all(d1.waits);
+  assert.deepEqual([a.state, a.reason, d1.calls.length], ['none', 'dolarapi.com: no answer in 4 s', 1]);
+  assert.deepEqual(JSON.parse(cache.m.get('https://couch.internal/usd')), { at: null, data: null, fail: { at: NOW, reason: 'dolarapi.com: no answer in 4 s' } });
+  // within RETRY_S: no fetch at all, the same answer
+  const d2 = deps({ cache, answers: down });
+  const b = await get('usd', env, NOW + RETRY_S - 1, d2);
+  assert.deepEqual([b.state, b.reason, d2.calls.length, d2.waits.length], ['none', 'dolarapi.com: no answer in 4 s', 0, 0]);
+  // after RETRY_S: the answer at once, one try after it; still down, so the mark moves on
+  const d3 = deps({ cache, answers: down });
+  const c = await get('usd', env, NOW + RETRY_S, d3);
+  assert.deepEqual([c.state, d3.waits.length], ['none', 1]);
+  await Promise.all(d3.waits);
+  assert.equal(d3.calls.length, 1);
+  assert.equal(JSON.parse(cache.m.get('https://couch.internal/usd')).fail.at, NOW + RETRY_S);
+  // it answers again: the try after the reply caches it, and the next request is ok with no fetch
+  const d4 = deps({ cache, answers: ok });
+  const e = await get('usd', env, NOW + 2 * RETRY_S, d4);
+  assert.equal(e.state, 'none');
+  await Promise.all(d4.waits);
+  assert.deepEqual(JSON.parse(cache.m.get('https://couch.internal/usd')), { at: NOW + 2 * RETRY_S, data: usdData });
+  const d5 = deps({ cache, answers: down });
+  const f = await get('usd', env, NOW + 2 * RETRY_S + 10, d5);
+  assert.deepEqual([f.state, f.age, d5.calls.length], ['ok', 10, 0]);
+  // with an old entry: stale with the failure's reason and the real age, no fetch within RETRY_S
+  const later = NOW + 2 * RETRY_S + 300;                              // USD_TTL 300 s: due again
+  const d6 = deps({ cache, answers: { 'dolarapi.com': { status: 503, body: 'x' } } });
+  const g = await get('usd', env, later, d6);
+  await Promise.all(d6.waits);
+  assert.deepEqual([g.state, g.reason, g.age, d6.calls.length], ['stale', 'dolarapi.com: HTTP 503', 300, 1]);
+  const d7 = deps({ cache, answers: down });
+  const h = await get('usd', env, later + 60, d7);
+  assert.deepEqual([h.state, h.reason, h.age, h.data, d7.calls.length], ['stale', 'dolarapi.com: HTTP 503', 360, usdData, 0]);
+});
+
+test('handle: a dead feed costs its timeout once; the next Boards answer without it', async () => {
+  const timeout = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+  const e = { ...junEnv, NEWS_FEEDS: 'Clarín=https://www.clarin.com/rss/lo-ultimo/,Dead=https://dead.example/rss' };
+  const answers = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData }, ...dayRoutes('2026-10-13'),
+    ...seriesRoutes, 'www.clarin.com': { body: clarinXml }, 'dead.example': timeout };
+  const cache = fakeCache();
+  const board = async (now) => {
+    const d = deps({ cache, answers, now });
+    const body = await (await handle(new Request('http://couch.test/board'), e, d)).text();
+    await Promise.all(d.waits);
+    return { calls: d.calls.filter((u) => u.includes('dead.example')).length, state: lineOf(body, 'news_state') };
+  };
+  assert.deepEqual(await board(JUN_NOW), { calls: 1, state: 'news_state=stale|dead.example: no answer in 4 s' });
+  assert.deepEqual(await board(JUN_NOW + 60), { calls: 0, state: 'news_state=stale|dead.example: no answer in 4 s' });
+  assert.deepEqual(await board(JUN_NOW + RETRY_S), { calls: 1, state: 'news_state=stale|dead.example: no answer in 4 s' });  // the try after the reply
+});
+
+// The groups of the 4 KB guard, in its order (design 5.5).
+const GUARD = [['news='], ['spark='], ['wx_hours='], ['usd_chg=', 'money_chg='], ['money='],
+  ['wx_rain=', 'wx_sun=', 'wx_moon=', 'wx_fx=', 'days_fx='], ['usd=', 'day=']];
+const groups = (t) => GUARD.map((keys) => t.split('\n').filter((l) => keys.some((k) => l.startsWith(k))).length);
+// The guard dropped whole groups in order: the groups before the first short one are empty, the
+// ones after it are whole. full: the counts with nothing dropped.
+function droppedInOrder(got, full) {
+  const i = got.findIndex((n, j) => n < full[j]);
+  return i < 0 || (got.slice(0, i).every((n) => n === 0) && got.slice(i + 1).every((n, j) => n === full[i + 1 + j]));
+}
+
+test('the 4 KB guard with the keys of 0.3.0: 8 titles of 110 three-byte characters, then long labels', () => {
+  const news = (title) => [{ label: 'Clarín', r: okR(Array.from({ length: 8 }, (_, i) => ({ title: `${title}${i}`, at: JUN_NOW - i }))) }];
+  const reply = (e, title) => boardText({ now: JUN_NOW, env: e, usd: okR(usdData, 42), wx: okR(junData, 310), money: junMoney(), news: news(title), chg: junChg() });
+  const full = groups(reply(junEnv, 'x'));
+  assert.deepEqual(full, [8, 1, 1, 7, 3, 5, 9]);
+  // the worst case of the design (8 titles of 110 three-byte characters) fits: 4,050 bytes, nothing drops
+  const w = reply(junEnv, '€'.repeat(109));
+  assert.deepEqual([new TextEncoder().encode(w).length, groups(w)], [4050, full]);
+  // titles of 301 characters, 300 of them two bytes: the oldest 4 headlines go, every other line stays
+  const t = reply(junEnv, 'ñ'.repeat(300));
+  const got = groups(t);
+  assert.ok(new TextEncoder().encode(t).length <= MAX_BYTES && t.endsWith('\nnews_state=ok\nend\n'));
+  assert.deepEqual(got, [4, 1, 1, 7, 3, 5, 9]);
+  assert.deepEqual(t.split('\n').filter((l) => l.startsWith('news=')).map((l) => l.split('|')[1]), ['0', '1', '2', '3']);
+  assert.ok(droppedInOrder(got, full) && t.includes('\ngeo=-34.58|-60.94\n'));
+  // rate labels of 300 characters: the news, the series and the hours go, then the changes from the end
+  const e = { ...junEnv, CASAS: CASAS6.map((c) => `${c}:${c}${'L'.repeat(300)}`).join(',') };
+  const fullL = groups(reply(e, 'x'));
+  const u = reply(e, '€'.repeat(109));   // 7,978 bytes before the guard
+  const gotL = groups(u);
+  assert.ok(new TextEncoder().encode(u).length <= MAX_BYTES && u.endsWith('\nend\n'));
+  assert.deepEqual(gotL.slice(0, 3), [0, 0, 0]);
+  assert.deepEqual(gotL, [0, 0, 0, 4, 3, 5, 9]);                                      // money_chg and 2 usd_chg went
+  assert.ok(droppedInOrder(gotL, fullL));
+  assert.ok(!u.includes('money_chg=') && u.includes('\ngeo=') && u.includes('\nusd_state=ok\n'));
+});
+
+test('handle: the vars of wrangler.jsonc on a cold cache: 18 fetches, 44 of the free plan\'s 50 subrequests; the live mix', async () => {
+  const e = { ...wranglerVars, NEWS_FEEDS: wranglerVars.NEWS_FEEDS };
+  const answers = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData }, 'ssl.smn.gob.ar': { body: zipBytes },
+    ...dayRoutes('2026-10-13'), ...seriesRoutes, 'www.ambito.com': { body: mix.ambito }, 'www.clarin.com/rss/politica/': { body: mix.clarinPol },
+    'www.clarin.com/rss/mundo/': { body: mix.clarinMundo }, 'feeds.bbci.co.uk': { body: mix.bbc } };
+  const d = deps({ answers, now: MIX_NOW });
+  const body = await (await handle(new Request('http://couch.test/board'), e, d)).text();
+  await Promise.all(d.waits);
+  // usd, wx, smn, riesgo pais, inflation, plazo fijo, 4 feeds, 6 closes, the 2 lists; 13 cache reads and 13 writes
+  assert.deepEqual([d.calls.length, d.cache.ops, d.calls.length + d.cache.ops], [18, 26, 44]);
+  const lines = body.trimEnd().split('\n');
+  assert.ok(new TextEncoder().encode(body).length <= MAX_BYTES && body.endsWith('\nnews_state=ok\nend\n'));
+  const by = (label) => lines.filter((l) => l.startsWith(`news=${label}|`)).length;
+  assert.deepEqual([by('Ámbito'), by('Clarín'), by('BBC')], [3, 4, 1]);
+  for (const k of ['geo', 'usd_chg', 'spark', 'money_chg', 'wx_fx', 'days_fx', 'wx_hours']) assert.ok(lineOf(body, k), k);
+  // warm: no fetch, 13 cache reads
+  const w = deps({ cache: d.cache, answers, now: MIX_NOW + 60 });
+  await handle(new Request('http://couch.test/board'), e, w);
+  assert.deepEqual([w.calls.length, w.cache.ops - 26], [0, 13]);
 });
