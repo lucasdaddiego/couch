@@ -33,7 +33,7 @@
     "SMN_TTL": "600",
     "PF_BANK": "Banco de la Nación Argentina",
     "PF_LABEL": "Plazo fijo BNA (TNA)",
-    "NEWS_FEEDS": "Infobae*2=https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419,Ámbito=https://www.ambito.com/rss/pages/economia.xml,Infobae*2=https://news.google.com/rss/search?q=site:infobae.com/politica+when:1d&hl=es-419&gl=AR&ceid=AR:es-419,Clarín=https://www.clarin.com/rss/politica/,Clarín=https://www.clarin.com/rss/mundo/,BBC=https://feeds.bbci.co.uk/news/world/rss.xml",
+    "NEWS_FEEDS": "Ámbito*3=https://www.ambito.com/rss/pages/economia.xml,Clarín*3=https://www.clarin.com/rss/politica/,Clarín=https://www.clarin.com/rss/mundo/,BBC=https://feeds.bbci.co.uk/news/world/rss.xml",
     "NEWS_MAX": "8",
     "RP_TTL": "900",
     "IPC_TTL": "21600",

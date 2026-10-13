@@ -88,7 +88,11 @@ The keys of 2026-10-13 (Lucas's choices; a Couch 0.1.0 skips them, so the versio
   lines (Infobae 2, Clarin 1), 2 world lines (Clarin 1, BBC 1). The label is the publisher's short
   name: the TV's source column has 99 px at the widest age ("23 h 59 min") in the 22 px font, and
   "Infobae" is 77 px, "Ámbito" 72, "Clarín" 59, "BBC" 44 (a section name such as "Economía", 100
-  px, does not fit). The feeds, read with curl on 2026-10-13 22:04 UTC with the Worker's user
+  px, does not fit). **In use since the deploy of 2026-10-13:** `Ámbito*3` (economy), `Clarín*3`
+  (politics), Clarín world and BBC World. Google News did not answer the deployed Worker (no
+  answer in 4 s on every request, so every Board took 4.1 s), and Infobae's own feed answers 403
+  to it: no path from Cloudflare reaches Infobae. The Infobae entries below stay as the record.
+  The feeds, read with curl on 2026-10-13 22:04 UTC with the Worker's user
   agent `couch-board` (each answered 200 with it, no browser user agent needed):
   - Infobae's economy and politics through Google News' RSS search,
     `https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419`
