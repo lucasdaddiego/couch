@@ -4,6 +4,10 @@
 // The place is Junin, Buenos Aires: Open-Meteo at the coordinates of SMN's station there (WMO
 // 87548), SMN_STATION the station's name in SMN's tiepre file (case and accents not counted).
 // CITY keeps the accent (U+00ED): Couch draws it with text_utf8 and folds it to "i" without.
+// Since 2026-10-13: the money extras of argentinadatos.com (PF_BANK names the bank of the
+// fixed-term rate as its table writes it, case and accents not counted; empty: no such line) and
+// the news of NEWS_FEEDS ("Label=URL" pairs between commas, at most 4; empty: no news), at most
+// NEWS_MAX (8) headlines.
 //   wrangler deploy --env-file ~/.config/cloudflare/personal.env
 {
   "name": "couch-board",
@@ -21,6 +25,14 @@
     "LOCALE": "es-AR",
     "USD_TTL": "300",
     "WX_TTL": "900",
-    "SMN_TTL": "600"
+    "SMN_TTL": "600",
+    "PF_BANK": "Banco de la Nación Argentina",
+    "PF_LABEL": "Plazo fijo BNA (TNA)",
+    "NEWS_FEEDS": "Clarín=https://www.clarin.com/rss/lo-ultimo/,La Verdad=https://laverdadonline.com/feed/",
+    "NEWS_MAX": "8",
+    "RP_TTL": "900",
+    "IPC_TTL": "21600",
+    "PF_TTL": "3600",
+    "NEWS_TTL": "600"
   }
 }

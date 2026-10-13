@@ -2,8 +2,10 @@
 // section 4): UTF-8 text that the PS3 parses with no JSON library. Line 1 is "couch-board 1",
 // then key=value lines with "|" between the fields of a value, then "end". Pure functions: the
 // Worker (index.js) gets the upstream data, this file only formats it. The now line comes from
-// SMN's station (smn.js) when its observation is at most 3 h old, else from Open-Meteo; the days
-// always come from Open-Meteo.
+// SMN's station (smn.js) when its observation is at most 3 h old, else from Open-Meteo; the days,
+// the rain of the next 12 h and the sun always come from Open-Meteo, the moon from the date. Since
+// 2026-10-13 also the money extras (argentinadatos.com) and the news (RSS, news.js): new keys, which
+// a Couch 0.1.0 skips, so the version stays 1.
 
 export const VERSION = 1;
 export const MAX_BYTES = 4096;
@@ -101,10 +103,151 @@ function stateLine(u) {
 
 const NONE = { state: 'none', reason: '', age: 0, data: null };
 
+// ---- the sky: the rain of the next 12 h, the sun, the moon --------------------------------------
+
+// An hour is wet when its chance of precipitation is at least 40 % (where most weather apps start
+// to show rain) or its precipitation is at least 0.2 mm (the smallest amount a rain gauge counts).
+export const RAIN_PCT = 40;
+export const RAIN_MM = 0.2;
+export const RAIN_HOURS = 12;
+
+// "2026-10-13T14:47": now's local date and time in tz, the form of Open-Meteo's hourly times.
+function localStamp(t, tz) {
+  const p = parts(t, tz);
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+}
+
+// The rain of the next 12 h from Open-Meteo's hourly arrays: {wet, words}, or null with no hourly
+// data for that window. Open-Meteo stamps each hour at its end (the value at 15:00 is the chance
+// and the sum of 14:00 to 15:00), so an hour counts when its end is after now and its start is
+// before now + 12 h, by the times, not by the array's index (a cached forecast starts on an earlier
+// day). The first wet hour gives the words: "Rain now" when it started before now, else "Rain from
+// 14:00"; the percentage is the highest chance in the window ("0.4 mm" when no hour has a chance).
+// With no wet hour: "No rain in the next 12 h" (fewer hours when the forecast ends sooner).
+export function rainWords(hourly, now, tz) {
+  const h = hourly;
+  if (!h || !Array.isArray(h.time)) return null;
+  const from = localStamp(now, tz), to = localStamp(now + (RAIN_HOURS + 1) * 3600, tz);
+  const pp = Array.isArray(h.precipitation_probability) ? h.precipitation_probability : [];
+  const mm = Array.isArray(h.precipitation) ? h.precipitation : [];
+  let n = 0, first = -1, maxPct = -1, maxMm = 0;
+  h.time.forEach((t, i) => {
+    t = String(t);
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:00$/.test(t) || t <= from || t >= to) return;
+    n++;
+    const p = Number.isFinite(pp[i]) ? pp[i] : null, m = Number.isFinite(mm[i]) ? mm[i] : 0;
+    if (p !== null) maxPct = Math.max(maxPct, p);
+    maxMm = Math.max(maxMm, m);
+    if (first < 0 && ((p !== null && p >= RAIN_PCT) || m >= RAIN_MM)) first = i;
+  });
+  if (!n) return null;
+  if (first < 0) return { wet: false, words: `No rain in the next ${Math.min(n, RAIN_HOURS)} h` };
+  // The wet hour's start: the hour before its stamp. It started before now exactly when it is
+  // now's hour (its end is the first stamp after now).
+  const hour = (Number(String(h.time[first]).slice(11, 13)) + 23) % 24;
+  const pct = maxPct >= 0 ? `${Math.round(maxPct)}%` : `${Math.round(maxMm * 10) / 10} mm`;
+  return {
+    wet: true,
+    words: hour === Number(from.slice(11, 13)) ? `Rain now (${pct})` : `Rain from ${String(hour).padStart(2, '0')}:00 (${pct})`,
+  };
+}
+
+// Today's sunrise and sunset ("06:24", "19:16") from Open-Meteo's daily arrays, or null.
+export function sunTimes(daily, today) {
+  const d = daily;
+  if (!d || !Array.isArray(d.time)) return null;
+  const i = d.time.findIndex((x) => String(x) === today);
+  const hm = (a) => {
+    const m = Array.isArray(a) ? /T(\d{2}:\d{2})/.exec(String(a[i] ?? '')) : null;
+    return m ? m[1] : null;
+  };
+  if (i < 0 || !hm(d.sunrise) || !hm(d.sunset)) return null;
+  return { rise: hm(d.sunrise), set: hm(d.sunset) };
+}
+
+// The moon's phase from the date alone: the age since the new moon of 2000-01-06 18:14 UTC in
+// synodic months (29.530588853 days), in eight phases of 3.7 days each, each centred on its
+// moment (a new moon is within 1.85 days of one).
+export const SYNODIC_DAYS = 29.530588853;
+export const NEW_MOON_2000 = Date.UTC(2000, 0, 6, 18, 14) / 1000;
+const MOON = ['New moon', 'Waxing crescent moon', 'First quarter moon', 'Waxing gibbous moon', 'Full moon',
+  'Waning gibbous moon', 'Last quarter moon', 'Waning crescent moon'];
+
+export function moonPhase(now) {
+  const age = ((((now - NEW_MOON_2000) / 86400) % SYNODIC_DAYS) + SYNODIC_DAYS) % SYNODIC_DAYS;
+  return MOON[Math.floor((age / SYNODIC_DAYS) * 8 + 0.5) % 8];
+}
+
+// ---- the money extras ---------------------------------------------------------------------------
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// A number in the locale's format with at most `max` decimals (at least `min`), or "-".
+function num(v, locale, min, max) {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-';
+  return new Intl.NumberFormat(locale, { minimumFractionDigits: min, maximumFractionDigits: max }).format(v);
+}
+
+// "2026-10-12" as "Today" on now's local date, else "12 Oct"; "-" for a value that is not a date.
+export function dayWords(ymd, now, tz) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd ?? ''));
+  if (!m || +m[2] < 1 || +m[2] > 12) return '-';
+  const p = parts(now, tz);
+  return `${p.year}-${p.month}-${p.day}` === m[0] ? 'Today' : `${+m[3]} ${MONTHS[+m[2] - 1]}`;
+}
+
+// The money lines: riesgo pais (its date), the last monthly inflation (its month) and the
+// fixed-term deposit rate of PF_BANK (TNA for clients; the list has no date, so the time of the
+// Worker's read). money=label|value|date|state, and the reason after a stale or none state.
+export function moneyLines({ now, tz, locale, rp, ipc, pf, pfLabel }) {
+  const out = [];
+  const line = (label, u, value, date) => {
+    if (!u) return;
+    if (u.state === 'none' || !u.data) out.push(`money=${label}|-|-|none|${clean(u.reason)}`);
+    else out.push(`money=${label}|${value(u.data)}|${date(u)}|${u.state === 'ok' ? 'ok' : `stale|${clean(u.reason)}`}`);
+  };
+  line('Riesgo pa\u00eds', rp, (d) => num(d.valor, locale, 0, 0), (u) => dayWords(u.data.fecha, now, tz));
+  line('Inflaci\u00f3n mensual', ipc, (d) => (Number.isFinite(d.valor) ? `${num(d.valor, locale, 1, 1)}%` : '-'), (u) => {
+    const m = /^(\d{4})-(\d{2})/.exec(String(u.data.fecha ?? ''));
+    return m && +m[2] >= 1 && +m[2] <= 12 ? `${MONTHS[+m[2] - 1]} ${m[1]}` : '-';
+  });
+  line(clean(pfLabel) || 'Plazo fijo', pf, (d) => (Number.isFinite(d.tna) ? `${num(d.tna * 100, locale, 0, 2)}%` : '-'),
+    (u) => localWhen(now - Math.max(0, u.age | 0), now, tz));
+  return out;
+}
+
+// ---- the news -----------------------------------------------------------------------------------
+
+// The news lines from the feeds' results ([{label, r}], r as get() gives it, r.data the items of
+// news.js's parseFeed): a fair share of NEWS_MAX per feed in turn, then the newest first.
+// news=source|age|title, the age in seconds at now ("-" for an item with no date), then news_age
+// (the oldest feed's) and news_state: ok when every feed is ok, else stale with the first failed
+// feed's reason while any feed has items, else none.
+export function newsLines(feeds, now, max) {
+  if (!Array.isArray(feeds) || !feeds.length) return [];
+  const lists = feeds.map(({ label, r }) => ((r && Array.isArray(r.data) ? r.data : [])
+    .filter((x) => x && typeof x.title === 'string' && clean(x.title))
+    .map((x) => ({ label: clean(label), title: clean(x.title), at: Number.isFinite(x.at) ? x.at : null }))
+    .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity))));
+  const picked = [];
+  for (let k = 0; picked.length < max && lists.some((l) => k < l.length); k++) {
+    for (const l of lists) if (k < l.length && picked.length < max) picked.push(l[k]);
+  }
+  picked.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity));
+  const out = picked.map((x) => `news=${x.label}|${x.at === null ? '-' : Math.max(0, now - x.at)}|${x.title}`);
+  const rs = feeds.map((f) => f.r || NONE);
+  const bad = rs.find((r) => r.state !== 'ok');
+  const age = Math.max(0, ...rs.filter((r) => r.data).map((r) => r.age | 0));
+  out.push(`news_age=${age}`, `news_state=${!bad ? 'ok' : `${picked.length ? 'stale' : 'none'}|${clean(bad.reason)}`}`);
+  return out;
+}
+
 // The reply. usd, wx and smn are {state: 'ok'|'stale'|'none', reason, age, data}, as index.js's
 // get() gives them: data is dolarapi's /v1/dolares array, Open-Meteo's forecast object and the
 // SMN station's row (smn.js's parseRow). smn has no state line: its row's own time decides.
-export function boardText({ now, usd, wx, smn = NONE, env }) {
+// money is {rp, ipc, pf}, each such a result or absent (no line); news is [{label, r}], one per
+// feed of NEWS_FEEDS (none: no news lines).
+export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news = [], env }) {
   const tz = env.TZ || 'UTC', locale = env.LOCALE || 'es-AR';
   // The offset at now, not Open-Meteo's utc_offset_seconds: a cached forecast keeps the offset of
   // its fetch, which is wrong after a DST change. The city is cut to 100 code points, the only
@@ -123,6 +266,7 @@ export function boardText({ now, usd, wx, smn = NONE, env }) {
     }
   }
   out.push(`usd_age=${Math.max(0, usd.age | 0)}`, `usd_state=${stateLine(usd)}`);
+  out.push(...moneyLines({ now, tz, locale, ...extras, pfLabel: env.PF_LABEL }));
   const c = wx.data && wx.data.current, dy = wx.data && wx.data.daily;
   const deg = (v) => (Number.isFinite(v) ? `${Math.round(v)}°` : '-');
   const pct = (v) => (Number.isFinite(v) ? `${Math.round(v)}%` : '-');
@@ -157,15 +301,29 @@ export function boardText({ now, usd, wx, smn = NONE, env }) {
         `${num(dy.temperature_2m_min, '°')}|${num(dy.precipitation_probability_max, '%')}`);
     }
   }
-  out.push(`wx_age=${Math.max(0, wx.age | 0)}`, `wx_state=${stateLine(wx)}`, 'end');
+  // The sky, from the same forecast: the rain of the next 12 h (wx_rain=rain|words or dry|words),
+  // today's sunrise and sunset, and the moon from the date (also with no forecast).
+  if (wx.data) {
+    const p = parts(now, tz), rain = rainWords(wx.data.hourly, now, tz), sun = sunTimes(dy, `${p.year}-${p.month}-${p.day}`);
+    if (rain) out.push(`wx_rain=${rain.wet ? 'rain' : 'dry'}|${rain.words}`);
+    if (sun) out.push(`wx_sun=${sun.rise}|${sun.set}`);
+  }
+  out.push(`wx_moon=${moonPhase(now)}`);
+  out.push(`wx_age=${Math.max(0, wx.age | 0)}`, `wx_state=${stateLine(wx)}`);
+  out.push(...newsLines(news, now, Math.min(8, Number(env.NEWS_MAX) || 8)), 'end');
   let text = out.join('\n') + '\n';
-  // A body over MAX_BYTES would be cut by Couch's 4 KB buffer: drop rate and day lines from the end
-  // until it fits.
-  while (new TextEncoder().encode(text).length > MAX_BYTES) {
-    const i = out.findLastIndex((l) => l.startsWith('usd=') || l.startsWith('day='));
-    if (i < 0) break;
-    out.splice(i, 1);
-    text = out.join('\n') + '\n';
+  // A body over MAX_BYTES would be refused whole by a Couch 0.1.0 ("the reply is over 4 KB": its
+  // buffer is 4 KB) and cut by a newer one, so lines drop from the end until it fits: the news
+  // first, then the money and the sky lines (a Couch 0.1.0 skips all three, so its Board stays
+  // as it was), then the rate and day lines.
+  const drop = [['news='], ['money='], ['wx_rain=', 'wx_sun=', 'wx_moon='], ['usd=', 'day=']];
+  for (const keys of drop) {
+    while (new TextEncoder().encode(text).length > MAX_BYTES) {
+      const i = out.findLastIndex((l) => keys.some((k) => l.startsWith(k)));
+      if (i < 0) break;
+      out.splice(i, 1);
+      text = out.join('\n') + '\n';
+    }
   }
   return text;
 }

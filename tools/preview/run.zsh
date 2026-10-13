@@ -29,7 +29,66 @@ D=$'\xc2\xb0' DASH=$'\xe2\x80\x93' NL=$'\n'           # the degree sign, an en d
 TZ_DONE=$'done tz_params rc=0x00000000 ok=1\n'        # the clock settings read before: no prompt
 URL_LAN=http://192.168.0.3:8787/board                 # a dotted address: the fake peer needs no DNS
 
-body_ok() {    # the Worker test's reply of 2026-10-10 (couch/worker/test/board.test.js), line for line
+# The Worker test's first reply (couch/worker/test/board.test.js: Junin on 2026-10-13, every
+# upstream, line for line), extracted once per run as the host check does: body_ok, and the
+# others derived from it line by line, so this file stays ASCII.
+REPLY=$P/build/worker_reply.txt
+mkdir -p $P/build
+${PYTHON:-python3} -I - ${P:h:h}/worker/test/board.test.js $REPLY <<'PY' || { print -u2 "the Worker test's reply: not found"; exit 1 }
+import re, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+m = re.search(r"assert\.equal\(t, \[(.*?)\]\.join\('\\n'\)\);", src, re.S)
+items = re.findall(r"'((?:[^'\\]|\\.)*)'", m.group(1)) if m else []
+if len(items) < 3 or items[0] != 'couch-board 1' or items[-2:] != ['end', '']:
+    sys.exit(1)
+open(sys.argv[2], 'w', encoding='utf-8', newline='').write('\n'.join(items))
+PY
+body_ok() { print -rn -- "$(< $REPLY)"$'\n'; }
+each() {   # the reply with each line through the function $1 (it prints the line, another, or nothing)
+    local l
+    for l in "${(@f)$(< $REPLY)}"; do $1 "$l"; done
+}
+body_stale() { each stale_line; }
+stale_line() { case $1 in usd_age=*) print -r -- "usd_age=4000";; usd_state=*) print -r -- "usd_state=stale|dolarapi.com: HTTP 503";; *) print -r -- "$1";; esac; }
+body_none() {
+    print -rn -- "couch-board 1
+now=1791913620
+offset=-10800
+city=Buenos Aires
+usd_age=0
+usd_state=none|dolarapi.com: HTTP 503
+wx_moon=Waxing crescent moon
+wx_age=0
+wx_state=none|open-meteo: no answer in 4 s
+news_age=0
+news_state=none|clarin.com: HTTP 403
+end
+"
+}
+body_smn() { each smn_line; }    # the now line from SMN's station (the Worker test's SMN reply)
+smn_line() { case $1 in wx_now=*) print -r -- "wx_now=10$D|10$D|84%|Cloudy|3 km/h|night|SMN 23:00";; *) print -r -- "$1";; esac; }
+body_accents() { each accents_line; }   # a city with an n tilde (U+00F1) and a reason with an en dash, for the fold
+accents_line() {
+    case $1 in
+    (city=*) print -r -- "city=Ca"$'\xc3\xb1'"uelas, Provincia de Buenos Aires";;
+    (usd_age=*) print -r -- "usd_age=900";;
+    (usd_state=*) print -r -- "usd_state=stale|dolarapi.com: HTTP 503 $DASH maintenance";;
+    (*) print -r -- "$1";;
+    esac
+}
+body_extras() { each extras_line; }   # the money extras none or stale, no rain, no news (the feeds failed)
+extras_line() {
+    case $1 in
+    (money=Riesgo*) print -r -- "${1%%|*}|-|-|none|argentinadatos.com: HTTP 503";;
+    (money=Plazo*) print -r -- "${1%|ok}|stale|argentinadatos.com: no answer in 4 s";;
+    (wx_rain=*) print -r -- "wx_rain=dry|No rain in the next 12 h";;
+    (news=*) ;;
+    (news_age=*) print -r -- "news_age=0";;
+    (news_state=*) print -r -- "news_state=none|clarin.com: HTTP 403";;
+    (*) print -r -- "$1";;
+    esac
+}
+body_v1() {    # a Worker of 0.1.0's time (the reply of 2026-10-10): no money, no sky, no news
     print -rn -- "couch-board 1
 now=1791614218
 offset=-10800
@@ -50,29 +109,6 @@ wx_age=310
 wx_state=ok
 end
 "
-}
-body_stale() { local b=$(body_ok); print -rn -- "${b/usd_age=42${NL}usd_state=ok/usd_age=4000${NL}usd_state=stale|dolarapi.com: HTTP 503}"$'\n'; }
-body_none() {
-    print -rn -- "couch-board 1
-now=1791614218
-offset=-10800
-city=Buenos Aires
-usd_age=0
-usd_state=none|dolarapi.com: HTTP 503
-wx_age=0
-wx_state=none|open-meteo: no answer in 4 s
-end
-"
-}
-body_smn() {   # Junin (U+00ED) with the now line from SMN's station (the Worker test's SMN reply), the days from Open-Meteo
-    local b=$(body_ok) IACUTE=$'\xc3\xad'
-    b=${b/city=Buenos Aires/city=Jun${IACUTE}n}
-    print -rn -- "${b/wx_now=11$D|10$D|92%|Overcast|9 km\/h|night|Open-Meteo/wx_now=10$D|10$D|84%|Cloudy|3 km/h|night|SMN 23:00}"$'\n'
-}
-body_accents() {   # a city with an n tilde (U+00F1) and a reason with an en dash, for the fold
-    local b=$(body_ok) NTILDE=$'\xc3\xb1'
-    b=${b/city=Buenos Aires/city=Ca${NTILDE}uelas, Provincia de Buenos Aires}
-    print -rn -- "${b/usd_age=42${NL}usd_state=ok/usd_age=900${NL}usd_state=stale|dolarapi.com: HTTP 503 ${DASH} maintenance}"$'\n'
 }
 
 scn() {   # name script [VAR=value ...]; JOURNAL, BODY, URL, AUTO, BIN, SAFE from the caller
@@ -109,6 +145,20 @@ board_stale|all)   # the dollar upstream failed, the Worker kept its old rates: 
     BODY=stale scn board_stale "120:SNAP=board_stale 121:EXIT" ;|
 board_none|all)    # both upstreams failed with no old data
     BODY=none scn board_none "120:SNAP=board_none 121:EXIT" ;|
+pages|all)         # L1 and R1: the Board, the News, the Info page, R1 wraps to the Board, L1 back to the Info page
+    scn pages "120:SNAP=pages_board 122:R1 126:SNAP=pages_news 128:R1 132:SNAP=pages_info 134:R1 138:SNAP=pages_back 140:L1 144:SNAP=pages_l1 145:EXIT" ;|
+board_extras|all)  # the money extras none and stale, a dry forecast, the feeds failed: the News page says why
+    BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 126:SNAP=news_none 127:EXIT" ;|
+board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines (the new Couch draws what came)
+    BODY=v1 scn board_v1 "120:SNAP=board_v1 122:R1 126:SNAP=news_v1 127:EXIT" ;|
+net_slow|all)      # the answer takes 4 s: the header says the internet is slow
+    scn net_slow "400:SNAP=net_slow 402:SELECT 406:SNAP=net_slow_info 407:EXIT" PV_BOARD_FAIL=slow ;|
+net_down|all)      # a good reply, then SQUARE after 10 s and a refused connect: no internet since 09:00
+    scn net_down "120:SNAP=net_down_first 700:SQUARE 820:SNAP=net_down 822:SELECT 826:SNAP=net_down_info 827:EXIT" PV_BOARD_FAIL=ok,refused ;|
+ambient|all)       # 10 min with no button: dimmed (the Board); a minute on, the News moved 6 px; then the Board moved
+                   # again; START wakes the screen and does not exit; the fetches go on every 5 min
+    scn ambient "120:SNAP=ambient_before 36120:SNAP=ambient 39720:SNAP=ambient_news 43320:SNAP=ambient_board2 43340:START 43360:SNAP=ambient_awake 43370:EXIT" PV_MAXFRAMES=44000
+    print -r -- "  requests: $(command grep -c '^GET' $P/build/sbx/ambient$SFX/peer.log); couch.txt: $(command grep -h '^ambient' $P/build/sbx/ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 board_smn|all)     # Junin, the now line from SMN: the weather card's foot names both sources; the same folded to ASCII
     BODY=smn scn board_smn "120:SNAP=board_smn 121:EXIT"
     BIN=pv_utf8_off BODY=smn scn board_smn_utf8_off "120:SNAP=board_smn_utf8_off 121:EXIT" ;|

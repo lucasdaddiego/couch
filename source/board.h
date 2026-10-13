@@ -43,8 +43,23 @@ long board_age(void);                /* seconds since the last good reply came *
 /* The schedule in words: "Fetching", "Refresh in 6 s", "Next update in 4 min". */
 void board_next_words(char *buf, int n);
 
-/* The page: the clock, the dollar card, the weather card, the status line,
+/* The internet as the fetches show it (parse.h's net_quality), for the
+ * header: the last fetch's class, its time, its connect time (-1 with no
+ * connection), and the console's clock at the first fetch with no answer
+ * since the last answered one (0 while the fetches get answers). */
+extern int board_net_q;
+extern s64 board_net_us, board_connect_us;
+extern long board_net_down_utc;
+
+/* The Board page (page.h's frame): the dollar card with the money extras,
+ * the weather card with the rain, the sun and the moon, the status line,
  * the footer; msg replaces the status line when it is not NULL. */
 void board_draw(const char *msg, u32 msg_color);
+/* What the Board and the News pages share: a card's foot (its source and the
+ * data's age, or the reason in YELLOW), the status line, the note line (the
+ * schedule, the URL of board_url.txt). */
+void board_foot(float x, float y, float w, const char *src, const board_feed *f);
+void board_status(void);
+void board_note(void);
 
 #endif

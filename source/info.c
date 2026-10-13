@@ -1,7 +1,8 @@
-/* The Info screen (info.h): what Couch uses and how it went. The Board URL
- * and its source, the last fetch and its result, the Worker's clock; the
- * clock's source and the console's three settings; the console's address,
- * the journal states, text_utf8's rc. SQUARE twice clears the freeze journal
+/* The Info page (info.h, page 3 since 0.2.0): what Couch uses and how it
+ * went. The Board URL and its source, the last fetch and its result, the
+ * internet (the last fetch's class, its time and connect time), the
+ * Worker's clock; the clock's source and the console's three settings; the
+ * console's address, the journal states, text_utf8's rc. SQUARE twice clears the freeze journal
  * (the kit's home-screen gesture, as on PS3 Health's home screen): the
  * frozen or skipped calls then run again when the Board opens. */
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #include "board.h"
 #include "clock.h"
 #include "http.h"
+#include "page.h"
 #include "parse.h"
 
 #define KEY_W 250                    /* the key column */
@@ -66,14 +68,11 @@ static const char *jword(const char *name)
 void info_draw(void)
 {
     char a[200], b[48], c[24];
-    begin_frame();
-    title();
-    title_right("Info");
-    float x = MG, y = TOP + 16, w = SW - 2 * MG;
+    float y = page_begin(), x = MG, w = SW - 2 * MG;
     card(x, y, w, BOTTOM - y);
     x += 32;
     w -= 64;
-    y = heading(x, y + 22, "BOARD");
+    y = heading(x, y + 20, "BOARD");
     y = row(x, y, w, "URL", WHITE, "%s (%s)", board_url, board_url_file ? "board_url.txt" : "the default");
     board_next_words(b, sizeof b);
     if (board_fetches) {
@@ -90,6 +89,16 @@ void info_draw(void)
                 net_state == NET_FAILED ? "none: the network start failed" : net_state != NET_UP ? "none: the network is not started"
                 : b[0] ? b : "none yet");
         y = row(x, y, w, "Result", DIM, "-");
+    }
+    if (board_fetches) {                     /* the internet: the class of the last fetch and its times */
+        char cn[32] = "no connection";
+        if (board_connect_us >= 0) snprintf(cn, sizeof cn, "connect %.2f s", (double)board_connect_us / 1e6);
+        if (board_net_q == NQ_DOWN) {
+            clock_words(c, sizeof c, board_net_down_utc, 0);
+            y = row(x, y, w, "Internet", RED, "no answer since %s (%s)", c, cn);
+        } else
+            y = row(x, y, w, "Internet", board_net_q == NQ_SLOW ? YELLOW : WHITE, "%s: %.2f s, %s (slow from %.0f s)",
+                    board_net_q == NQ_SLOW ? "slow" : "ok", (double)board_net_us / 1e6, cn, (double)NQ_SLOW_US / 1e6);
     }
     if (board_have && board_has_skew) {
         long s = board_skew < 0 ? -board_skew : board_skew;
@@ -128,6 +137,6 @@ void info_draw(void)
     else if (msg[0]) status_line(msg, msg_color);
     else status_line(fs_ok ? "Each start appends to couch.txt in " APP_DIR "." : "The app cannot write " APP_DIR ": no journal and no couch.txt.",
                      fs_ok ? GREY : RED);
-    footer(fs_ok ? "SQUARE twice clear journal  CIRCLE back  START exit" : "CIRCLE back  START exit");
-    ui_flip();
+    footer(fs_ok ? "SQUARE twice clear journal  L1/R1 pages  CIRCLE back  START exit" : "L1/R1 pages  CIRCLE back  START exit");
+    page_end();
 }

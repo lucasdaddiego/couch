@@ -8,13 +8,16 @@
  * writes board_url.txt with a dotted address, the console round's path, and
  * the default URL shows the DNS failure.
  *   PV_BOARD=<file>       the body (default: the Worker test's reply of
- *                         2026-10-10, line for line, below)
+ *                         2026-10-10, a reply of 0.1.0's time, below;
+ *                         run.zsh always passes the current one)
  *   PV_BOARD_FAIL=<list>  per connect, comma-separated, the last entry
  *                         repeats: ok, refused, silent (no answer: the
  *                         10 s SO_RCVTIMEO runs out at once), cut (the body
  *                         without its last 30 bytes), 301, v2 (line 1
  *                         "couch-board 2"), hang (recv waits until a
- *                         netShutdown, at most 30 s of host time)
+ *                         netShutdown, at most 30 s of host time), slow
+ *                         (the answer comes 4 s of the preview's clock
+ *                         after the connect: a slow internet)
  *   PV_TZ, PV_SUMMER, PV_TIMEFMT  the three settings (default -180, 0, 1)
  *   PV_TZ_FAIL=1          the three calls fail
  *   PV_NOIP=1             netCtlGetInfo fails: the console has no address
@@ -38,6 +41,7 @@
 #include "net/netctl.h"
 #include "netinet/in.h"
 #include "sysutil/sysutil.h"
+#include "lv2/systime.h"
 
 #define DEG "\xc2\xb0"
 
@@ -62,14 +66,14 @@ static const char default_body[] =
     "wx_state=ok\n"
     "end\n";
 
-enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2, K_HANG, K_KINDS };
+enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2, K_HANG, K_SLOW, K_KINDS };
 
 extern volatile int quit;                    /* ps3gfx's: Quit Game from the PS button menu */
 
 /* The kind of connect n (0 first) from PV_BOARD_FAIL. */
 static int kind_at(int n)
 {
-    static const char *const names[K_KINDS] = {"ok", "refused", "silent", "cut", "301", "v2", "hang"};
+    static const char *const names[K_KINDS] = {"ok", "refused", "silent", "cut", "301", "v2", "hang", "slow"};
     const char *s = getenv("PV_BOARD_FAIL");
     char tok[16] = "ok";
     for (int i = 0; s && *s; i++) {
@@ -104,6 +108,7 @@ static void note(const char *fmt, ...)
 static struct {
     int used, kind, in_len, out_len, out_pos;
     volatile int shut;                       /* netShutdown came (the main thread) */
+    u64 t0;                                  /* the preview's clock at the connect */
     char in[2048];
     char *out;
 } sk[NSOCK];
@@ -154,6 +159,7 @@ s32 netConnect(s32 s, const struct sockaddr *a, socklen_t l)
         return -1;
     }
     sk[i].kind = kind;
+    sk[i].t0 = sysGetSystemTime();
     return 0;
 }
 
@@ -244,6 +250,8 @@ ssize_t netRecv(s32 s, void *b, size_t l, s32 f)
         err_val = NET_EAGAIN;
         return -1;
     }
+    if (i >= 0 && sk[i].kind == K_SLOW)      /* the preview's clock moves with the frames: 4 s of it, whatever the host's speed */
+        while (sysGetSystemTime() - sk[i].t0 < 4000000 && !sk[i].shut) usleep(1000);
     if (i < 0 || !sk[i].out || sk[i].kind == K_SILENT) {
         err_val = NET_EAGAIN;                            /* SO_RCVTIMEO ran out */
         return -1;

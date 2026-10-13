@@ -1,11 +1,13 @@
 // Couch's Board Worker: GET /board answers the plain-text reply of board.js with the dollar
-// rates (dolarapi.com), the weather now (SMN's station, else Open-Meteo) and the days
-// (Open-Meteo), each upstream kept in the Cache API with its time, so that a failed upstream
-// gives the old values marked stale with their real age. Plain HTTP on purpose: the PS3 has no
-// TLS (the zone's per-host rule, design section 4).
+// rates (dolarapi.com), the weather now (SMN's station, else Open-Meteo), the days, the rain and
+// the sun (Open-Meteo), the money extras (argentinadatos.com) and the news (the RSS feeds of
+// NEWS_FEEDS), each upstream kept in the Cache API with its time, so that a failed upstream gives
+// the old values marked stale with their real age. Plain HTTP on purpose: the PS3 has no TLS (the
+// zone's per-host rule, design section 4).
 
 import { boardText, clean, fold } from './board.js';
 import { findRow, latin1, unzipFirst } from './smn.js';
+import { parseFeed, parseFeeds, ITEMS_MAX } from './news.js';
 
 const TIMEOUT_MS = 4000;
 
@@ -33,6 +35,34 @@ async function readSmn(r, env) {
   return { data: findRow(text, env.SMN_STATION), bad: `no row for ${clean(env.SMN_STATION)}` };
 }
 
+// argentinadatos.com's inflation list (53 KB, monthly since 1943): {data: its last entry}, the
+// latest fecha, so the cache holds one entry.
+async function readLast(r) {
+  const { data } = await readJson(r);
+  if (!Array.isArray(data)) return { data: null };
+  let last = null;
+  for (const x of data) if (dated(x) && (!last || x.fecha > last.fecha)) last = x;
+  return { data: last && { fecha: last.fecha, valor: last.valor }, bad: 'no entry' };
+}
+
+// argentinadatos.com's fixed-term table (20 KB, one row per bank, no date): {data: {entidad, tna}}
+// of the bank named PF_BANK after a trim, case and accents not counted, tna its rate for clients.
+async function readBank(r, env) {
+  const { data } = await readJson(r);
+  if (!Array.isArray(data)) return { data: null };
+  const want = fold(clean(env.PF_BANK));
+  const row = data.find((x) => x && typeof x === 'object' && fold(clean(x.entidad)) === want);
+  return { data: row ? { entidad: clean(row.entidad), tna: row.tnaClientes } : null, bad: `no row for ${clean(env.PF_BANK)}` };
+}
+
+// A feed: {data: its items} (news.js), [] for text that is no RSS.
+async function readFeed(r) {
+  return { data: parseFeed(await r.text()).slice(0, ITEMS_MAX), bad: 'no items' };
+}
+
+const dated = (d) => !!d && typeof d === 'object' && Number.isFinite(d.valor) && /^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha));
+const AD = 'https://api.argentinadatos.com/v1/finanzas';
+
 export const UPSTREAMS = {
   usd: {
     host: 'dolarapi.com',
@@ -47,7 +77,8 @@ export const UPSTREAMS = {
     url: (env) => 'https://api.open-meteo.com/v1/forecast?' + new URLSearchParams({
       latitude: env.LAT, longitude: env.LON, timezone: env.TZ, forecast_days: '4',
       current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,is_day',
-      daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
+      daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset',
+      hourly: 'precipitation_probability,precipitation',
     }),
     key: (env) => `https://couch.internal/wx?lat=${env.LAT}&lon=${env.LON}`,
     ttl: (env) => Number(env.WX_TTL) || 900,
@@ -64,12 +95,50 @@ export const UPSTREAMS = {
     read: readSmn,
     valid: (d) => !!d && typeof d === 'object' && typeof d.station === 'string',
   },
+  rp: {
+    host: 'argentinadatos.com',
+    url: () => `${AD}/indices/riesgo-pais/ultimo`,
+    key: () => 'https://couch.internal/rp',
+    ttl: (env) => Number(env.RP_TTL) || 900,
+    read: readJson,
+    valid: dated,
+  },
+  ipc: {
+    host: 'argentinadatos.com',
+    url: () => `${AD}/indices/inflacion`,
+    key: () => 'https://couch.internal/ipc',
+    ttl: (env) => Number(env.IPC_TTL) || 21600,
+    read: readLast,
+    valid: dated,
+  },
+  // The key holds the folded bank, as SMN's holds the station.
+  pf: {
+    host: 'argentinadatos.com',
+    url: () => `${AD}/tasas/plazoFijo`,
+    key: (env) => `https://couch.internal/pf?bank=${encodeURIComponent(fold(clean(env.PF_BANK)))}`,
+    ttl: (env) => Number(env.PF_TTL) || 3600,
+    read: readBank,
+    valid: (d) => !!d && Number.isFinite(d.tna) && d.tna > 0,
+  },
 };
 
-// One upstream: a fresh cache entry, else the upstream (cached when valid), else the old entry
-// marked stale, else none. deps: {fetch, cache, waitUntil}. Never throws.
+// One feed of NEWS_FEEDS as an upstream: its own cache entry under its URL, the parsed items.
+export function newsUpstream(feed) {
+  return {
+    host: new URL(feed.url).hostname.replace(/^www\./, ''),
+    url: () => feed.url,
+    key: () => `https://couch.internal/news?u=${encodeURIComponent(feed.url)}`,
+    ttl: (env) => Number(env.NEWS_TTL) || 600,
+    read: readFeed,
+    valid: (d) => Array.isArray(d) && d.length > 0,
+  };
+}
+
+// One upstream (a name of UPSTREAMS, or an upstream such as newsUpstream's): a fresh cache entry,
+// else the upstream (cached when valid), else the old entry marked stale, else none. deps:
+// {fetch, cache, waitUntil}. Never throws.
 export async function get(name, env, now, deps) {
-  const u = UPSTREAMS[name];
+  const u = typeof name === 'string' ? UPSTREAMS[name] : name;
   const key = u.key(env);
   let entry = null;
   try {
@@ -109,22 +178,29 @@ export async function handle(request, env, deps) {
     return new Response('not found\n', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   }
   const now = deps.now();
-  // No SMN_STATION: no SMN fetch, the now line from Open-Meteo.
+  // No SMN_STATION: no SMN fetch, the now line from Open-Meteo. No PF_BANK: no fixed-term line.
+  // No NEWS_FEEDS: no news lines. Every upstream in parallel.
   const smnOff = { state: 'none', reason: 'no SMN_STATION', age: 0, data: null };
-  const [usd, wx, smn] = await Promise.all([get('usd', env, now, deps), get('wx', env, now, deps),
-    String(env.SMN_STATION ?? '').trim() ? get('smn', env, now, deps) : smnOff]);
+  const feeds = parseFeeds(env.NEWS_FEEDS);
+  const pfOn = clean(env.PF_BANK) !== '';
+  const [usd, wx, smn, rp, ipc, pf, ...rs] = await Promise.all([get('usd', env, now, deps), get('wx', env, now, deps),
+    String(env.SMN_STATION ?? '').trim() ? get('smn', env, now, deps) : smnOff, get('rp', env, now, deps),
+    get('ipc', env, now, deps), pfOn ? get('pf', env, now, deps) : null, ...feeds.map((f) => get(newsUpstream(f), env, now, deps))]);
+  const money = { rp, ipc, pf: pf || undefined };
+  const news = feeds.map((f, i) => ({ label: f.label, r: rs[i] }));
   // Always 200 with the states in the body (design section 4): a reply that cannot be formatted
   // gives the upstreams as none with the error, and a bad setting (TZ) the bare lines.
   let text;
   try {
-    text = boardText({ now, usd, wx, smn, env });
+    text = boardText({ now, usd, wx, smn, money, news, env });
   } catch (e) {
     const reason = `worker: ${clean((e && e.message) || e).slice(0, 60)}`;
     const none = { state: 'none', reason, age: 0, data: null };
     try {
-      text = boardText({ now, usd: none, wx: none, smn: none, env });
+      text = boardText({ now, usd: none, wx: none, smn: none, news: feeds.map((f) => ({ label: f.label, r: none })), env });
     } catch {
-      text = ['couch-board 1', `now=${now}`, `usd_state=none|${reason}`, `wx_state=none|${reason}`, 'end', ''].join('\n');
+      text = ['couch-board 1', `now=${now}`, `usd_state=none|${reason}`, `wx_state=none|${reason}`,
+        ...(feeds.length ? [`news_state=none|${reason}`] : []), 'end', ''].join('\n');
     }
   }
   return new Response(text, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });

@@ -165,7 +165,7 @@ int board_parse(const char *body, int n, int fold, board_data *b)
     int ll;
     long v;
     memset(b, 0, sizeof *b);
-    b->usd_feed.age = b->wx_feed.age = -1;
+    b->usd_feed.age = b->wx_feed.age = b->news_feed.age = -1;
     if (!next_line(&p, end, &ls, &ll) || ll <= ml || memcmp(ls, magic, (size_t)ml) || !to_long(ls + ml, ll - ml, &v) || v < 0 ||
         v > 9999)
         return BP_NOT_BOARD;
@@ -225,6 +225,48 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             feed_age(&b->wx_feed, val, vl);
         } else if (key_is(k, kl, "wx_state")) {
             feed_state(&b->wx_feed, val, vl, fold);
+        } else if (key_is(k, kl, "money")) {
+            /* label|value|date|state|reason: a state that is not ok or stale is none */
+            if (b->n_money == BOARD_MONEY) continue;
+            board_money *m = &b->money[b->n_money++];
+            char st[8];
+            c = split(val, vl, f, fl, 5);
+            put(m->label, sizeof m->label, f, fl, c, 0, fold);
+            put(m->value, sizeof m->value, f, fl, c, 1, fold);
+            put(m->when, sizeof m->when, f, fl, c, 2, fold);
+            put(st, sizeof st, f, fl, c, 3, 1);
+            snprintf(m->state, sizeof m->state, "%s", !strcmp(st, "ok") || !strcmp(st, "stale") ? st : "none");
+            m->reason[0] = 0;
+            if (c > 4) text_field(m->reason, sizeof m->reason, f[4], fl[4], fold);
+        } else if (key_is(k, kl, "wx_rain")) {
+            char kind[8];
+            c = split(val, vl, f, fl, 2);
+            put(kind, sizeof kind, f, fl, c, 0, 1);
+            put(b->rain, sizeof b->rain, f, fl, c, 1, fold);
+            b->rain_wet = !strcmp(kind, "rain");
+            b->has_rain = 1;
+        } else if (key_is(k, kl, "wx_sun")) {
+            c = split(val, vl, f, fl, 2);
+            put(b->sunrise, sizeof b->sunrise, f, fl, c, 0, fold);
+            put(b->sunset, sizeof b->sunset, f, fl, c, 1, fold);
+            b->has_sun = strcmp(b->sunrise, "-") && strcmp(b->sunset, "-");
+        } else if (key_is(k, kl, "wx_moon")) {
+            text_field(b->moon, sizeof b->moon, val, vl, fold);
+        } else if (key_is(k, kl, "news")) {
+            /* source|age|title: the title ends at a '|', which the Worker removes from upstream text */
+            if (b->n_news == BOARD_NEWS) continue;
+            board_news *n = &b->news[b->n_news];
+            c = split(val, vl, f, fl, 3);
+            put(n->source, sizeof n->source, f, fl, c, 0, fold);
+            n->age = -1;
+            if (c > 1 && to_long(f[1], fl[1], &v) && v >= 0) n->age = v;
+            n->title[0] = 0;
+            if (c > 2) text_field(n->title, sizeof n->title, f[2], fl[2], fold);
+            if (n->title[0]) b->n_news++;            /* a line with no title is not a headline */
+        } else if (key_is(k, kl, "news_age")) {
+            feed_age(&b->news_feed, val, vl);
+        } else if (key_is(k, kl, "news_state")) {
+            feed_state(&b->news_feed, val, vl, fold);
         }
     }
     return BP_CUT;
@@ -419,3 +461,28 @@ int auto_parse(const char *s, int n)
     if (v == 0) return -1;
     return v < 60 ? 60 : v > 600 ? 600 : (int)v;
 }
+
+/* ---- the internet, the ambient mode ------------------------------------------- */
+
+int net_quality(int answered, long long total_us)
+{
+    if (!answered) return NQ_DOWN;
+    return total_us >= NQ_SLOW_US ? NQ_SLOW : NQ_OK;
+}
+
+/* A walk over the 3 x 3 grid of -6, 0 and 6 pixels, one 6-pixel move per
+ * step, back to the start after 9 steps: no place twice in a row, and the
+ * picture never more than 6 pixels from its place on either axis. */
+static const signed char shift_xy[AMBIENT_SHIFTS][2] = {
+    {0, 0}, {AMBIENT_PX, 0}, {AMBIENT_PX, AMBIENT_PX}, {0, AMBIENT_PX}, {-AMBIENT_PX, AMBIENT_PX},
+    {-AMBIENT_PX, 0}, {-AMBIENT_PX, -AMBIENT_PX}, {0, -AMBIENT_PX}, {AMBIENT_PX, -AMBIENT_PX}};
+
+void ambient_shift(long step, int *dx, int *dy)
+{
+    long i = step % AMBIENT_SHIFTS;
+    if (i < 0) i += AMBIENT_SHIFTS;
+    *dx = shift_xy[i][0];
+    *dy = shift_xy[i][1];
+}
+
+int ambient_page(long step, int has_news) { return has_news && (step % 2 == 1 || step % 2 == -1); }

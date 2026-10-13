@@ -1,4 +1,5 @@
-/* The Info screen (info.c): SELECT on the Board opens it, CIRCLE goes back. */
+/* The Info page (info.c): page 3; SELECT on the Board or the News opens it,
+ * CIRCLE goes back to the Board, L1 and R1 to the other pages. */
 #ifndef INFO_H
 #define INFO_H
 

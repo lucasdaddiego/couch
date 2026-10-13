@@ -167,7 +167,7 @@ void clock_source(char *buf, int n)
     else snprintf(buf, (size_t)n, "UTC: no offset yet. The console's setting: %s.", tz_why(why, sizeof why));
 }
 
-float clock_draw(float x, float y)
+float clock_draw(float x, float y, float w)
 {
     int off, src = clock_offset(&off);
     civil_time c;
@@ -179,9 +179,9 @@ float clock_draw(float x, float y)
     float xe = text(x, y, F_LARGE | TNUM, WHITE, "%s", hm);
     xe = text(xe + 2, y + dy, F_MED | TNUM, GREY, ":%02d", c.sec);
     if (ampm) xe = text(xe + 12, y + dy, F_MED, GREY, "%s", ampm);
-    text_fit(xe + 44, y + dy, F_MED, WHITE, SW - MG - xe - 44, "%s %d %s %d", weekday_name[c.wday], c.day, month_name[c.month - 1], c.year);
+    text_fit(xe + 40, y + dy, F_MED, WHITE, x + w - xe - 40, "%s %d %s %d", weekday_name[c.wday], c.day, month_name[c.month - 1], c.year);
     float y2 = y + line_h(F_LARGE) + 2;
     clock_source(line, sizeof line);
-    text_fit(x, y2, F_SMALL, src == CLK_UTC ? YELLOW : GREY, SW - 2 * MG, "%s", line);
+    text_fit(x, y2, F_SMALL, src == CLK_UTC ? YELLOW : GREY, w, "%s", line);
     return y2 + line_h(F_SMALL);
 }

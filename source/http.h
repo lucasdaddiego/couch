@@ -46,6 +46,7 @@ typedef struct {
     int http;                        /* the status, 0 before a head */
     char location[128];              /* a 3xx answer's Location */
     int len;                         /* the body's bytes */
+    s64 connect_us;                  /* from the GET's start to the connect's end (DNS and TCP), -1 with no connection */
 } http_result;
 
 /* GET u with "GET <path> HTTP/1.0", Host, User-Agent Couch/<version> and

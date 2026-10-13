@@ -1,13 +1,16 @@
-/* Couch 0.1.0: the Board on the living-room TV, drawn by ps3gfx. The clock
- * in the console's time zone, the dollar rates and the weather from the
- * Worker at couch.daddiego.com.ar (design:
- * ~/.claude/plans/2026-10-10-couch-design.md, cut to the Board on
- * 2026-10-10). Couch opens on the Board; SELECT opens the Info screen. Each
- * start appends a block to couch.txt in the app folder.
+/* Couch 0.2.0: the Board on the living-room TV, drawn by ps3gfx. The clock
+ * in the console's time zone, the dollar rates and the money extras, the
+ * weather with the rain, the sun and the moon, and the news, from the Worker
+ * at couch.daddiego.com.ar (design: ~/.claude/plans/2026-10-10-couch-design.md,
+ * cut to the Board on 2026-10-10). Three pages: the Board, the News, the
+ * Info screen; L1 and R1 move between them, SELECT opens the Info page.
+ * After 10 min with no button the ambient mode dims the screen (page.c).
+ * Each start appends a block to couch.txt in the app folder.
  *
- * The frame loop: read_pad, the exit, board_take (a new reply from the
- * Board thread), the input, the draw. Only this thread calls journal_* and
- * writes files: the Board thread fills one record (board.c). */
+ * The frame loop: read_pad, the ambient mode's wake, the exit, board_take
+ * (a new reply from the Board thread), the input, the ambient mode's step,
+ * the draw. Only this thread calls journal_* and writes files: the Board
+ * thread fills one record (board.c). */
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -23,6 +26,7 @@
 #include "board.h"
 #include "clock.h"
 #include "info.h"
+#include "page.h"
 #include "parse.h"
 
 #ifndef PS3GFX_COMMIT
@@ -126,6 +130,19 @@ static int board_enter(void)
     return 0;
 }
 
+/* A page change by the pad. Leaving the Info page opens the Board as CIRCLE
+ * did in 0.1.0 (the network start runs again after a clear of the journal):
+ * -1 for a quit there. */
+static int go(int to)
+{
+    int from = page;
+    if (to == from) return 0;
+    page = to;
+    if (to == PAGE_INFO) info_open();
+    if (from == PAGE_INFO) return board_enter();
+    return 0;
+}
+
 /* SQUARE on the Board: a refresh, or the network start and the thread again. */
 static int square(void)
 {
@@ -143,8 +160,9 @@ static void shot(const char *path)
 }
 
 /* An unattended round's steps, in seconds after the start: the Board's
- * screenshot, the Info screen and its screenshot, the Board again. The
- * round ends at auto.txt's seconds (60 to 600). */
+ * screenshot, the Info page and its screenshot, the Board again. The round
+ * ends at auto.txt's seconds (60 to 600): the ambient mode, at 600 s with no
+ * button, cannot start before. */
 enum { T_SHOT_BOARD, T_INFO, T_SHOT_INFO, T_BOARD, T_DONE };
 static const int t_sec[T_DONE] = {30, 40, 45, 50};
 
@@ -179,37 +197,38 @@ int main(void)
     if (board_enter() < 0) return 0;
     ui_stat st;
     ui_stats(&st, 1);                        /* the frame times from here: the Board's loop */
-    int info = 0, step = 0;
+    int step = 0;
+    page = PAGE_BOARD;
     while (!quit) {
         read_pad();
+        ambient_input();                     /* a press that wakes the screen is cleared: START then does not exit */
         int lv = ui_leave();
         if (lv < 0) break;
         board_take();
-        if (info) {
+        if (pressed & (BTN_L1 | BTN_R1)) {
+            if (go((page + (pressed & BTN_R1 ? 1 : PAGE_N - 1)) % PAGE_N) < 0) break;
+        } else if (page == PAGE_INFO) {
             if (lv == 0) {                   /* CIRCLE: back to the Board */
-                info = 0;
-                if (board_enter() < 0) break;
-                continue;
-            }
-            info_input();
+                if (go(PAGE_BOARD) < 0) break;
+            } else info_input();
         } else if (pressed & BTN_SELECT) {
-            info = 1;
-            info_open();
-            continue;
+            go(PAGE_INFO);
         } else if ((pressed & BTN_SQUARE) && square() < 0) break;
         s64 t = sysGetSystemTime() - t_start;
         if (unattended > 0) {
             if (t >= (s64)unattended * 1000000) break;
             if (step == T_INFO && t >= t_sec[T_INFO] * 1000000LL) {
-                info = 1;
+                page = PAGE_INFO;
                 info_open();
                 step++;
             } else if (step == T_BOARD && t >= t_sec[T_BOARD] * 1000000LL) {
-                info = 0;
+                page = PAGE_BOARD;
                 step++;
             }
         }
-        if (info) info_draw();
+        ambient_tick();
+        if (page == PAGE_INFO) info_draw();
+        else if (page == PAGE_NEWS) news_draw();
         else board_draw(NULL, 0);
         if (unattended > 0 && (step == T_SHOT_BOARD || step == T_SHOT_INFO) && t >= t_sec[step] * 1000000LL) {
             shot(step == T_SHOT_BOARD ? APP_DIR "/board.ppm" : APP_DIR "/info.ppm");   /* between ui_flip and the next begin_frame */

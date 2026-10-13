@@ -33,10 +33,15 @@ static int bounded(void)
 {
 #define IN(f) (memchr((f), 0, sizeof(f)) != NULL)
     int ok = IN(b.city) && IN(b.temp) && IN(b.feels) && IN(b.humidity) && IN(b.words) && IN(b.wind) && IN(b.wx_src) && IN(b.usd_feed.state) &&
-             IN(b.usd_feed.reason) && IN(b.wx_feed.state) && IN(b.wx_feed.reason) && b.n_usd <= BOARD_USD && b.n_day <= BOARD_DAYS;
+             IN(b.usd_feed.reason) && IN(b.wx_feed.state) && IN(b.wx_feed.reason) && b.n_usd <= BOARD_USD && b.n_day <= BOARD_DAYS &&
+             IN(b.rain) && IN(b.sunrise) && IN(b.sunset) && IN(b.moon) && IN(b.news_feed.state) && IN(b.news_feed.reason) &&
+             b.n_money <= BOARD_MONEY && b.n_news <= BOARD_NEWS;
     for (int i = 0; i < b.n_usd; i++) ok = ok && IN(b.usd[i].label) && IN(b.usd[i].buy) && IN(b.usd[i].sell) && IN(b.usd[i].when);
     for (int i = 0; i < b.n_day; i++)
         ok = ok && IN(b.day[i].label) && IN(b.day[i].words) && IN(b.day[i].max) && IN(b.day[i].min) && IN(b.day[i].rain);
+    for (int i = 0; i < b.n_money; i++)
+        ok = ok && IN(b.money[i].label) && IN(b.money[i].value) && IN(b.money[i].when) && IN(b.money[i].state) && IN(b.money[i].reason);
+    for (int i = 0; i < b.n_news; i++) ok = ok && IN(b.news[i].source) && IN(b.news[i].title) && b.news[i].title[0];
     return ok;
 #undef IN
 }
@@ -59,8 +64,8 @@ static void worker_reply(const char *w, int wn)
 {
     int f0 = fails;
     CHECK(board_parse(w, wn, 0, &b) == BP_OK);
-    CHECK(b.version == 1 && b.now == 1791614218L && b.has_offset && b.offset == -10800);
-    STR(b.city, "Buenos Aires");
+    CHECK(b.version == 1 && b.now == 1791913620L && b.has_offset && b.offset == -10800);
+    STR(b.city, "Jun\xc3\xadn");
     CHECK(b.n_usd == 6);
     static const char *const want[6][4] = {
         {"Oficial", "1.485,00", "1.535,00", "Fri 15:00"}, {"Blue", "1.520,00", "1.540,00", "Fri 18:00"},
@@ -74,34 +79,64 @@ static void worker_reply(const char *w, int wn)
     }
     STR(b.usd_feed.state, "ok");
     CHECK(b.usd_feed.age == 42 && !b.usd_feed.reason[0]);
-    CHECK(b.has_wx && !b.is_day);
-    STR(b.temp, "11\xc2\xb0");
-    STR(b.feels, "10\xc2\xb0");
-    STR(b.humidity, "92%");
+    CHECK(b.has_wx && b.is_day);
+    STR(b.temp, "19\xc2\xb0");
+    STR(b.feels, "17\xc2\xb0");
+    STR(b.humidity, "61%");
     STR(b.words, "Overcast");
-    STR(b.wind, "9 km/h");
+    STR(b.wind, "10 km/h");
     STR(b.wx_src, "Open-Meteo");
     CHECK(b.n_day == 3);
     STR(b.day[0].label, "Today");
-    STR(b.day[0].words, "Rain showers");
-    STR(b.day[0].max, "16\xc2\xb0");
-    STR(b.day[0].min, "11\xc2\xb0");
-    STR(b.day[0].rain, "96%");
-    STR(b.day[1].label, "Sun");
-    STR(b.day[2].label, "Mon");
+    STR(b.day[0].words, "Drizzle");
+    STR(b.day[0].max, "19\xc2\xb0");
+    STR(b.day[0].min, "9\xc2\xb0");
+    STR(b.day[0].rain, "75%");
+    STR(b.day[1].label, "Wed");
+    STR(b.day[1].max, "20\xc2\xb0");
+    STR(b.day[2].label, "Thu");
     STR(b.day[2].words, "Drizzle");
-    STR(b.day[2].rain, "22%");
+    STR(b.day[2].rain, "48%");
     STR(b.wx_feed.state, "ok");
     CHECK(b.wx_feed.age == 310);
+    CHECK(b.n_money == 3);
+    STR(b.money[0].label, "Riesgo pa\xc3\xads");
+    STR(b.money[0].value, "589");
+    STR(b.money[0].when, "12 Oct");
+    STR(b.money[0].state, "ok");
+    STR(b.money[1].label, "Inflaci\xc3\xb3n mensual");
+    STR(b.money[1].value, "1,7%");
+    STR(b.money[1].when, "Aug 2026");
+    STR(b.money[2].label, "Plazo fijo BNA (TNA)");
+    STR(b.money[2].value, "19,25%");
+    STR(b.money[2].when, "14:47");
+    CHECK(!b.money[2].reason[0]);
+    CHECK(b.has_rain && b.rain_wet);
+    STR(b.rain, "Rain now (75%)");
+    CHECK(b.has_sun);
+    STR(b.sunrise, "06:24");
+    STR(b.sunset, "19:16");
+    STR(b.moon, "Waxing crescent moon");
+    CHECK(b.n_news == 8);
+    STR(b.news[0].source, "Clar\xc3\xadn");
+    CHECK(b.news[0].age == 1335 && b.news[7].age == 8869);
+    STR(b.news[3].title, "La embajadora de EEUU en Grecia dimite ante esc\xc3\xa1ndalo de presunta corrupci\xc3\xb3n");
+    STR(b.news[7].source, "La Verdad");
+    STR(b.news_feed.state, "ok");
+    CHECK(b.news_feed.age == 300);
+    CHECK(bounded());
     CHECK(board_has_end(w, wn));
     group("the Worker test's reply, every field", f0);
 
     f0 = fails;
     CHECK(board_parse(w, wn, 1, &b) == BP_OK);
-    STR(b.temp, "11");
-    STR(b.day[0].max, "16");
-    STR(b.city, "Buenos Aires");
+    STR(b.temp, "19");
+    STR(b.day[0].max, "19");
+    STR(b.city, "Junin");
     STR(b.usd[5].label, "Tarjeta");
+    STR(b.money[0].label, "Riesgo pais");
+    STR(b.news[3].title, "La embajadora de EEUU en Grecia dimite ante escandalo de presunta corrupcion");
+    STR(b.news[7].title, "2 Encuentro Regional de Enfermeria: mas de 300 participantes en Junin");   /* the degree sign is dropped */
     group("the same reply folded to ASCII (text_utf8 failed)", f0);
 
     f0 = fails;
@@ -112,7 +147,9 @@ static void worker_reply(const char *w, int wn)
         crlf[k++] = w[i];
     }
     crlf[k] = 0;
-    CHECK(board_parse(crlf, k, 0, &b) == BP_OK && b.n_usd == 6 && b.n_day == 3 && board_has_end(crlf, k));
+    CHECK(board_parse(crlf, k, 0, &b) == BP_OK && b.n_usd == 6 && b.n_day == 3 && b.n_money == 3 && b.n_news == 8 && board_has_end(crlf, k));
+    STR(b.news[0].source, "Clar\xc3\xadn");
+    STR(b.moon, "Waxing crescent moon");
     STR(b.usd[0].when, "Fri 15:00");
     STR(b.wx_feed.state, "ok");
     free(crlf);
@@ -275,6 +312,85 @@ static void rules(void)
     CHECK(parse("couch-board 1\noffset=-43200\nnow= 1791614218 \nend\n", 0) == BP_OK && b.has_offset && b.offset == -43200 &&
           b.now == 1791614218L);
     group("control bytes dropped, spaces trimmed, numbers checked", f0);
+}
+
+/* The keys of 2026-10-13: the money extras, the sky, the news. */
+static void extras(void)
+{
+    int f0 = fails;
+    CHECK(parse("couch-board 1\nmoney=A|1|d|ok\nmoney=B|-|-|none|x.com: HTTP 503\nmoney=C|2|e|stale|x.com: no answer in 4 s\n"
+                "money=D|3|f|weird\nmoney=E|4|g|ok\nend\n", 0) == BP_OK);
+    CHECK(b.n_money == BOARD_MONEY);
+    STR(b.money[0].state, "ok");
+    CHECK(!b.money[0].reason[0]);
+    STR(b.money[1].state, "none");
+    STR(b.money[1].value, "-");
+    STR(b.money[1].reason, "x.com: HTTP 503");
+    STR(b.money[2].state, "stale");
+    STR(b.money[2].when, "e");
+    STR(b.money[2].reason, "x.com: no answer in 4 s");
+    STR(b.money[3].state, "none");                  /* another word is none */
+    CHECK(parse("couch-board 1\nmoney=Solo\nend\n", 0) == BP_OK && b.n_money == 1);
+    STR(b.money[0].value, "-");
+    STR(b.money[0].when, "-");
+    STR(b.money[0].state, "none");
+    group("money: label|value|date|state|reason, at most 4, another state is none", f0);
+
+    f0 = fails;
+    CHECK(parse("couch-board 1\nwx_rain=dry|No rain in the next 12 h\nwx_sun=06:24|19:16\nwx_moon=Full moon\nend\n", 0) == BP_OK);
+    CHECK(b.has_rain && !b.rain_wet && b.has_sun);
+    STR(b.rain, "No rain in the next 12 h");
+    STR(b.moon, "Full moon");
+    CHECK(parse("couch-board 1\nwx_rain=rain\nwx_sun=06:24\nend\n", 0) == BP_OK);
+    CHECK(b.has_rain && b.rain_wet && !b.has_sun);
+    STR(b.rain, "-");
+    CHECK(parse("couch-board 1\nend\n", 0) == BP_OK && !b.has_rain && !b.has_sun && !b.moon[0]);
+    group("the sky: wx_rain rain or dry, wx_sun with both times, wx_moon; absent from an older Worker", f0);
+
+    f0 = fails;
+    static char s[8192];
+    int k = snprintf(s, sizeof s, "couch-board 1\nnews=A|60|One\nnews=B|-|Two\nnews=C|5|\nnews=D|x|Four|extra\n");
+    for (int i = 0; i < 10; i++) k += snprintf(s + k, sizeof s - k, "news=S|%d|T%d\n", i, i);
+    snprintf(s + k, sizeof s - k, "news_age=120\nnews_state=stale|laverdadonline.com: HTTP 500\nend\n");
+    CHECK(parse(s, 0) == BP_OK && b.n_news == BOARD_NEWS && bounded());
+    STR(b.news[0].title, "One");
+    CHECK(b.news[0].age == 60 && b.news[1].age == -1 && b.news[2].age == -1);
+    STR(b.news[2].title, "Four");                   /* "C" had no title: not a headline */
+    STR(b.news[7].title, "T4");
+    STR(b.news_feed.state, "stale");
+    STR(b.news_feed.reason, "laverdadonline.com: HTTP 500");
+    CHECK(b.news_feed.age == 120);
+    CHECK(parse("couch-board 1\nend\n", 0) == BP_OK && !b.n_news && !b.news_feed.state[0] && b.news_feed.age == -1);
+    k = snprintf(s, sizeof s, "couch-board 1\nnews=S|1|");
+    for (int i = 0; i < 200; i++) k += snprintf(s + k, sizeof s - k, "\xe2\x80\x9c");   /* 200 three-byte quotes */
+    snprintf(s + k, sizeof s - k, "\nend\n");
+    CHECK(parse(s, 0) == BP_OK && bounded() && strlen(b.news[0].title) == 333);   /* 111 whole code points in 335 bytes */
+    group("news: source|age|title, at most 8, no title skipped, the age or -1, the state; a long title cut whole", f0);
+
+    f0 = fails;
+    CHECK(net_quality(0, 0) == NQ_DOWN && net_quality(0, 9000000) == NQ_DOWN);
+    CHECK(net_quality(1, 750000) == NQ_OK && net_quality(1, NQ_SLOW_US - 1) == NQ_OK && net_quality(1, NQ_SLOW_US) == NQ_SLOW);
+    int dx, dy, seen[3][3] = {{0}}, far = 0, jump = 0, px = 0, py = 0;
+    for (long st = 0; st < AMBIENT_SHIFTS; st++) {
+        ambient_shift(st, &dx, &dy);
+        if (dx < -AMBIENT_PX || dx > AMBIENT_PX || dy < -AMBIENT_PX || dy > AMBIENT_PX) far++;
+        else seen[dx / AMBIENT_PX + 1][dy / AMBIENT_PX + 1]++;
+        if (st && abs(dx - px) + abs(dy - py) != AMBIENT_PX) jump++;   /* one 6-pixel move per step */
+        px = dx, py = dy;
+    }
+    int all = 1;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) all = all && seen[i][j] == 1;
+    CHECK(!far && !jump && all);
+    ambient_shift(0, &dx, &dy);
+    CHECK(!dx && !dy);
+    ambient_shift(AMBIENT_SHIFTS, &dx, &dy);
+    CHECK(!dx && !dy);
+    ambient_shift(-1, &dx, &dy);                     /* a negative step stays in the table */
+    CHECK(dx == AMBIENT_PX && dy == -AMBIENT_PX);
+    CHECK(ambient_page(0, 1) == 0 && ambient_page(1, 1) == 1 && ambient_page(2, 1) == 0 && ambient_page(1, 0) == 0);
+    CHECK(AMBIENT_SEC == 600 && AMBIENT_STEP_SEC == 60);
+    group("net_quality (slow from 3 s), the ambient shift (each of 9 places once, 6 px a step), the ambient page", f0);
 }
 
 static void fold(void)
@@ -460,6 +576,7 @@ int main(int argc, char **argv)
     char *w = read_file(argv[1], &wn);
     worker_reply(w, wn);
     rules();
+    extras();
     fold();
     http();
     clock_words_check();

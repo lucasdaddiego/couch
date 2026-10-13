@@ -2,13 +2,16 @@
  * (tools/hostcheck) compiles parse.c as it is. The Board reply (format
  * version 1: the design's section 4), the end line, the head of an HTTP
  * answer, the Board URL, the text of a field and its fold to ASCII, the
- * clock's date and words, an age in words, auto.txt. */
+ * clock's date and words, an age in words, auto.txt, the internet's class
+ * of a fetch, the ambient mode's shift and page. */
 #ifndef PARSE_H
 #define PARSE_H
 
 #define BOARD_MAX 4096               /* the reply's body, at most (the Worker's MAX_BYTES) */
 #define BOARD_USD 8                  /* rate lines kept, at most */
 #define BOARD_DAYS 3                 /* day lines kept, at most */
+#define BOARD_MONEY 4                /* money lines kept, at most (the Worker sends 3) */
+#define BOARD_NEWS 8                 /* news lines kept, at most (the Worker's NEWS_MAX) */
 
 typedef struct {
     char label[24], buy[16], sell[16], when[16];
@@ -17,6 +20,22 @@ typedef struct {
 typedef struct {
     char label[16], words[24], max[12], min[12], rain[12];
 } board_day;
+
+/* A money extra (since 2026-10-13): label|value|date|state|reason, state
+ * "ok", "stale" (the value and date are old: the reason says why) or "none"
+ * (value and date "-"). */
+typedef struct {
+    char label[48], value[24], when[16], state[8], reason[96];
+} board_money;
+
+/* A headline: source|age|title, the age in seconds at the Worker's now, -1
+ * for an item with no date. The Worker cuts a title to 110 code points: 336
+ * bytes hold 110 three-byte ones and the NUL. */
+typedef struct {
+    char source[32];
+    long age;
+    char title[336];
+} board_news;
 
 /* One upstream's state: "ok", "stale" or "none", "" when the reply had no
  * state line (Couch then treats it as ok). */
@@ -45,6 +64,19 @@ typedef struct {
     int n_day;
     board_day day[BOARD_DAYS];
     board_feed wx_feed;
+    /* since 2026-10-13, keys a Couch 0.1.0 skips: the money extras, the
+     * sky (wx_rain=rain|words or dry|words, wx_sun=rise|set, wx_moon=words)
+     * and the news; each absent from an older Worker's reply */
+    int n_money;
+    board_money money[BOARD_MONEY];
+    int has_rain, rain_wet;
+    char rain[64];
+    int has_sun;
+    char sunrise[8], sunset[8];
+    char moon[32];
+    int n_news;
+    board_news news[BOARD_NEWS];
+    board_feed news_feed;            /* state "" when the reply had no news_state: the Worker has no feeds */
 } board_data;
 
 enum { BP_OK, BP_NOT_BOARD, BP_VERSION, BP_CUT };
@@ -108,5 +140,28 @@ const char *net_err_words(int e, char *buf, int n);
 /* auto.txt's text: -1 for a start by hand (no file, blank or 0), 0 for text
  * that is not a number of seconds, else the seconds, 60 to 600. */
 int auto_parse(const char *s, int n);
+
+/* The internet as one Board fetch shows it: NQ_DOWN when the fetch got no
+ * answer (answered 0: DNS, the connect, the send or the recv failed),
+ * NQ_SLOW when the answer took NQ_SLOW_US or more, else NQ_OK. Round 1 on
+ * the console fetched the Board in 0.75 s; 3 s is four times that, and far
+ * under the 10 s socket timeouts. */
+enum { NQ_NONE, NQ_OK, NQ_SLOW, NQ_DOWN };
+#define NQ_SLOW_US 3000000LL
+int net_quality(int answered, long long total_us);
+
+/* The ambient mode (page.c): after AMBIENT_SEC with no button, the screen
+ * dims, and each AMBIENT_STEP_SEC after that the picture moves to the next
+ * of AMBIENT_SHIFTS offsets (at most AMBIENT_PX pixels from its place) and
+ * the page changes between the Board and the News. step counts the steps
+ * since the mode began (0 at its start). */
+#define AMBIENT_SEC 600
+#define AMBIENT_STEP_SEC 60
+#define AMBIENT_PX 6
+#define AMBIENT_SHIFTS 9
+void ambient_shift(long step, int *dx, int *dy);
+/* The page of a step: 0 the Board, 1 the News (odd steps, when the reply has
+ * headlines). */
+int ambient_page(long step, int has_news);
 
 #endif

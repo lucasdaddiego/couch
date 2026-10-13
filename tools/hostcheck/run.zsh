@@ -5,8 +5,10 @@
 # first test, line for line), so a change of the Worker's format shows here.
 # Two builds of tools/hostcheck/board_check.c: the host's cc at -O2 with
 # -Wall -Wextra -Werror, and the same with AddressSanitizer and
-# UndefinedBehaviorSanitizer, which also runs 20,000 mutated replies. Each
-# prints PASS or FAIL per group; the exit status is the number of failures.
+# UndefinedBehaviorSanitizer, which also runs 20,000 mutated replies; then
+# old_check.c with Couch 0.1.0's parse.c (git show bcf4243, read only)
+# against the same reply: an old Couch must keep its Board. Each prints PASS
+# or FAIL per group; the exit status is the number of failures.
 #   zsh tools/hostcheck/run.zsh
 H=${0:A:h}
 B=$H/build
@@ -45,6 +47,15 @@ if $CC -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize
     (( fails += rc ))
 else
     print "FAIL board_check_asan: does not build"; (( ++fails ))
+fi
+print -r -- "-- Couch 0.1.0's parser (source/parse.c at bcf4243, from git) against the same reply:"
+mkdir -p $B/old
+if git -C ${H:h:h} show bcf4243:couch/source/parse.c > $B/old/parse.c 2>/dev/null &&
+   git -C ${H:h:h} show bcf4243:couch/source/parse.h > $B/old/parse.h 2>/dev/null &&
+   $CC -O2 -std=c11 -Wall -Wextra -Werror -I$B/old $H/old_check.c $B/old/parse.c -o $B/old_check; then
+    $B/old_check $B/worker_reply.txt || (( fails += $? ))
+else
+    print "FAIL old_check: 0.1.0's parse.c not in git, or it does not build"; (( ++fails ))
 fi
 print "$fails failed"
 exit $fails

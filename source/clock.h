@@ -29,7 +29,8 @@ long clock_utc(void);                /* the console's clock, Unix seconds */
 void clock_words(char *buf, int n, long utc, int secs);
 /* The clock's source in words, for the Board and the Info screen. */
 void clock_source(char *buf, int n);
-/* The clock, the date and the source line at x, y; the y under them. */
-float clock_draw(float x, float y);
+/* The clock, the date and the source line at x, y, within w (the header's
+ * left part); the y under them. */
+float clock_draw(float x, float y, float w);
 
 #endif

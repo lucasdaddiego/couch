@@ -15,6 +15,8 @@
 #include <net/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/systime.h>
+#include <lv2/systime.h>
 #include <ps3gfx/ui.h>
 #include <ps3gfx/journal.h>
 #include "couch.h"
@@ -176,7 +178,9 @@ void http_get(const http_url *u, char *body, int max, http_result *r, volatile i
 {
     char req[400];
     in_addr_t ip;
+    s64 t0 = sysGetSystemTime();
     memset(r, 0, sizeof *r);
+    r->connect_us = -1;
     body[0] = 0;
     if (!*on) {
         r->step = H_STOPPED;
@@ -195,6 +199,7 @@ void http_get(const http_url *u, char *body, int max, http_result *r, volatile i
         r->step = s == -1 ? H_SOCKET : s == -2 ? H_CONNECT : H_STOPPED;
         return;
     }
+    r->connect_us = sysGetSystemTime() - t0;   /* the DNS lookup and the TCP connect */
     if (!*on) {                              /* the exit came during the connect: a shutdown before it may not end a connect */
         sock_close(s);
         r->step = H_STOPPED;
