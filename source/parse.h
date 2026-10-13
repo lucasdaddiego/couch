@@ -3,7 +3,10 @@
  * version 1: the design's section 4), the end line, the head of an HTTP
  * answer, the Board URL, the text of a field and its fold to ASCII, the
  * clock's date and words, an age in words, auto.txt, the internet's class
- * of a fetch, the ambient mode's shift and page. */
+ * of a fetch, the ambient mode's shift and page. Since 0.3.0 (the design of
+ * 2026-10-13, section 5): the new keys, the change chips and the series by
+ * label, the numbers in the Worker's LOCALE text, the sky's colours, the
+ * weather codes' icons, the wind's words. The sun and the moon: astro.h. */
 #ifndef PARSE_H
 #define PARSE_H
 
@@ -45,6 +48,35 @@ typedef struct {
     long age;                        /* seconds since the Worker got the data, -1 when absent */
 } board_feed;
 
+/* A change against the previous calendar day's close (design 5.1, since
+ * 0.3.0): usd_chg=label|dir|pct|abs|date and money_chg=... with the same
+ * fields. dir: CHG_UP, CHG_DOWN, CHG_FLAT (the chip's grey dash), CHG_NONE
+ * for another word (no chip). pct and abs are the Worker's LOCALE text with
+ * a sign ("+0,3%", "-3,20"), "-" when missing; when: the compared close's
+ * date ("12 Oct"). */
+enum { CHG_NONE, CHG_UP, CHG_DOWN, CHG_FLAT };
+typedef struct {
+    char label[48];
+    int dir;
+    char pct[16], abs[24], when[16];
+} board_chg;
+
+/* A 30-day series (design 5.1): spark=label|yyyy-mm-dd|v1 v2 ... the daily
+ * sells in whole pesos, oldest first, from the date given; "-" a missing
+ * day (v[i] -1). start_day: the first date as days since 1970-01-01, -1 when
+ * it is not a date. */
+#define BOARD_SPARKS 2               /* spark lines kept, at most (the Worker sends Blue's) */
+#define SPARK_MAX 31                 /* values kept per line, at most (the Worker sends 30) */
+typedef struct {
+    char label[24];
+    long start_day;
+    int n;
+    int v[SPARK_MAX];
+} board_spark;
+
+#define HOURS_MAX 12                 /* wx_hours' values per list */
+#define TEMP_NONE (-999)             /* a missing temperature (deg C can be below 0) */
+
 typedef struct {
     int version;                     /* the number on line 1 */
     long now;                        /* the Worker's clock, Unix seconds, 0 when absent */
@@ -77,6 +109,31 @@ typedef struct {
     int n_news;
     board_news news[BOARD_NEWS];
     board_feed news_feed;            /* state "" when the reply had no news_state: the Worker has no feeds */
+    /* since 0.3.0 (design 5.1), keys a Couch 0.1.0 or 0.2.0 skips. Numbers
+     * in the C form (a dot for decimals); "-" or a value out of range is
+     * missing: -1 (TEMP_NONE for a temperature). A repeated geo, wx_fx,
+     * wx_hours or days_fx line replaces the one before. */
+    int has_geo;                     /* geo=lat|lon */
+    double lat, lon;                 /* degrees, -90 to 90 and -180 to 180 */
+    int has_fx;                      /* wx_fx=code|cover|mm|dir|speed|gusts */
+    int fx_code;                     /* the WMO code now, 0 to 99 */
+    int fx_cover;                    /* the cloud cover %, 0 to 100 */
+    double fx_mm;                    /* the precipitation of the last hour, mm (0 to 1000) */
+    int fx_dir;                      /* where the wind comes from, degrees 0 to 359 */
+    int fx_speed, fx_gusts;          /* km/h, 0 to 500, whole */
+    int n_hours;                     /* wx_hours=start|12 temps|12 chances|12 codes: the temps' count */
+    int hours_start;                 /* the first hour (local), 0 to 23 */
+    int hour_temp[HOURS_MAX];        /* deg C whole, -90 to 70 */
+    int hour_pop[HOURS_MAX];         /* the chance of precipitation %, 0 to 100 */
+    int hour_code[HOURS_MAX];        /* WMO codes, 0 to 99 */
+    int n_day_code;                  /* days_fx=c1|c2|c3: the WMO code of each day line, in order */
+    int day_code[BOARD_DAYS];
+    int n_usd_chg;
+    board_chg usd_chg[BOARD_USD];    /* matched to a usd line by its label (board_chg_find) */
+    int n_money_chg;
+    board_chg money_chg[BOARD_MONEY];/* matched to a money line by its label */
+    int n_spark;
+    board_spark spark[BOARD_SPARKS]; /* matched to a usd line by its label (board_spark_find) */
 } board_data;
 
 enum { BP_OK, BP_NOT_BOARD, BP_VERSION, BP_CUT };
@@ -88,6 +145,62 @@ enum { BP_OK, BP_NOT_BOARD, BP_VERSION, BP_CUT };
  * keeps its order, lines after "end" are not read. fold: 1 when text_utf8
  * failed, so every text becomes ASCII (text_field). */
 int board_parse(const char *body, int n, int fold, board_data *b);
+
+/* The change line of a label (a usd or money line's label, compared as the
+ * parse wrote both), or NULL: no chip. money 0 searches usd_chg, 1
+ * money_chg. The first match counts. */
+const board_chg *board_chg_find(const board_data *b, int money, const char *label);
+/* The spark line of a usd label, or NULL. */
+const board_spark *board_spark_find(const board_data *b, const char *label);
+/* The lowest and the highest present value of a series (the "30 d: 1.540 to
+ * 1.565" words): the count of present values, 0 (and *lo, *hi untouched)
+ * when none. */
+int spark_range(const board_spark *s, int *lo, int *hi);
+
+/* A number in the Worker's LOCALE text (es-AR): an optional sign, the whole
+ * part with a '.' every three digits (or none), an optional ',' and 1 to 4
+ * decimals, an optional '%' ("1.540,00", "589", "+0,3%", "-3,20"). At most
+ * 12 digits. v: the value times 10^dec. plus and neg: the sign written. */
+typedef struct {
+    long long v;
+    int dec, pct, plus, neg;
+} board_num;
+/* 1 and *x for a number, 0 for anything else ("-", "", "1,2,3", "1.23"). */
+int num_parse(const char *s, board_num *x);
+/* x as the Worker writes it: the thousands '.', dec decimals after ',', the
+ * sign as parsed ("+0,0%" stays), the '%'. */
+void num_format(char *buf, int n, const board_num *x);
+/* The counting value between a (t 0) and b (t 1), t clamped to 0..1, with
+ * b's decimals, '%' and sign style: a value that counts to b ends as b. */
+void num_mix(const board_num *a, const board_num *b, double t, board_num *out);
+
+/* "06:24" or "6:24" as minutes after midnight, -1 for anything else. */
+int hm_parse(const char *s);
+
+/* The sky gradient's two colours (design 3.2), 0xRRGGBB: the stops at the
+ * middle of each elevation band of the table (-12 night and below, -9, -3,
+ * 3, 13, 20 and above), linear between them; then the cloud cover (0 to
+ * 100, -1 none) moves both toward grey by cover / 100 x 0.7; then wet (rain
+ * or a storm now: wmo_wet) darkens both by 25 %. */
+void sky_colors(double elev, int cover, int wet, unsigned *top, unsigned *horizon);
+
+/* A WMO weather code as a kind (design 1.11), WK_NONE for a missing code
+ * (below 0); a code with no row is WK_CLOUD. */
+enum { WK_NONE = -1, WK_CLEAR, WK_PARTLY, WK_CLOUD, WK_FOG, WK_RAIN, WK_SNOW, WK_STORM };
+int wmo_kind(int code);
+/* 1 for rain or a storm (the sky darkens, the hero shows streaks). */
+int wmo_wet(int code);
+/* The icon of a kind by day or night, as Couch's own ids (the drawing maps
+ * them to ps3gfx's IC_ ids): WI_NONE for WK_NONE. */
+enum { WI_NONE = -1, WI_SUN, WI_MOON_STARS, WI_CLOUD_SUN, WI_CLOUD_MOON, WI_CLOUD, WI_CLOUD_FOG, WI_CLOUD_RAIN, WI_CLOUD_SNOW,
+       WI_CLOUD_LIGHTNING };
+int wx_icon(int kind, int is_day);
+
+/* The 8-point compass word of a wind direction in degrees ("N", "NE", ...
+ * "NW"), "" when it is below 0. */
+const char *wind_compass(int deg);
+/* The dial's foot: "SE, gusts 22", "SE", "Gusts 22" or "". */
+void wind_words(char *buf, int n, int deg, int gusts);
 
 /* 1 when the body holds its end line with the line end ("\nend\n" or
  * "\nend\r\n"): the thread stops reading there, without the server's close. */
@@ -118,6 +231,8 @@ typedef struct {
     int year, month, day, wday, hour, min, sec;
 } civil_time;
 void civil_from_unix(long t, civil_time *c);
+/* The days from 1970-01-01 to a civil date (month 1 to 12). */
+long days_from_civil(long y, int m, int d);
 extern const char *const weekday_name[7];
 extern const char *const month_name[12];
 

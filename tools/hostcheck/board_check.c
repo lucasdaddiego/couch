@@ -1,16 +1,23 @@
-/* Couch's host check of source/parse.c (tools/hostcheck/run.zsh): the Board
- * parser against the Worker test's reply (argv[1], the expected text of
- * couch/worker/test/board.test.js's first test, which run.zsh extracts),
- * that reply cut at every byte, with CR LF, as version 2, with long fields,
- * at 4 KB, with too many lines, the states and the missing fields; the
- * fold; the HTTP head, the URL, the clock, the ages, auto.txt. With argv[2]
- * "fuzz", also 20,000 mutated replies (a sanitizer build: no crash, every
- * field ends inside its buffer). Prints PASS or FAIL per group; the exit
- * status is the number of failed checks. */
+/* Couch's host check of source/parse.c and source/astro.c
+ * (tools/hostcheck/run.zsh): the Board parser against the Worker test's
+ * reply (argv[1], the expected text of couch/worker/test/board.test.js's
+ * first test, which run.zsh extracts), that reply cut at every byte, with
+ * CR LF, as version 2, with long fields, at 4 KB, with too many lines, the
+ * states and the missing fields; the same reply with the keys of 0.3.0
+ * (argv[2]: geo, wx_fx, wx_hours, days_fx, usd_chg, money_chg, spark) and
+ * their rules; the fold; the HTTP head, the URL, the clock, the ages,
+ * auto.txt; the numbers, the sky's colours, the weather codes, the wind;
+ * the sun against Open-Meteo's sunrises and a table of NOAA's full
+ * algorithm, the moon against the 2026 eclipses. With argv[3] "fuzz", also
+ * 20,000 mutated replies of each (a sanitizer build: no crash, every field
+ * ends inside its buffer, every number in its range). Prints PASS or FAIL
+ * per group; the exit status is the number of failed checks. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "parse.h"
+#include "astro.h"
 
 static int fails;
 #define CHECK(c)                                                              \
@@ -28,10 +35,12 @@ static board_data b;
 
 static int parse(const char *s, int fold) { return board_parse(s, (int)strlen(s), fold, &b); }
 
-/* Every text field of b ends inside its buffer. */
+/* Every text field of b ends inside its buffer, every count and number of
+ * the keys of 0.3.0 is in its range or missing. */
 static int bounded(void)
 {
 #define IN(f) (memchr((f), 0, sizeof(f)) != NULL)
+#define RNG(v, lo, hi, none) ((v) == (none) || ((v) >= (lo) && (v) <= (hi)))
     int ok = IN(b.city) && IN(b.temp) && IN(b.feels) && IN(b.humidity) && IN(b.words) && IN(b.wind) && IN(b.wx_src) && IN(b.usd_feed.state) &&
              IN(b.usd_feed.reason) && IN(b.wx_feed.state) && IN(b.wx_feed.reason) && b.n_usd <= BOARD_USD && b.n_day <= BOARD_DAYS &&
              IN(b.rain) && IN(b.sunrise) && IN(b.sunset) && IN(b.moon) && IN(b.news_feed.state) && IN(b.news_feed.reason) &&
@@ -42,7 +51,25 @@ static int bounded(void)
     for (int i = 0; i < b.n_money; i++)
         ok = ok && IN(b.money[i].label) && IN(b.money[i].value) && IN(b.money[i].when) && IN(b.money[i].state) && IN(b.money[i].reason);
     for (int i = 0; i < b.n_news; i++) ok = ok && IN(b.news[i].source) && IN(b.news[i].title) && b.news[i].title[0];
+    ok = ok && (!b.has_geo || (b.lat >= -90 && b.lat <= 90 && b.lon >= -180 && b.lon <= 180));
+    ok = ok && RNG(b.fx_code, 0, 99, -1) && RNG(b.fx_cover, 0, 100, -1) && RNG(b.fx_dir, 0, 359, -1) && RNG(b.fx_speed, 0, 500, -1) &&
+         RNG(b.fx_gusts, 0, 500, -1) && (b.fx_mm == -1 || (b.fx_mm >= 0 && b.fx_mm <= 1000)) && RNG(b.hours_start, 0, 23, -1);
+    ok = ok && b.n_hours >= 0 && b.n_hours <= HOURS_MAX && b.n_day_code >= 0 && b.n_day_code <= BOARD_DAYS;
+    for (int i = 0; i < HOURS_MAX; i++)
+        ok = ok && RNG(b.hour_temp[i], -90, 70, TEMP_NONE) && RNG(b.hour_pop[i], 0, 100, -1) && RNG(b.hour_code[i], 0, 99, -1);
+    for (int i = 0; i < BOARD_DAYS; i++) ok = ok && RNG(b.day_code[i], 0, 99, -1);
+    ok = ok && b.n_usd_chg >= 0 && b.n_usd_chg <= BOARD_USD && b.n_money_chg >= 0 && b.n_money_chg <= BOARD_MONEY && b.n_spark >= 0 &&
+         b.n_spark <= BOARD_SPARKS;
+    for (int i = 0; i < b.n_usd_chg + b.n_money_chg; i++) {
+        const board_chg *g = i < b.n_usd_chg ? &b.usd_chg[i] : &b.money_chg[i - b.n_usd_chg];
+        ok = ok && IN(g->label) && IN(g->pct) && IN(g->abs) && IN(g->when) && g->dir >= CHG_NONE && g->dir <= CHG_FLAT;
+    }
+    for (int i = 0; i < b.n_spark; i++) {
+        ok = ok && IN(b.spark[i].label) && b.spark[i].n >= 0 && b.spark[i].n <= SPARK_MAX && b.spark[i].start_day >= -1;
+        for (int j = 0; j < SPARK_MAX; j++) ok = ok && RNG(b.spark[i].v[j], 0, 100000000, -1);
+    }
     return ok;
+#undef RNG
 #undef IN
 }
 
@@ -395,6 +422,487 @@ static void extras(void)
     group("net_quality (slow from 3 s), the ambient shift (each of 9 places once, 6 px a step), the ambient page", f0);
 }
 
+/* ---- the keys of 0.3.0 (design 5.1) ------------------------------------------------ */
+
+/* Each usd buy and sell, money value, change pct and abs of b: num_parse
+ * reads it and num_format writes the same text ("-" is not a number). */
+static int round_trips(void)
+{
+    const char *t[64];
+    int k = 0, bad = 0;
+    for (int i = 0; i < b.n_usd; i++) t[k++] = b.usd[i].buy, t[k++] = b.usd[i].sell;
+    for (int i = 0; i < b.n_money; i++) t[k++] = b.money[i].value;
+    for (int i = 0; i < b.n_usd_chg; i++) t[k++] = b.usd_chg[i].pct, t[k++] = b.usd_chg[i].abs;
+    for (int i = 0; i < b.n_money_chg; i++) t[k++] = b.money_chg[i].pct, t[k++] = b.money_chg[i].abs;
+    for (int i = 0; i < k; i++) {
+        board_num x;
+        char o[32];
+        if (!num_parse(t[i], &x)) {
+            bad++;
+            printf("  not a number: %s\n", t[i]);
+            continue;
+        }
+        num_format(o, sizeof o, &x);
+        if (strcmp(o, t[i])) bad++, printf("  %s came back as %s\n", t[i], o);
+    }
+    return k && !bad;
+}
+
+/* No key of 0.3.0 came. */
+static int none_new(void)
+{
+    int ok = !b.has_geo && !b.has_fx && b.fx_code == -1 && b.fx_cover == -1 && b.fx_mm == -1 && b.fx_dir == -1 && b.fx_speed == -1 &&
+             b.fx_gusts == -1 && !b.n_hours && b.hours_start == -1 && !b.n_day_code && !b.n_usd_chg && !b.n_money_chg && !b.n_spark;
+    for (int i = 0; i < BOARD_DAYS; i++) ok = ok && b.day_code[i] == -1;
+    return ok && !board_chg_find(&b, 0, "Blue") && !board_chg_find(&b, 1, "Riesgo pa\xc3\xads") && !board_spark_find(&b, "Blue");
+}
+
+static void new_reply(const char *w, int wn, const char *w2, int w2n)
+{
+    int f0 = fails;
+    CHECK(w2n <= BOARD_MAX);
+    CHECK(board_parse(w2, w2n, 0, &b) == BP_OK && board_has_end(w2, w2n));
+    CHECK(b.n_usd == 6 && b.n_day == 3 && b.n_money == 3 && b.n_news == 8 && b.has_wx && b.has_sun);   /* the old fields stay */
+    STR(b.usd[1].sell, "1.540,00");
+    STR(b.money[0].value, "589");
+    STR(b.moon, "Waxing crescent moon");
+    CHECK(b.has_geo && fabs(b.lat + 34.58) < 1e-9 && fabs(b.lon + 60.94) < 1e-9);
+    CHECK(b.has_fx && b.fx_code == 3 && b.fx_cover == 88 && fabs(b.fx_mm - 0.4) < 1e-9 && b.fx_dir == 135 && b.fx_speed == 10 && b.fx_gusts == 22);
+    CHECK(b.hours_start == 15 && b.n_hours == 12);
+    CHECK(b.hour_temp[0] == 19 && b.hour_temp[3] == 21 && b.hour_temp[11] == 12);
+    CHECK(b.hour_pop[0] == 10 && b.hour_pop[3] == 70 && b.hour_pop[11] == 0);
+    CHECK(b.hour_code[0] == 3 && b.hour_code[2] == 61 && b.hour_code[11] == 0);
+    CHECK(b.n_day_code == 3 && b.day_code[0] == 53 && b.day_code[1] == 3 && b.day_code[2] == 51);
+    CHECK(b.n_usd_chg == 6 && b.n_money_chg == 1);
+    int found = 0;
+    for (int i = 0; i < b.n_usd; i++) found += board_chg_find(&b, 0, b.usd[i].label) != NULL;
+    CHECK(found == 6);
+    const board_chg *g = board_chg_find(&b, 0, "Blue");
+    CHECK(g && g->dir == CHG_FLAT);
+    g = board_chg_find(&b, 0, "MEP");
+    CHECK(g && g->dir == CHG_UP && !strcmp(g->pct, "+0,3%") && !strcmp(g->abs, "+4,60") && !strcmp(g->when, "12 Oct"));
+    g = board_chg_find(&b, 0, "CCL");
+    CHECK(g && g->dir == CHG_DOWN && !strcmp(g->pct, "-0,2%") && !strcmp(g->abs, "-3,20"));
+    g = board_chg_find(&b, 1, b.money[0].label);
+    CHECK(g && g->dir == CHG_UP && !strcmp(g->pct, "+0,2%") && !strcmp(g->abs, "+1") && !strcmp(g->when, "9 Oct"));
+    CHECK(!board_chg_find(&b, 1, b.money[1].label) && !board_chg_find(&b, 0, b.money[0].label));   /* no line: no chip */
+    const board_spark *sp = board_spark_find(&b, "Blue");
+    int lo = 0, hi = 0;
+    CHECK(sp && sp->n == 30 && sp->v[0] == 1545 && sp->v[16] == 1565 && sp->v[29] == 1540 && sp->start_day == days_from_civil(2026, 9, 14));
+    CHECK(sp && spark_range(sp, &lo, &hi) == 30 && lo == 1540 && hi == 1565);
+    CHECK(!board_spark_find(&b, "Oficial"));
+    CHECK(round_trips());
+    CHECK(wmo_kind(b.fx_code) == WK_CLOUD && wx_icon(wmo_kind(b.day_code[0]), 1) == WI_CLOUD_RAIN && !wmo_wet(b.fx_code));
+    char ww[32];
+    wind_words(ww, sizeof ww, b.fx_dir, b.fx_gusts);
+    STR(ww, "SE, gusts 22");
+    CHECK(bounded());
+    printf("  %d bytes, %d more than the Worker test's reply\n", w2n, w2n - wn);
+    group("the reply with the keys of 0.3.0: every new field, the old ones as before, the chips and the series by label", f0);
+
+    f0 = fails;
+    CHECK(board_parse(w2, w2n, 1, &b) == BP_OK);
+    STR(b.money[0].label, "Riesgo pais");
+    g = board_chg_find(&b, 1, b.money[0].label);
+    CHECK(g && g->dir == CHG_UP && !strcmp(g->label, "Riesgo pais"));
+    CHECK(board_spark_find(&b, "Blue") && b.n_hours == 12 && b.has_geo);
+    group("the same folded to ASCII: the money_chg label still matches its money line", f0);
+
+    f0 = fails;
+    char *crlf = malloc((size_t)w2n * 2 + 1);
+    int k = 0;
+    for (int i = 0; i < w2n; i++) {
+        if (w2[i] == '\n') crlf[k++] = '\r';
+        crlf[k++] = w2[i];
+    }
+    crlf[k] = 0;
+    CHECK(board_parse(crlf, k, 0, &b) == BP_OK && b.n_usd_chg == 6 && b.n_spark == 1 && b.spark[0].n == 30 && b.n_hours == 12 &&
+          b.hour_code[11] == 0 && b.n_day_code == 3 && b.day_code[2] == 51 && b.fx_gusts == 22 && b.has_geo);
+    CHECK(board_spark_find(&b, "Blue") && board_spark_find(&b, "Blue")->v[29] == 1540);
+    STR(b.money_chg[0].when, "9 Oct");
+    free(crlf);
+    group("CR LF line ends with the keys of 0.3.0", f0);
+
+    f0 = fails;
+    int bad_rc = 0, bad_end = 0, bad_bounds = 0;
+    for (int n = 0; n < w2n; n++) {
+        int rc = board_parse(w2, n, 0, &b);
+        if (n == w2n - 1 ? rc != BP_OK : rc == BP_OK) bad_rc++;
+        if (board_has_end(w2, n)) bad_end++;
+        if (!bounded()) bad_bounds++;
+    }
+    CHECK(bad_rc == 0 && bad_end == 0 && bad_bounds == 0);
+    printf("  %d cuts\n", w2n);
+    group("the reply with the keys of 0.3.0 cut at every byte: BP_CUT until the end line, every field bounded", f0);
+
+    f0 = fails;
+    CHECK(board_parse(w, wn, 0, &b) == BP_OK && none_new() && b.n_usd == 6);
+    CHECK(parse("couch-board 1\nnow=1791614218\noffset=-10800\ncity=Buenos Aires\nusd=Oficial|1.485,00|1.535,00|Fri 15:00\n"
+                "usd_age=42\nusd_state=ok\nwx_now=11\xc2\xb0|10\xc2\xb0|92%|Overcast|9 km/h|night|Open-Meteo\n"
+                "day=Today|Rain showers|16\xc2\xb0|11\xc2\xb0|96%\nwx_age=310\nwx_state=ok\nend\n", 0) == BP_OK);
+    CHECK(none_new() && b.n_usd == 1 && b.n_day == 1 && !b.is_day && round_trips());
+    group("the replies of today's Worker and of 0.1.0's time: no key of 0.3.0, every new field missing", f0);
+}
+
+static void new_rules(void)
+{
+    int f0 = fails;
+    CHECK(parse("couch-board 1\ngeo=-34.58|-60.94\nend\n", 0) == BP_OK && b.has_geo);
+    static const char *const bad_geo[] = {"geo=-91|0",  "geo=0|181",    "geo=x|1",     "geo=-34.5",  "geo=1.1234567|2", "geo=1|x|3",
+                                          "geo=-|-",    "geo=1e3|2",    "geo=0x1|2",   "geo=|",      "geo=1234567890|1", "geo=.|1"};
+    for (unsigned i = 0; i < sizeof bad_geo / sizeof bad_geo[0]; i++) {
+        char s[96];
+        snprintf(s, sizeof s, "couch-board 1\ngeo=1|2\n%s\nend\n", bad_geo[i]);
+        CHECK(parse(s, 0) == BP_OK && !b.has_geo && b.lat == 0 && b.lon == 0);   /* a bad line replaces a good one */
+    }
+    CHECK(parse("couch-board 1\ngeo= 90 | -180 \nend\n", 0) == BP_OK && b.has_geo && b.lat == 90 && b.lon == -180);
+    CHECK(parse("couch-board 1\ngeo=-34.5|-60.25|35\nend\n", 0) == BP_OK && b.has_geo && b.lat == -34.5 && b.lon == -60.25);   /* a 3rd field dropped */
+    group("geo: lat|lon in the C form, in range, else no place; a 3rd field dropped; a repeated line replaces", f0);
+
+    f0 = fails;
+    CHECK(parse("couch-board 1\nwx_fx=-|-|-|-|-|-\nend\n", 0) == BP_OK && b.has_fx && b.fx_code == -1 && b.fx_cover == -1 && b.fx_mm == -1 &&
+          b.fx_dir == -1 && b.fx_speed == -1 && b.fx_gusts == -1);
+    CHECK(parse("couch-board 1\nwx_fx=3.5|88.4|0|360|10.6|x\nend\n", 0) == BP_OK && b.fx_code == -1 && b.fx_cover == 88 && b.fx_mm == 0 &&
+          b.fx_dir == 0 && b.fx_speed == 11 && b.fx_gusts == -1);
+    CHECK(parse("couch-board 1\nwx_fx=0000000003|000000088\nend\n", 0) == BP_OK && b.fx_code == -1 && b.fx_cover == 88);   /* 10 digits, 9 */
+    CHECK(parse("couch-board 1\nwx_fx=61\nend\n", 0) == BP_OK && b.fx_code == 61 && b.fx_cover == -1 && b.fx_gusts == -1);
+    CHECK(parse("couch-board 1\nwx_fx=100|101|1001|361|501|-1\nend\n", 0) == BP_OK && b.fx_code == -1 && b.fx_cover == -1 && b.fx_mm == -1 &&
+          b.fx_dir == -1 && b.fx_speed == -1 && b.fx_gusts == -1);
+    CHECK(parse("couch-board 1\nwx_fx=95|100|12.5|359.4|80|120|extra\nwx_fx=0\nend\n", 0) == BP_OK && b.fx_code == 0 && b.fx_cover == -1);
+    CHECK(parse("couch-board 1\nwx_fx=95|100|12.5|359.4|80|120|extra\nend\n", 0) == BP_OK && b.fx_code == 95 && b.fx_cover == 100 &&
+          fabs(b.fx_mm - 12.5) < 1e-9 && b.fx_dir == 359 && b.fx_speed == 80 && b.fx_gusts == 120);
+    group("wx_fx: code|cover|mm|dir|speed|gusts, a code whole, the rest rounded, out of range or \"-\" missing (-1)", f0);
+
+    f0 = fails;
+    CHECK(parse("couch-board 1\nwx_hours=23|5  -3 - x|10|61 x\nend\n", 0) == BP_OK && b.hours_start == 23 && b.n_hours == 4);
+    CHECK(b.hour_temp[0] == 5 && b.hour_temp[1] == -3 && b.hour_temp[2] == TEMP_NONE && b.hour_temp[3] == TEMP_NONE && b.hour_temp[11] == TEMP_NONE);
+    CHECK(b.hour_pop[0] == 10 && b.hour_pop[1] == -1 && b.hour_code[0] == 61 && b.hour_code[1] == -1);
+    CHECK(parse("couch-board 1\nwx_hours=24|-90 -91 70 71 -0.4 19.5\nend\n", 0) == BP_OK && b.hours_start == -1 && b.n_hours == 6);
+    CHECK(b.hour_temp[0] == -90 && b.hour_temp[1] == TEMP_NONE && b.hour_temp[2] == 70 && b.hour_temp[3] == TEMP_NONE && b.hour_temp[4] == 0 &&
+          b.hour_temp[5] == 20 && b.hour_pop[0] == -1 && b.hour_code[0] == -1);
+    static char s[8192];
+    int k = snprintf(s, sizeof s, "couch-board 1\nwx_hours=0|");
+    for (int i = 0; i < 14; i++) k += snprintf(s + k, sizeof s - k, "%d ", i);
+    snprintf(s + k, sizeof s - k, "|1 2 3|4 5 6\nwx_hours=7|1\nend\n");
+    CHECK(parse(s, 0) == BP_OK && b.hours_start == 7 && b.n_hours == 1 && b.hour_temp[0] == 1 && b.hour_temp[1] == TEMP_NONE &&
+          b.hour_pop[0] == -1 && b.hour_code[2] == -1);   /* the second line replaces the first whole */
+    CHECK(parse("couch-board 1\nwx_hours=0|0 1 2 3 4 5 6 7 8 9 10 11 12 13\nend\n", 0) == BP_OK && b.n_hours == HOURS_MAX && b.hour_temp[11] == 11);
+    group("wx_hours: start|temps|chances|codes, at most 12 each, runs of spaces, a bad word missing, a repeated line replaces", f0);
+
+    f0 = fails;
+    CHECK(parse("couch-board 1\ndays_fx=53|-|99|1\nend\n", 0) == BP_OK && b.n_day_code == 3 && b.day_code[0] == 53 && b.day_code[1] == -1 &&
+          b.day_code[2] == 99);
+    CHECK(parse("couch-board 1\ndays_fx=53|3|51\ndays_fx=1\nend\n", 0) == BP_OK && b.n_day_code == 1 && b.day_code[0] == 1 && b.day_code[1] == -1);
+    CHECK(parse("couch-board 1\ndays_fx=5.0|100|-1\nend\n", 0) == BP_OK && b.day_code[0] == -1 && b.day_code[1] == -1 && b.day_code[2] == -1);
+    group("days_fx: a WMO code per day line, at most 3, a bad code missing", f0);
+
+    f0 = fails;
+    k = snprintf(s, sizeof s, "couch-board 1\n");
+    for (int i = 0; i < 10; i++) k += snprintf(s + k, sizeof s - k, "usd_chg=R%d|%s|+%d,0%%|+%d|12 Oct\n", i, i % 2 ? "up" : "down", i, i);
+    for (int i = 0; i < 6; i++) k += snprintf(s + k, sizeof s - k, "money_chg=M%d|flat|0,0%%|0|9 Oct\n", i);
+    snprintf(s + k, sizeof s - k, "usd_chg=R0|up|+9,9%%|+9|1 Oct\nend\n");
+    CHECK(parse(s, 0) == BP_OK && b.n_usd_chg == BOARD_USD && b.n_money_chg == BOARD_MONEY && bounded());
+    CHECK(board_chg_find(&b, 0, "R7") && !board_chg_find(&b, 0, "R8") && board_chg_find(&b, 1, "M3") && !board_chg_find(&b, 1, "M4"));
+    CHECK(board_chg_find(&b, 0, "R0")->dir == CHG_DOWN && board_chg_find(&b, 1, "M0")->dir == CHG_FLAT);   /* the first match counts */
+    CHECK(parse("couch-board 1\nusd_chg=A|UP\nusd_chg=B|sideways|1|2|3\nusd_chg=C\nusd_chg=D|flat|\nend\n", 0) == BP_OK && b.n_usd_chg == 4);
+    CHECK(b.usd_chg[0].dir == CHG_NONE && b.usd_chg[1].dir == CHG_NONE && b.usd_chg[2].dir == CHG_NONE && b.usd_chg[3].dir == CHG_FLAT);
+    STR(b.usd_chg[0].pct, "-");
+    STR(b.usd_chg[2].when, "-");
+    STR(b.usd_chg[3].pct, "-");
+    CHECK(!board_chg_find(&b, 0, "E") && !board_chg_find(&b, 1, "A"));
+    CHECK(parse("couch-board 1\nusd=D\xc3\xb3lar de una casa con un nombre largo|1|2|3\nusd_chg=D\xc3\xb3lar de una casa con un nombre largo|up|+1%|+1|1 Oct\n"
+                "spark=D\xc3\xb3lar de una casa con un nombre largo|2026-09-14|1\nend\n", 0) == BP_OK);
+    CHECK(strlen(b.usd[0].label) < 24 && board_chg_find(&b, 0, b.usd[0].label) && board_spark_find(&b, b.usd[0].label));   /* cut alike */
+    group("usd_chg and money_chg: label|dir|pct|abs|date, at most 8 and 4, up/down/flat else no chip, missing fields \"-\"", f0);
+
+    f0 = fails;
+    CHECK(parse("couch-board 1\nspark=Blue|2026-02-30|1 - 3 1.6 x -5\nend\n", 0) == BP_OK && b.n_spark == 1);
+    CHECK(b.spark[0].start_day == -1 && b.spark[0].n == 6 && b.spark[0].v[0] == 1 && b.spark[0].v[1] == -1 && b.spark[0].v[2] == 3 &&
+          b.spark[0].v[3] == 2 && b.spark[0].v[4] == -1 && b.spark[0].v[5] == -1 && b.spark[0].v[6] == -1);
+    int lo = 0, hi = 0;
+    CHECK(spark_range(&b.spark[0], &lo, &hi) == 3 && lo == 1 && hi == 3);
+    k = snprintf(s, sizeof s, "couch-board 1\nspark=A|2024-02-29|");
+    for (int i = 0; i < 40; i++) k += snprintf(s + k, sizeof s - k, "%d ", 1000 + i);
+    snprintf(s + k, sizeof s - k, "\nspark=B|2023-02-29|- -\nspark=C|x|1\nspark=D\nend\n");
+    CHECK(parse(s, 0) == BP_OK && b.n_spark == BOARD_SPARKS && bounded());
+    CHECK(b.spark[0].n == SPARK_MAX && b.spark[0].v[SPARK_MAX - 1] == 1000 + SPARK_MAX - 1 && b.spark[0].start_day == days_from_civil(2024, 2, 29));
+    CHECK(b.spark[1].start_day == -1 && b.spark[1].n == 2 && spark_range(&b.spark[1], &lo, &hi) == 0 && !board_spark_find(&b, "C"));
+    CHECK(parse("couch-board 1\nspark=D\nend\n", 0) == BP_OK && b.spark[0].n == 0 && b.spark[0].start_day == -1);
+    civil_time ct;
+    civil_from_unix(days_from_civil(2026, 9, 14) * 86400L, &ct);
+    CHECK(ct.year == 2026 && ct.month == 9 && ct.day == 14 && days_from_civil(1970, 1, 1) == 0 && days_from_civil(2000, 3, 1) == 11017);
+    group("spark: label|date|values, at most 2 lines of 31, \"-\" or a bad word missing, a bad date -1; spark_range", f0);
+
+    f0 = fails;
+    CHECK(parse("couch-board 1\nspark=Blue|2026-09-14|1540\nusd_chg=Blue|up|+1%|+1|12 Oct\nwx_hours=1|2\ngeo=1|2\nwx_fx=3\ndays_fx=4\n"
+                "usd=Blue|1|2|3\nend\n", 0) == BP_OK && b.n_usd == 1 && b.n_spark == 1 && b.n_usd_chg == 1 && b.has_geo && b.has_fx &&
+          b.n_hours == 1 && b.day_code[0] == 4);
+    CHECK(parse("couch-board 1\nend\ngeo=1|2\nspark=Blue|2026-09-14|1\n", 0) == BP_OK && none_new());
+    group("the keys of 0.3.0 in any order, none after the end line", f0);
+}
+
+static void numbers(void)
+{
+    int f0 = fails;
+    static const char *const rt[] = {"1.485,00", "1.540,00", "1.995,50", "589",  "1,7%", "19,25%", "+0,3%", "-0,2%",  "0,00",
+                                     "+4,60",    "-3,20",    "+1",       "0,0%", "-0,0%", "+0,0%", "0",     "1.234.567,8901", "999.999.999.999"};
+    char o[40];
+    board_num x, y, z;
+    for (unsigned i = 0; i < sizeof rt / sizeof rt[0]; i++) {
+        CHECK(num_parse(rt[i], &x));
+        num_format(o, sizeof o, &x);
+        STR(o, rt[i]);
+    }
+    CHECK(num_parse("1.540,00", &x) && x.v == 154000 && x.dec == 2 && !x.pct && !x.plus && !x.neg);
+    CHECK(num_parse("-3,20", &x) && x.v == -320 && x.dec == 2 && x.neg);
+    CHECK(num_parse("19,25%", &x) && x.v == 1925 && x.pct);
+    CHECK(num_parse("1540,00", &x) && x.v == 154000);
+    num_format(o, sizeof o, &x);
+    STR(o, "1.540,00");                              /* the Worker groups from 1.000 */
+    static const char *const bad[] = {"-",  "",        "1,2,3", "1.23",  "1.2345", "12.34,5", "1234.567",   ",5",   "1,",   "1,23456", "1 000",
+                                      "abc", "+-1",    "1%%",   "%",     "+",      "1.540,00 ", "1234567890123", "1.234.567.890.123", ".540"};
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) CHECK(!num_parse(bad[i], &x));
+    group("num_parse and num_format: every value form of the Worker, back to the same text; not numbers", f0);
+
+    f0 = fails;
+    num_parse("1.540,00", &x);
+    num_parse("1.565,00", &y);
+#define MIX(a, bb, t, want)                \
+    do {                                   \
+        num_mix((a), (bb), (t), &z);       \
+        num_format(o, sizeof o, &z);       \
+        STR(o, (want));                    \
+    } while (0)
+    MIX(&x, &y, 0, "1.540,00");
+    MIX(&x, &y, 0.5, "1.552,50");
+    MIX(&x, &y, 1, "1.565,00");
+    MIX(&x, &y, 2, "1.565,00");
+    MIX(&x, &y, -1, "1.540,00");
+    MIX(&x, &y, NAN, "1.565,00");
+    num_parse("589", &x);
+    num_parse("601,5", &y);
+    MIX(&x, &y, 0.5, "595,3");
+    num_parse("1,7%", &x);
+    num_parse("2,25%", &y);
+    MIX(&x, &y, 0, "1,70%");
+    num_parse("-0,3%", &x);
+    num_parse("+0,2%", &y);
+    MIX(&x, &y, 0, "-0,3%");
+    MIX(&x, &y, 0.6, "+0,0%");
+    MIX(&x, &y, 1, "+0,2%");
+    num_parse("1.540,55", &x);
+    num_parse("1.600", &y);
+    MIX(&x, &y, 0, "1.541");
+    num_parse("-0,0%", &y);
+    MIX(&y, &y, 1, "-0,0%");
+#undef MIX
+    group("num_mix: the counting value, the end value's decimals, '%' and sign", f0);
+
+    f0 = fails;
+    static const struct { const char *s; int m; } hm[] = {{"06:24", 384}, {"6:24", 384}, {"19:16", 1156}, {"00:00", 0},  {"23:59", 1439},
+                                                         {"24:00", -1},  {"06:60", -1}, {"06:2", -1},    {"-", -1},     {"", -1},
+                                                         {"006:24", -1}, {"06:24 ", -1}, {":24", -1},    {"6h24", -1}};
+    for (unsigned i = 0; i < sizeof hm / sizeof hm[0]; i++) CHECK(hm_parse(hm[i].s) == hm[i].m);
+    group("hm_parse", f0);
+}
+
+static void sky(void)
+{
+    int f0 = fails;
+    static const struct { double e; unsigned top, hor; } st[] = {{-12, 0x050a18, 0x0d1a33}, {-9, 0x0a1530, 0x1f2d55}, {-3, 0x1b2550, 0xc8644a},
+                                                                 {3, 0x3a5fa0, 0xf2a65a},   {13, 0x2f6fc0, 0x8fc3ec}, {20, 0x2a66c4, 0x9fd0f0},
+                                                                 {-40, 0x050a18, 0x0d1a33}, {NAN, 0x050a18, 0x0d1a33}, {90, 0x2a66c4, 0x9fd0f0},
+                                                                 {0, 0x2b4278, 0xdd8552}};
+    unsigned t, h, t2, h2;
+    for (unsigned i = 0; i < sizeof st / sizeof st[0]; i++) {
+        sky_colors(st[i].e, -1, 0, &t, &h);
+        CHECK(t == st[i].top && h == st[i].hor);
+        sky_colors(st[i].e, 0, 0, &t2, &h2);
+        CHECK(t2 == t && h2 == h);
+    }
+    sky_colors(-20, 100, 0, &t, &h);
+    CHECK(t == 0x434e61);                            /* night toward 5d6b80 by 0.7 */
+    sky_colors(-20, 0, 1, &t, &h);
+    CHECK(t == 0x040812);                            /* night darkened by 25 % */
+    sky_colors(30, 100, 1, &t, &h);
+    sky_colors(30, 100, 0, &t2, &h2);
+    CHECK(t < t2 && h < h2);
+    int mono = 1;
+    unsigned pt = 0;
+    for (double e = -12; e <= 20; e += 0.25) {         /* the top's blue never falls on the way up */
+        sky_colors(e, -1, 0, &t, &h);
+        if ((t & 0xff) < (pt & 0xff)) mono = 0;
+        pt = t;
+    }
+    CHECK(mono);
+    group("sky_colors: the stops, clamped, between, the cover's grey, the rain's 25 %", f0);
+
+    f0 = fails;
+    int bad = 0;
+    for (int c = -1; c <= 99; c++) {
+        int want = c < 0 ? WK_NONE : c <= 1 ? WK_CLEAR : c == 2 ? WK_PARTLY : c == 3 ? WK_CLOUD : (c == 45 || c == 48) ? WK_FOG
+                 : ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) ? WK_RAIN : ((c >= 71 && c <= 77) || c == 85 || c == 86) ? WK_SNOW
+                 : c >= 95 ? WK_STORM : WK_CLOUD;
+        if (wmo_kind(c) != want) bad++;
+        if (wmo_wet(c) != (want == WK_RAIN || want == WK_STORM)) bad++;
+    }
+    CHECK(!bad);
+    CHECK(wx_icon(WK_CLEAR, 1) == WI_SUN && wx_icon(WK_CLEAR, 0) == WI_MOON_STARS && wx_icon(WK_PARTLY, 1) == WI_CLOUD_SUN &&
+          wx_icon(WK_PARTLY, 0) == WI_CLOUD_MOON && wx_icon(WK_CLOUD, 0) == WI_CLOUD && wx_icon(WK_FOG, 1) == WI_CLOUD_FOG &&
+          wx_icon(WK_RAIN, 0) == WI_CLOUD_RAIN && wx_icon(WK_SNOW, 1) == WI_CLOUD_SNOW && wx_icon(WK_STORM, 0) == WI_CLOUD_LIGHTNING &&
+          wx_icon(WK_NONE, 1) == WI_NONE && wmo_kind(100) == WK_CLOUD);
+    group("wmo_kind, wmo_wet and wx_icon: the design's table for every code", f0);
+
+    f0 = fails;
+    static const struct { int d; const char *w; } cp[] = {{0, "N"},  {22, "N"},   {23, "NE"}, {67, "NE"}, {68, "E"},  {135, "SE"},
+                                                         {180, "S"}, {225, "SW"}, {270, "W"}, {315, "NW"}, {337, "NW"}, {338, "N"},
+                                                         {359, "N"}, {720, "N"},  {-1, ""}};
+    for (unsigned i = 0; i < sizeof cp / sizeof cp[0]; i++) STR(wind_compass(cp[i].d), cp[i].w);
+    char w[32];
+    wind_words(w, sizeof w, 135, 22);
+    STR(w, "SE, gusts 22");
+    wind_words(w, sizeof w, 135, -1);
+    STR(w, "SE");
+    wind_words(w, sizeof w, -1, 30);
+    STR(w, "Gusts 30");
+    wind_words(w, sizeof w, -1, -1);
+    STR(w, "");
+    group("wind_compass and wind_words", f0);
+}
+
+/* the separation in degrees of two places in the sky */
+static double sep(double e1, double a1, double e2, double a2)
+{
+    const double r = 3.14159265358979323846 / 180;
+    double c = sin(e1 * r) * sin(e2 * r) + cos(e1 * r) * cos(e2 * r) * cos((a1 - a2) * r);
+    return acos(c > 1 ? 1 : c < -1 ? -1 : c) / r;
+}
+
+static double adiff(double a, double b2)
+{
+    double d = fmod(a - b2, 360.0);
+    if (d < 0) d += 360.0;
+    return d > 180 ? 360 - d : d;
+}
+
+static void sun_check(void)
+{
+    int f0 = fails;
+    /* Open-Meteo's sunrises and sunsets at Junin (worker/test/fixtures/meteo_junin.json, lat -34.55, lon
+     * -60.94, UTC-3, whole minutes): the sun's centre is at -0.833 deg (refraction and the half disc). */
+    static const long ev[8] = {1791883440L, 1791929760L, 1791969720L, 1792016220L, 1792056060L, 1792102680L, 1792142400L, 1792189080L};
+    double worst = 0;
+    for (int i = 0; i < 8; i++) {
+        double e, a;
+        sun_pos(ev[i], -34.55, -60.94, &e, &a);
+        if (fabs(e + 0.833) > worst) worst = fabs(e + 0.833);
+        CHECK(fabs(e + 0.833) < 0.5);
+        CHECK(i % 2 ? a > 254 && a < 265 : a > 95 && a < 106);   /* October: the sun rises south of east */
+    }
+    printf("  the sunrises and sunsets: at most %.2f deg from -0.833\n", worst);
+    /* NOAA's full algorithm (after Meeus), computed apart, at Junin (the Worker's LAT and LON): the times in
+     * UTC, the elevation, the azimuth. The short formula is up to 0.4 deg off it (0.38 at the equinox). */
+    static const struct { long t; double e, a; } pos[] = {
+        {1791913620L, 52.18, 307.85},   /* 2026-10-13 14:47 local, the Worker test's now */
+        {1791892800L, 31.07, 77.24},    /* 2026-10-13 09:00 */
+        {1797868800L, 78.85, 2.28},     /* 2026-12-21 13:00, the solstice: high and north */
+        {1782057000L, 31.86, 4.22},     /* 2026-06-21 12:50 */
+        {1774021500L, 54.86, 11.41},    /* 2026-03-20 12:45, the equinox */
+        {1791943800L, -41.22, 213.74},  /* 2026-10-13 23:10 */
+        {1798837200L, 26.18, 259.10}};  /* 2027-01-01 18:00 */
+    worst = 0;
+    double worst_a = 0;
+    for (unsigned i = 0; i < sizeof pos / sizeof pos[0]; i++) {
+        double e, a;
+        sun_pos(pos[i].t, -34.58, -60.94, &e, &a);
+        double da = adiff(a, pos[i].a) * cos(pos[i].e * 3.14159265358979323846 / 180);   /* an azimuth step on the sky */
+        CHECK(fabs(e - pos[i].e) < 0.5 && da < 0.5);
+        if (fabs(e - pos[i].e) > worst) worst = fabs(e - pos[i].e);
+        if (da > worst_a) worst_a = da;
+    }
+    printf("  the table: at most %.2f deg in elevation, %.2f deg along the horizon\n", worst, worst_a);
+    group("sun_pos: Open-Meteo's sunrises and sunsets at Junin, a table of NOAA's full algorithm", f0);
+
+    f0 = fails;
+    double fr;
+    long nx;
+    CHECK(sun_arc(1791913620L, -10800, 384, 1156, &fr, &nx) == 1 && fabs(fr - 503.0 / 772) < 1e-9 && nx == 269 * 60);   /* 14:47 */
+    CHECK(sun_arc(1791943800L, -10800, 384, 1156, &fr, &nx) == 0 && fabs(fr - 234.0 / 668) < 1e-9 && nx == 434 * 60);   /* 23:10 */
+    CHECK(sun_arc(1791871200L, -10800, 384, 1156, &fr, &nx) == 0 && fabs(fr - 464.0 / 668) < 1e-9 && nx == 204 * 60);   /* 03:00 */
+    CHECK(sun_arc(1791883440L, -10800, 384, 1156, &fr, &nx) == 1 && fr == 0 && nx == 772 * 60);                          /* the rise */
+    CHECK(sun_arc(1791929760L, -10800, 384, 1156, &fr, &nx) == 0 && fr == 0 && nx == 668 * 60);                          /* the set */
+    CHECK(sun_arc(1791913620L, -10800, -1, 1156, &fr, &nx) == -1 && sun_arc(1791913620L, -10800, 600, 600, &fr, &nx) == -1 &&
+          sun_arc(1791913620L, -10800, 384, 1440, &fr, &nx) == -1 && fr == 0 && nx == 0);
+    CHECK(sun_arc(-100, 0, 384, 1156, &fr, &nx) == 0);   /* before 1970: the local day still wraps */
+    char s[32];
+    age_words(s, sizeof s, 269 * 60);
+    STR(s, "4 h 29 min");
+    group("sun_arc: the day's and the night's fraction, the time to the set or the rise, no data", f0);
+}
+
+static void moon_check(const char *w, int wn)
+{
+    int f0 = fails;
+    CHECK(fabs(moon_age(MOON_NEW_2000)) < 1e-9 && fabs(moon_age(MOON_NEW_2000 + 86400) - 1) < 1e-9);
+    CHECK(fabs(moon_age(MOON_NEW_2000 - 86400) - (MOON_SYNODIC - 1)) < 1e-6);
+    CHECK(moon_phase(0) == 0 && moon_phase(MOON_SYNODIC / 2) == 4 && moon_phase(MOON_SYNODIC - 0.1) == 0 && moon_phase(1.84) == 0 &&
+          moon_phase(1.86) == 1);
+    CHECK(fabs(moon_lit(0)) < 1e-12 && fabs(moon_lit(MOON_SYNODIC / 2) - 1) < 1e-12 && fabs(moon_lit(MOON_SYNODIC / 4) - 0.5) < 1e-12);
+    /* the Worker's words for the reply's now: the same formula */
+    CHECK(board_parse(w, wn, 0, &b) == BP_OK);
+    double age = moon_age(b.now);
+    int p = moon_phase(age);
+    char word[40];
+    snprintf(word, sizeof word, "%s%s", moon_phase_name[p], strstr(moon_phase_name[p], "moon") ? "" : " moon");
+    STR(word, b.moon);
+    CHECK(p == 1 && fabs(age - 2.3563) < 1e-3 && fabs(moon_lit(age) - 0.0615) < 1e-3);
+    int full;
+    long t = moon_next(1791913620L, &full);
+    CHECK(full && labs(t - 1792985754L) <= 1);
+    char s[32];
+    moon_next_words(s, sizeof s, 1791913620L, -10800);
+    STR(s, "Full moon 26 Oct");
+    moon_next_words(s, sizeof s, 1792987920L, -10800);
+    STR(s, "New moon 9 Nov");
+    group("moon_age, moon_phase, moon_lit, moon_next: the Worker's formula and words", f0);
+
+    f0 = fails;
+    /* The 2026 new and full moons, UTC (the four eclipses, and October's two). At a new moon the moon's ecliptic
+     * longitude is the sun's, at a full moon the sun's + 180; at an eclipse the moon is near the ecliptic. */
+    static const struct { long t; int full, eclipse; } ph[] = {
+        {1771329660L, 0, 1},   /* 2026-02-17 12:01, the annular eclipse */
+        {1772537580L, 1, 1},   /* 2026-03-03 11:33, the total lunar eclipse */
+        {1786556760L, 0, 1},   /* 2026-08-12 17:46, the total eclipse */
+        {1787890380L, 1, 1},   /* 2026-08-28 04:13, the partial lunar eclipse */
+        {1791647400L, 0, 0},   /* 2026-10-10 15:50 */
+        {1792987920L, 1, 0}};  /* 2026-10-26 04:12 */
+    const double r = 3.14159265358979323846 / 180;
+    double wl = 0, wa = 0, ws = 0;
+    for (unsigned i = 0; i < sizeof ph / sizeof ph[0]; i++) {
+        double l, bt, par, n = ((double)ph[i].t - 946728000.0) / 86400.0;
+        double g = (357.528 + 0.9856003 * n) * r, sl = 280.460 + 0.9856474 * n + 1.915 * sin(g) + 0.020 * sin(2 * g);   /* the sun's */
+        moon_ecl(ph[i].t, &l, &bt, &par);
+        double dl = adiff(l, sl + (ph[i].full ? 180 : 0));
+        CHECK(dl < 0.5);
+        CHECK(!ph[i].eclipse || fabs(bt) < 1.2);
+        CHECK(par > 0.89 && par < 1.02);
+        double a = moon_age(ph[i].t), da = ph[i].full ? fabs(a - MOON_SYNODIC / 2) : (a < MOON_SYNODIC / 2 ? a : MOON_SYNODIC - a);
+        CHECK(da < 0.75);                            /* the mean month is within 0.75 day of the true one */
+        if (dl > wl) wl = dl;
+        if (da > wa) wa = da;
+        if (ph[i].eclipse) {                         /* seen from Junin: the moon on the sun, or on the point opposite */
+            double se, sa, me, ma;
+            sun_pos(ph[i].t, -34.58, -60.94, &se, &sa);
+            moon_pos(ph[i].t, -34.58, -60.94, &me, &ma);
+            double d = ph[i].full ? sep(me, ma, -se, sa + 180) : sep(me, ma, se, sa);
+            CHECK(d < 2.0);
+            if (d > ws) ws = d;
+        }
+    }
+    printf("  at most %.2f deg from the sun's longitude (+ 180), %.2f day from the mean age, %.2f deg on the sky\n", wl, wa, ws);
+    group("moon_ecl, moon_pos and moon_age at the 2026 eclipses and October's new and full moon", f0);
+}
+
 static void fold(void)
 {
     int f0 = fails;
@@ -543,7 +1051,7 @@ static void clock_words_check(void)
 }
 
 /* Mutated replies: random bytes changed, '|', '=' and LF put in, cuts. */
-static void fuzz(const char *w, int wn)
+static void fuzz(const char *w, int wn, const char *name)
 {
     int f0 = fails, bad = 0;
     char *s = malloc((size_t)wn + 64);
@@ -565,25 +1073,37 @@ static void fuzz(const char *w, int wn)
     }
     free(s);
     CHECK(bad == 0);
-    group("20,000 mutated replies: every field ends inside its buffer", f0);
+    char g[160];
+    snprintf(g, sizeof g, "20,000 mutated replies of %s: every field ends inside its buffer, every number in its range", name);
+    group(g, f0);
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) {
-        printf("usage: board_check <the Worker test's reply> [fuzz]\n");
+    if (argc < 3) {
+        printf("usage: board_check <the Worker test's reply> <the same with the keys of 0.3.0> [fuzz]\n");
         return 1;
     }
-    int wn;
-    char *w = read_file(argv[1], &wn);
+    int wn, w2n;
+    char *w = read_file(argv[1], &wn), *w2 = read_file(argv[2], &w2n);
     worker_reply(w, wn);
     rules();
     extras();
+    new_reply(w, wn, w2, w2n);
+    new_rules();
+    numbers();
+    sky();
+    sun_check();
+    moon_check(w, wn);
     fold();
     http();
     clock_words_check();
-    if (argc > 2 && !strcmp(argv[2], "fuzz")) fuzz(w, wn);
+    if (argc > 3 && !strcmp(argv[3], "fuzz")) {
+        fuzz(w, wn, "the Worker test's reply");
+        fuzz(w2, w2n, "the reply with the keys of 0.3.0");
+    }
     free(w);
+    free(w2);
     printf("%d failed\n", fails);
     return fails > 125 ? 125 : fails;
 }

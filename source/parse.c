@@ -157,6 +157,156 @@ static void feed_age(board_feed *f, const char *v, int n)
     if (to_long(v, n, &a) && a >= 0) f->age = a;
 }
 
+/* ---- the keys of 0.3.0: numbers in the C form ----------------------------- */
+
+/* A number in the C form: a sign allowed, at most 9 whole digits, a '.' and
+ * at most 6 decimals, spaces at the ends allowed: 1 and *v, or 0. The digit
+ * caps keep every value far inside a double's exact range and an int's. */
+static int to_dec(const char *s, int n, double *v)
+{
+    int i = 0, neg = 0, wd = 0, fd = 0;
+    double x = 0, scale = 1;
+    while (n > 0 && s[n - 1] == ' ') n--;
+    while (i < n && s[i] == ' ') i++;
+    if (i < n && (s[i] == '-' || s[i] == '+')) neg = s[i++] == '-';
+    for (; i < n && s[i] >= '0' && s[i] <= '9'; i++) {
+        if (++wd > 9) return 0;
+        x = x * 10 + (s[i] - '0');
+    }
+    if (i < n && s[i] == '.') {
+        for (i++; i < n && s[i] >= '0' && s[i] <= '9'; i++) {
+            if (++fd > 6) return 0;
+            scale /= 10;
+            x += (s[i] - '0') * scale;
+        }
+    }
+    if (i < n || wd + fd == 0) return 0;
+    *v = neg ? -x : x;
+    return 1;
+}
+
+/* A whole value from n bytes: the number rounded half away from zero when
+ * whole is 0 (a whole one only when 1), or none when it is missing ("-"),
+ * not a number, or outside lo..hi. */
+static int num_c(const char *s, int n, int lo, int hi, int whole, int none)
+{
+    double d;
+    if (!to_dec(s, n, &d) || (whole && memchr(s, '.', (size_t)n))) return none;
+    if (d < lo - 0.5 || d >= hi + 0.5) return none;
+    int r = d < 0 ? -(int)(-d + 0.5) : (int)(d + 0.5);
+    return r < lo || r > hi ? none : r;
+}
+
+/* Field i of k as num_c, none when the line has fewer fields. */
+static int field_c(const char **f, const int *fl, int k, int i, int lo, int hi, int whole, int none)
+{
+    return i < k ? num_c(f[i], fl[i], lo, hi, whole, none) : none;
+}
+
+/* The space-separated words of a field: at most max, runs of spaces as one
+ * separator; the count. */
+static int words(const char *v, int n, const char **w, int *wl, int max)
+{
+    int k = 0, i = 0;
+    while (k < max) {
+        while (i < n && v[i] == ' ') i++;
+        if (i == n) break;
+        int s = i;
+        while (i < n && v[i] != ' ') i++;
+        w[k] = v + s;
+        wl[k++] = i - s;
+    }
+    return k;
+}
+
+/* "2026-09-14" as days since 1970-01-01, -1 for anything else. */
+static long ymd_days(const char *s, int n)
+{
+    int v[3] = {0, 0, 0}, len[3] = {4, 2, 2}, i = 0;
+    while (n > 0 && s[n - 1] == ' ') n--;
+    while (i < n && s[i] == ' ') i++;
+    if (n - i != 10) return -1;
+    for (int p = 0; p < 3; p++) {
+        if (p && s[i++] != '-') return -1;
+        for (int d = 0; d < len[p]; d++, i++) {
+            if (s[i] < '0' || s[i] > '9') return -1;
+            v[p] = v[p] * 10 + (s[i] - '0');
+        }
+    }
+    static const unsigned char mdays[12] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (v[0] < 1970 || v[1] < 1 || v[1] > 12 || v[2] < 1 || v[2] > mdays[v[1] - 1]) return -1;
+    if (v[1] == 2 && v[2] == 29 && !((v[0] % 4 == 0 && v[0] % 100 != 0) || v[0] % 400 == 0)) return -1;
+    return days_from_civil(v[0], v[1], v[2]);
+}
+
+/* label|dir|pct|abs|date; the label cut as its usd or money line's (lsize
+ * bytes with the NUL), so that a long label still finds its line */
+static void chg_line(board_chg *g, const char *val, int vl, int fold, int lsize)
+{
+    const char *f[5];
+    int fl[5];
+    char dir[8];
+    int c = split(val, vl, f, fl, 5);
+    put(g->label, lsize, f, fl, c, 0, fold);
+    put(dir, sizeof dir, f, fl, c, 1, 1);
+    g->dir = !strcmp(dir, "up") ? CHG_UP : !strcmp(dir, "down") ? CHG_DOWN : !strcmp(dir, "flat") ? CHG_FLAT : CHG_NONE;
+    put(g->pct, sizeof g->pct, f, fl, c, 2, fold);
+    put(g->abs, sizeof g->abs, f, fl, c, 3, fold);
+    put(g->when, sizeof g->when, f, fl, c, 4, fold);
+}
+
+/* label|yyyy-mm-dd|v1 v2 ... */
+static void spark_line(board_spark *s, const char *val, int vl, int fold)
+{
+    const char *f[3], *w[SPARK_MAX];
+    int fl[3], wl[SPARK_MAX];
+    int c = split(val, vl, f, fl, 3);
+    put(s->label, sizeof s->label, f, fl, c, 0, fold);
+    s->start_day = c > 1 ? ymd_days(f[1], fl[1]) : -1;
+    s->n = c > 2 ? words(f[2], fl[2], w, wl, SPARK_MAX) : 0;
+    for (int i = 0; i < SPARK_MAX; i++) s->v[i] = i < s->n ? num_c(w[i], wl[i], 0, 100000000, 0, -1) : -1;
+}
+
+/* start|temps|chances|codes, each list HOURS_MAX words */
+static void hours_line(board_data *b, const char *val, int vl)
+{
+    const char *f[4], *w[HOURS_MAX];
+    int fl[4], wl[HOURS_MAX];
+    int c = split(val, vl, f, fl, 4), k;
+    b->hours_start = field_c(f, fl, c, 0, 0, 23, 1, -1);
+    k = c > 1 ? words(f[1], fl[1], w, wl, HOURS_MAX) : 0;
+    b->n_hours = k;
+    for (int i = 0; i < HOURS_MAX; i++) b->hour_temp[i] = i < k ? num_c(w[i], wl[i], -90, 70, 0, TEMP_NONE) : TEMP_NONE;
+    k = c > 2 ? words(f[2], fl[2], w, wl, HOURS_MAX) : 0;
+    for (int i = 0; i < HOURS_MAX; i++) b->hour_pop[i] = i < k ? num_c(w[i], wl[i], 0, 100, 0, -1) : -1;
+    k = c > 3 ? words(f[3], fl[3], w, wl, HOURS_MAX) : 0;
+    for (int i = 0; i < HOURS_MAX; i++) b->hour_code[i] = i < k ? num_c(w[i], wl[i], 0, 99, 1, -1) : -1;
+}
+
+/* code|cover|mm|dir|speed|gusts */
+static void fx_line(board_data *b, const char *val, int vl)
+{
+    const char *f[6];
+    int fl[6];
+    double mm;
+    int c = split(val, vl, f, fl, 6);
+    b->fx_code = field_c(f, fl, c, 0, 0, 99, 1, -1);
+    b->fx_cover = field_c(f, fl, c, 1, 0, 100, 0, -1);
+    b->fx_mm = c > 2 && to_dec(f[2], fl[2], &mm) && mm >= 0 && mm <= 1000 ? mm : -1;
+    b->fx_dir = field_c(f, fl, c, 3, 0, 360, 0, -1);
+    if (b->fx_dir == 360) b->fx_dir = 0;
+    b->fx_speed = field_c(f, fl, c, 4, 0, 500, 0, -1);
+    b->fx_gusts = field_c(f, fl, c, 5, 0, 500, 0, -1);
+    b->has_fx = 1;
+}
+
+static void fx_none(board_data *b)
+{
+    b->fx_code = b->fx_cover = b->fx_dir = b->fx_speed = b->fx_gusts = b->hours_start = -1;
+    b->fx_mm = -1;
+    for (int i = 0; i < BOARD_DAYS; i++) b->day_code[i] = -1;
+}
+
 int board_parse(const char *body, int n, int fold, board_data *b)
 {
     static const char magic[] = "couch-board ";
@@ -166,6 +316,7 @@ int board_parse(const char *body, int n, int fold, board_data *b)
     long v;
     memset(b, 0, sizeof *b);
     b->usd_feed.age = b->wx_feed.age = b->news_feed.age = -1;
+    fx_none(b);
     if (!next_line(&p, end, &ls, &ll) || ll <= ml || memcmp(ls, magic, (size_t)ml) || !to_long(ls + ml, ll - ml, &v) || v < 0 ||
         v > 9999)
         return BP_NOT_BOARD;
@@ -267,6 +418,26 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             feed_age(&b->news_feed, val, vl);
         } else if (key_is(k, kl, "news_state")) {
             feed_state(&b->news_feed, val, vl, fold);
+        } else if (key_is(k, kl, "geo")) {
+            double la, lo;
+            c = split(val, vl, f, fl, 2);
+            b->has_geo = c == 2 && to_dec(f[0], fl[0], &la) && to_dec(f[1], fl[1], &lo) && la >= -90 && la <= 90 && lo >= -180 && lo <= 180;
+            b->lat = b->has_geo ? la : 0;
+            b->lon = b->has_geo ? lo : 0;
+        } else if (key_is(k, kl, "wx_fx")) {
+            fx_line(b, val, vl);
+        } else if (key_is(k, kl, "wx_hours")) {
+            hours_line(b, val, vl);
+        } else if (key_is(k, kl, "days_fx")) {
+            c = split(val, vl, f, fl, BOARD_DAYS);
+            b->n_day_code = c;
+            for (int i = 0; i < BOARD_DAYS; i++) b->day_code[i] = field_c(f, fl, c, i, 0, 99, 1, -1);
+        } else if (key_is(k, kl, "usd_chg")) {
+            if (b->n_usd_chg < BOARD_USD) chg_line(&b->usd_chg[b->n_usd_chg++], val, vl, fold, (int)sizeof b->usd[0].label);
+        } else if (key_is(k, kl, "money_chg")) {
+            if (b->n_money_chg < BOARD_MONEY) chg_line(&b->money_chg[b->n_money_chg++], val, vl, fold, (int)sizeof b->money[0].label);
+        } else if (key_is(k, kl, "spark")) {
+            if (b->n_spark < BOARD_SPARKS) spark_line(&b->spark[b->n_spark++], val, vl, fold);
         }
     }
     return BP_CUT;
@@ -390,6 +561,17 @@ void civil_from_unix(long t, civil_time *c)
     c->year = (int)(yoe + era * 400 + (c->month <= 2));
 }
 
+/* H. Hinnant's days_from_civil */
+long days_from_civil(long y, int m, int d)
+{
+    y -= m <= 2;
+    long era = (y >= 0 ? y : y - 399) / 400;
+    long yoe = y - era * 400;
+    long doy = (153L * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
 void clock_hm(char *buf, int n, int hour, int min, int h24, const char **ampm)
 {
     if (h24) {
@@ -486,3 +668,213 @@ void ambient_shift(long step, int *dx, int *dy)
 }
 
 int ambient_page(long step, int has_news) { return has_news && (step % 2 == 1 || step % 2 == -1); }
+
+/* ---- the changes, the series, the numbers (0.3.0) ------------------------------ */
+
+const board_chg *board_chg_find(const board_data *b, int money, const char *label)
+{
+    const board_chg *c = money ? b->money_chg : b->usd_chg;
+    int n = money ? b->n_money_chg : b->n_usd_chg;
+    for (int i = 0; i < n; i++)
+        if (!strcmp(c[i].label, label)) return &c[i];
+    return NULL;
+}
+
+const board_spark *board_spark_find(const board_data *b, const char *label)
+{
+    for (int i = 0; i < b->n_spark; i++)
+        if (!strcmp(b->spark[i].label, label)) return &b->spark[i];
+    return NULL;
+}
+
+int spark_range(const board_spark *s, int *lo, int *hi)
+{
+    int k = 0;
+    for (int i = 0; i < s->n && i < SPARK_MAX; i++) {
+        if (s->v[i] < 0) continue;
+        if (!k || s->v[i] < *lo) *lo = s->v[i];
+        if (!k || s->v[i] > *hi) *hi = s->v[i];
+        k++;
+    }
+    return k;
+}
+
+#define NUM_DIGITS 12
+#define NUM_DEC 4
+
+static const long long pow10_ll[NUM_DEC + 1] = {1, 10, 100, 1000, 10000};
+
+/* the digits at s[*i] into *v (at most *left of them): their count */
+static int digit_run(const char *s, int *i, long long *v, int *left)
+{
+    int k = 0;
+    while (s[*i] >= '0' && s[*i] <= '9') {
+        if (--*left < 0) return -1;
+        *v = *v * 10 + (s[(*i)++] - '0');
+        k++;
+    }
+    return k;
+}
+
+int num_parse(const char *s, board_num *x)
+{
+    int i = 0, left = NUM_DIGITS, k;
+    long long v = 0;
+    memset(x, 0, sizeof *x);
+    if (s[i] == '+') x->plus = 1, i++;
+    else if (s[i] == '-') x->neg = 1, i++;
+    k = digit_run(s, &i, &v, &left);
+    if (k <= 0) return 0;
+    if (s[i] == '.') {                               /* the thousands groups: 1 to 3 digits, then 3 each */
+        if (k > 3) return 0;
+        while (s[i] == '.') {
+            i++;
+            if (digit_run(s, &i, &v, &left) != 3) return 0;
+        }
+    }
+    if (s[i] == ',') {
+        i++;
+        k = digit_run(s, &i, &v, &left);
+        if (k <= 0 || k > NUM_DEC) return 0;
+        x->dec = k;
+    }
+    if (s[i] == '%') x->pct = 1, i++;
+    if (s[i]) return 0;
+    x->v = x->neg ? -v : v;
+    return 1;
+}
+
+void num_format(char *buf, int n, const board_num *x)
+{
+    char w[32], g[48];
+    int dec = x->dec < 0 ? 0 : x->dec > NUM_DEC ? NUM_DEC : x->dec;
+    unsigned long long a = x->v < 0 ? 0ULL - (unsigned long long)x->v : (unsigned long long)x->v;
+    unsigned long long p = (unsigned long long)pow10_ll[dec];
+    int wl = snprintf(w, sizeof w, "%llu", a / p), k = 0;
+    for (int i = 0; i < wl; i++) {                   /* a '.' before each group of three from the right */
+        if (i && (wl - i) % 3 == 0) g[k++] = '.';
+        g[k++] = w[i];
+    }
+    g[k] = 0;
+    const char *sign = x->v < 0 || (x->v == 0 && x->neg) ? "-" : x->plus ? "+" : "";
+    if (dec) snprintf(buf, (size_t)n, "%s%s,%0*llu%s", sign, g, dec, a % p, x->pct ? "%" : "");
+    else snprintf(buf, (size_t)n, "%s%s%s", sign, g, x->pct ? "%" : "");
+}
+
+void num_mix(const board_num *a, const board_num *b, double t, board_num *out)
+{
+    *out = *b;
+    if (!(t < 1)) return;                            /* 1, above, or NaN: the end value */
+    if (t < 0) t = 0;
+    int ad = a->dec < 0 ? 0 : a->dec > NUM_DEC ? NUM_DEC : a->dec, bd = b->dec < 0 ? 0 : b->dec > NUM_DEC ? NUM_DEC : b->dec;
+    long long av = a->v;
+    if (ad < bd) av *= pow10_ll[bd - ad];
+    else if (ad > bd) {
+        long long q = pow10_ll[ad - bd];
+        av = av < 0 ? -((-av + q / 2) / q) : (av + q / 2) / q;
+    }
+    double d = (double)av + ((double)b->v - (double)av) * t;
+    out->v = d < 0 ? -(long long)(-d + 0.5) : (long long)(d + 0.5);
+    out->neg = 0;                                    /* the value's own sign, until the end */
+}
+
+int hm_parse(const char *s)
+{
+    int i = 0, h = 0, m = 0;
+    for (; s[i] >= '0' && s[i] <= '9' && i < 2; i++) h = h * 10 + (s[i] - '0');
+    if (i < 1 || s[i] != ':') return -1;
+    const char *p = s + i + 1;
+    if (p[0] < '0' || p[0] > '5' || p[1] < '0' || p[1] > '9' || p[2]) return -1;
+    m = (p[0] - '0') * 10 + (p[1] - '0');
+    return h > 23 ? -1 : h * 60 + m;
+}
+
+/* ---- the sky's colours, the weather codes, the wind ------------------------------ */
+
+#define SKY_STOPS 6
+static const double sky_elev[SKY_STOPS] = {-12, -9, -3, 3, 13, 20};
+static const unsigned sky_top[SKY_STOPS] = {0x050a18, 0x0a1530, 0x1b2550, 0x3a5fa0, 0x2f6fc0, 0x2a66c4};
+static const unsigned sky_hor[SKY_STOPS] = {0x0d1a33, 0x1f2d55, 0xc8644a, 0xf2a65a, 0x8fc3ec, 0x9fd0f0};
+
+/* each channel of a toward b by t (0..1), rounded */
+static unsigned rgb_mix(unsigned a, unsigned b, double t)
+{
+    unsigned o = 0;
+    for (int sh = 16; sh >= 0; sh -= 8) {
+        double ca = (a >> sh) & 0xff, cb = (b >> sh) & 0xff, c = ca + (cb - ca) * t;
+        o |= (unsigned)(c + 0.5) << sh;
+    }
+    return o;
+}
+
+void sky_colors(double elev, int cover, int wet, unsigned *top, unsigned *horizon)
+{
+    int i = 0;
+    double t = 0;
+    if (!(elev > sky_elev[0])) elev = sky_elev[0];   /* below the first stop, or NaN: night */
+    if (elev >= sky_elev[SKY_STOPS - 1]) i = SKY_STOPS - 2, t = 1;
+    else {
+        while (elev >= sky_elev[i + 1]) i++;
+        t = (elev - sky_elev[i]) / (sky_elev[i + 1] - sky_elev[i]);
+    }
+    unsigned tp = rgb_mix(sky_top[i], sky_top[i + 1], t), hz = rgb_mix(sky_hor[i], sky_hor[i + 1], t);
+    if (cover > 0) {
+        double c = (cover > 100 ? 100 : cover) / 100.0 * 0.7;
+        tp = rgb_mix(tp, 0x5d6b80, c);
+        hz = rgb_mix(hz, 0x8a96a8, c);
+    }
+    if (wet) {
+        tp = rgb_mix(tp, 0, 0.25);
+        hz = rgb_mix(hz, 0, 0.25);
+    }
+    *top = tp;
+    *horizon = hz;
+}
+
+int wmo_kind(int code)
+{
+    if (code < 0) return WK_NONE;
+    if (code <= 1) return WK_CLEAR;
+    if (code == 2) return WK_PARTLY;
+    if (code == 45 || code == 48) return WK_FOG;
+    if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return WK_RAIN;
+    if ((code >= 71 && code <= 77) || code == 85 || code == 86) return WK_SNOW;
+    if (code >= 95 && code <= 99) return WK_STORM;
+    return WK_CLOUD;
+}
+
+int wmo_wet(int code)
+{
+    int k = wmo_kind(code);
+    return k == WK_RAIN || k == WK_STORM;
+}
+
+int wx_icon(int kind, int is_day)
+{
+    switch (kind) {
+    case WK_CLEAR: return is_day ? WI_SUN : WI_MOON_STARS;
+    case WK_PARTLY: return is_day ? WI_CLOUD_SUN : WI_CLOUD_MOON;
+    case WK_CLOUD: return WI_CLOUD;
+    case WK_FOG: return WI_CLOUD_FOG;
+    case WK_RAIN: return WI_CLOUD_RAIN;
+    case WK_SNOW: return WI_CLOUD_SNOW;
+    case WK_STORM: return WI_CLOUD_LIGHTNING;
+    default: return WI_NONE;
+    }
+}
+
+const char *wind_compass(int deg)
+{
+    static const char *const pt[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+    if (deg < 0) return "";
+    return pt[((deg % 360) * 2 + 45) / 90 % 8];
+}
+
+void wind_words(char *buf, int n, int deg, int gusts)
+{
+    const char *c = wind_compass(deg);
+    if (c[0] && gusts >= 0) snprintf(buf, (size_t)n, "%s, gusts %d", c, gusts);
+    else if (c[0]) snprintf(buf, (size_t)n, "%s", c);
+    else if (gusts >= 0) snprintf(buf, (size_t)n, "Gusts %d", gusts);
+    else if (n > 0) buf[0] = 0;
+}

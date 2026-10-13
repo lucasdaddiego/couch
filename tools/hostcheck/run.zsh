@@ -1,14 +1,19 @@
 #!/bin/zsh
 # Couch's host checks (README: "The host checks"): source/parse.c, the
-# Board parser and the pure helpers, against the Worker test's reply. The
-# reply comes from couch/worker/test/board.test.js (the expected text of its
-# first test, line for line), so a change of the Worker's format shows here.
+# Board parser and the pure helpers, and source/astro.c, the sun and the
+# moon, against the Worker test's reply. The reply comes from
+# couch/worker/test/board.test.js (the expected text of its first test,
+# line for line), so a change of the Worker's format shows here. A second
+# reply adds the keys of 0.3.0 (design 5.1: geo, wx_fx, wx_hours, days_fx,
+# usd_chg, money_chg, spark) before its end line, as the Worker will send
+# them, until the Worker test's reply has them itself.
 # Two builds of tools/hostcheck/board_check.c: the host's cc at -O2 with
 # -Wall -Wextra -Werror, and the same with AddressSanitizer and
-# UndefinedBehaviorSanitizer, which also runs 20,000 mutated replies; then
-# old_check.c with Couch 0.1.0's parse.c (git show bcf4243, read only)
-# against the same reply: an old Couch must keep its Board. Each prints PASS
-# or FAIL per group; the exit status is the number of failures.
+# UndefinedBehaviorSanitizer, which also runs 20,000 mutated replies of
+# each; then old_check.c with the parse.c of Couch 0.1.0 (git show bcf4243)
+# and of Couch 0.2.0 (git show f239876), read only, against both replies:
+# an old Couch must keep its Board. Each prints PASS or FAIL per group; the
+# exit status is the number of failures.
 #   zsh tools/hostcheck/run.zsh
 H=${0:A:h}
 B=$H/build
@@ -20,7 +25,7 @@ F=(-std=c11 -Wall -Wextra -Werror -I$S)
 print -r -- "host: $($CC --version 2>&1 | head -1)"
 fails=0
 # The reply: the array of the first assert.equal(t, [...].join('\n')) in the Worker test.
-${PYTHON:-python3} -I - $W $B/worker_reply.txt <<'PY' || { print "FAIL the Worker test's reply: not found in $W"; exit 1 }
+${PYTHON:-python3} -I - $W $B/worker_reply.txt $B/worker_reply_new.txt <<'PY' || { print "FAIL the Worker test's reply: not found in $W"; exit 1 }
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 m = re.search(r"assert\.equal\(t, \[(.*?)\]\.join\('\\n'\)\);", src, re.S)
@@ -32,30 +37,54 @@ if len(items) < 3 or items[0] != 'couch-board 1' or items[-2:] != ['end', '']:
 text = '\n'.join(items)
 open(sys.argv[2], 'w', encoding='utf-8', newline='').write(text)
 print("the Worker test's reply: %d lines, %d bytes" % (len(items) - 1, len(text.encode())))
+# The same with the keys of 0.3.0 before "end" (design 5.1's examples; the Blue
+# series is argentinadatos.com's, 2026-09-14 to 2026-10-13, as in the mockups).
+spark = '1545 1545 1555 1560 1560 1555 1550 1550 1550 1550 1555 1560 1560 1560 1560 1560 1565 ' \
+        '1560 1560 1555 1560 1560 1560 1545 1550 1555 1540 1540 1540 1540'
+new = ['geo=-34.58|-60.94',
+       'wx_fx=3|88|0.4|135|10|22',
+       'wx_hours=15|19 20 21 21 20 19 17 15 14 13 13 12|10 20 40 70 70 40 20 10 5 5 0 0|3 3 61 61 61 3 3 2 2 1 1 0',
+       'days_fx=53|3|51',
+       'usd_chg=Oficial|flat|0,0%|0,00|12 Oct',
+       'usd_chg=Blue|flat|0,0%|0,00|12 Oct',
+       'usd_chg=MEP|up|+0,3%|+4,60|12 Oct',
+       'usd_chg=CCL|down|-0,2%|-3,20|12 Oct',
+       'usd_chg=Cripto|up|+1,2%|+19,10|12 Oct',
+       'usd_chg=Tarjeta|flat|0,0%|0,00|12 Oct',
+       'money_chg=Riesgo pa\u00eds|up|+0,2%|+1|9 Oct',
+       'spark=Blue|2026-09-14|' + spark]
+end = items.index('end')
+text2 = '\n'.join(items[:end] + new + items[end:])
+open(sys.argv[3], 'w', encoding='utf-8', newline='').write(text2)
+print("the reply with the keys of 0.3.0: %d lines, %d bytes" % (len(items) - 1 + len(new), len(text2.encode())))
 PY
-if $CC -O2 $F $H/board_check.c $S/parse.c -o $B/board_check; then
-    $B/board_check $B/worker_reply.txt || (( fails += $? ))
+R=($B/worker_reply.txt $B/worker_reply_new.txt)
+if $CC -O2 $F $H/board_check.c $S/parse.c $S/astro.c -lm -o $B/board_check; then
+    $B/board_check $R || (( fails += $? ))
 else
     print "FAIL board_check: does not build"; (( ++fails ))
 fi
 print -r -- "-- the same with AddressSanitizer and UndefinedBehaviorSanitizer, and the mutated replies (the PASS lines not repeated):"
-if $CC -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all $F $H/board_check.c $S/parse.c -o $B/board_check_asan; then
-    $B/board_check_asan $B/worker_reply.txt fuzz > $B/asan.out 2>&1
+if $CC -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all $F $H/board_check.c $S/parse.c $S/astro.c -lm -o $B/board_check_asan; then
+    $B/board_check_asan $R fuzz > $B/asan.out 2>&1
     rc=$?
     command grep -v -e '^PASS' -e 'cuts of' $B/asan.out
-    command grep -q '^PASS 20,000 mutated' $B/asan.out && print -r -- "PASS 20,000 mutated replies under the sanitizers"
+    (( $(command grep -c '^PASS 20,000 mutated' $B/asan.out) == 2 )) && print -r -- "PASS 20,000 mutated replies of each reply under the sanitizers"
     (( fails += rc ))
 else
     print "FAIL board_check_asan: does not build"; (( ++fails ))
 fi
-print -r -- "-- Couch 0.1.0's parser (source/parse.c at bcf4243, from git) against the same reply:"
-mkdir -p $B/old
-if git -C ${H:h:h} show bcf4243:couch/source/parse.c > $B/old/parse.c 2>/dev/null &&
-   git -C ${H:h:h} show bcf4243:couch/source/parse.h > $B/old/parse.h 2>/dev/null &&
-   $CC -O2 -std=c11 -Wall -Wextra -Werror -I$B/old $H/old_check.c $B/old/parse.c -o $B/old_check; then
-    $B/old_check $B/worker_reply.txt || (( fails += $? ))
-else
-    print "FAIL old_check: 0.1.0's parse.c not in git, or it does not build"; (( ++fails ))
-fi
+# The old parsers: Couch 0.1.0 (bcf4243, as before) and 0.2.0 (f239876).
+for rev ver in bcf4243 0.1.0 f239876 0.2.0; do
+    print -r -- "-- Couch $ver's parser (source/parse.c at $rev, from git) against both replies:"
+    mkdir -p $B/old_$ver
+    if git -C ${H:h:h} show ${rev}:couch/source/parse.c > $B/old_$ver/parse.c 2>/dev/null &&
+       git -C ${H:h:h} show ${rev}:couch/source/parse.h > $B/old_$ver/parse.h 2>/dev/null &&
+       $CC -O2 -std=c11 -Wall -Wextra -Werror -I$B/old_$ver $H/old_check.c $B/old_$ver/parse.c -o $B/old_$ver/old_check; then
+        for r in $R; do $B/old_$ver/old_check $r "$ver ($rev)" || (( fails += $? )); done
+    else
+        print "FAIL old_check: $ver's parse.c not in git, or it does not build"; (( ++fails ))
+    fi
+done
 print "$fails failed"
 exit $fails
