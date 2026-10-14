@@ -40,6 +40,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "net/net.h"
 #include "net/netctl.h"
 #include "netinet/in.h"
@@ -335,4 +336,22 @@ s32 sysUtilGetSystemParamInt(s32 id, s32 *value)
     case SYSUTIL_SYSTEMPARAM_ID_SUMMERTIME: *value = env_int("PV_SUMMER", 0); return 0;
     default: return (s32)0x8002b102;
     }
+}
+
+/* ---- boot.txt at the cap ------------------------------------------------- */
+
+/* boot_mark's rename (PS3 Health's pv_app.c): the library's stubs have no
+ * sysLv2FsRename (stub/pv_couch.h declares it). The paths go to the sandbox
+ * as stubs.c maps them ($PV_ROOT, else /tmp/pv). An existing target is
+ * refused, as lv2 does: a boot.c that stops removing boot.old.txt first
+ * empties boot.txt here, as on the console. */
+s32 sysLv2FsRename(const char *from, const char *to)
+{
+    char a[1024], b[1024];
+    struct stat st;
+    const char *root = getenv("PV_ROOT") ? getenv("PV_ROOT") : "/tmp/pv";
+    snprintf(a, sizeof a, "%s%s", root, from);
+    snprintf(b, sizeof b, "%s%s", root, to);
+    if (stat(b, &st) == 0) return (s32)0x80010014;                   /* EEXIST */
+    return rename(a, b) ? (s32)0x80010006 : 0;
 }

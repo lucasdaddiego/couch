@@ -24,6 +24,7 @@
 #include <ps3gfx/spu_fx_kern.h>
 #include "couch.h"
 #include "spu_fx_run.h"
+#include "start.h"
 #include "astro.h"
 #include "board.h"
 #include "clock.h"
@@ -158,9 +159,10 @@ static const char *blocked(void)
 
 /* ---- the calls behind the job screen --------------------------------------------- */
 
-/* Each call runs in run_job's thread behind the counter (the visible freeze
- * signal), one job screen per call; the main thread writes the journal
- * lines between them. */
+/* Each call runs in start_job's thread behind the counter (start.c: the
+ * kit's run_job in the loading screen's look, the visible freeze signal),
+ * one job screen per call; the main thread writes the journal lines
+ * between them. */
 static s32 (*job_fn)(void);
 static volatile s32 job_rc;
 static void job_tramp(void) { job_rc = job_fn(); }
@@ -168,7 +170,7 @@ static s32 job_call(s32 (*fn)(void))
 {
     job_fn = fn;
     job_rc = -1;
-    run_job("Starting the effects", job_tramp);
+    start_job(SS_FX, job_tramp);             /* the loading screen's counter (start.c: the kit's run_job in Couch's look) */
     return job_rc;
 }
 
@@ -1064,6 +1066,24 @@ void fx_words(char *buf, int n)
                  P.sky_n ? P.sky_ms / P.sky_n : 0.0, R.jobs ? R.ms / R.jobs : 0.0, jf);
     else if (fx_state == FXS_RSX) snprintf(buf, (size_t)n, "RSX only: %s", fx_why);
     else snprintf(buf, (size_t)n, "not started");
+}
+
+void fx_get_stats(fx_stats *st)
+{
+    memset(st, 0, sizeof *st);
+    st->sky_n = P.sky_n;
+    st->aur_n = P.aur_n;
+    st->rain_jobs = R.jobs;
+    st->sky_ms = P.sky_n ? P.sky_ms / P.sky_n : 0;
+    st->sky_max = P.sky_max;
+    st->aur_ms = P.aur_n ? P.aur_ms / P.aur_n : 0;
+    st->rain_ms = R.jobs ? R.ms / R.jobs : 0;
+    st->rain_late = R.late;
+    st->sky_rate = 60 / (int)period(FXM_SKY);
+    st->aur_rate = 60 / (int)period(FXM_AURORA);
+    st->step_words = step_words[fx_step];
+    st->drops = fx_sc.precip;
+    st->flakes = fx_sc.kind == FX_FLAKES;
 }
 
 void fx_log_words(char *buf, int n)

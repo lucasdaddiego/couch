@@ -21,6 +21,7 @@
 #include <ps3gfx/journal.h>
 #include "couch.h"
 #include "http.h"
+#include "start.h"
 #include "parse.h"
 
 #define HEAD_MAX 4096                /* the head of an answer, at most */
@@ -52,7 +53,7 @@ void net_addr(void)
 
 int net_has_ip(void) { return strcmp(net_ip, "no address") && strcmp(net_ip, "not read"); }
 
-/* Health's net_init calls, in the job thread of run_job: no journal call
+/* Health's net_init calls, in the job thread of start_job: no journal call
  * here. PSL1GHT's netInitialize loads the net module itself and returns 0
  * at once when it already succeeded. The netctl module and netCtlInit run
  * until each succeeded once (a SQUARE after a failed netInitialize does not
@@ -77,7 +78,7 @@ void net_start(int fs_ok)
     /* The counter shows the console works, and the journal backs the job
      * screen's skip promise. Without a journal the start still runs, with
      * no job screen: no screen promises a skip that cannot happen. */
-    if (fs_ok) run_job("Starting the network", start_calls);
+    if (fs_ok) start_job(SS_NET, start_calls);   /* the loading screen's counter (start.c: the kit's run_job in Couch's look) */
     else start_calls();
     journal_done("net_start", net_rc, net_rc == 0);
     net_state = net_rc == 0 ? NET_UP : NET_FAILED;

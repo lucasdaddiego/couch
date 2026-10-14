@@ -1,11 +1,14 @@
-/* Couch 0.2.0: the Board on the living-room TV, drawn by ps3gfx. The clock
+/* Couch 0.3.0: the Board on the living-room TV, drawn by ps3gfx. The clock
  * in the console's time zone, the dollar rates and the money extras, the
  * weather with the rain, the sun and the moon, and the news, from the Worker
  * at couch.daddiego.com.ar (design: ~/.claude/plans/2026-10-10-couch-design.md,
  * cut to the Board on 2026-10-10). Three pages: the Board, the News, the
  * Info screen; L1 and R1 move between them, SELECT opens the Info page.
- * After 10 min with no button the ambient mode dims the screen (page.c).
- * Each start appends a block to couch.txt in the app folder.
+ * After 10 min with no button the ambient mode shows the aurora (page.c).
+ * Each start appends a block to couch.txt in the app folder, and each step
+ * of the start and the exit a line to boot.txt (boot.c), the first one as
+ * main's first statement. The start shows the loading screen from the first
+ * frame after ui_init (start.c), then the start animation.
  *
  * The frame loop: read_pad, the ambient mode's wake, the exit, board_take
  * (a new reply from the Board thread), the input, the ambient mode's step,
@@ -32,6 +35,9 @@
 #include "sky.h"
 #include <ps3gfx/digits.h>
 #include <ps3gfx/icons.h>
+#include "boot.h"
+#include "start.h"
+#include "marquee.h"
 
 #ifndef PS3GFX_COMMIT
 #define PS3GFX_COMMIT "unknown"      /* the preview: the Makefile defines it on the console */
@@ -132,11 +138,15 @@ static void slow_log(void)
  * under a network call. */
 static void leave(void)
 {
+    boot_mark("leave");                      /* boot.txt: the step about to run */
     int board = board_stop();
+    boot_mark("fx_stop");
     fx_stop();
+    boot_mark("net_end");
     if (board == 0) net_end();
     else couch_log("net_end: not run, the Board thread did not end");
     if (fs_ok) {
+        start_log_late();                    /* no fetch came: the start's times now */
         ui_stat s;
         ui_stats(&s, 0);
         double sec = (double)(s.busy_sum_us + s.wait_sum_us) / 1e6, n = s.frames ? (double)s.frames : 1;
@@ -148,7 +158,9 @@ static void leave(void)
         slow_log();
         couch_log("exit at %.1f s\n", (double)(sysGetSystemTime() - t_start) / 1e6);
     }
+    boot_mark("ui_end");
     ui_end();
+    boot_mark("left");
 }
 
 /* auto.txt (Cell Bench's unattended start): the seconds of a round, read
@@ -188,10 +200,14 @@ static int board_enter(void)
         couch_log("quit before the Board opened: %s", net_state == NET_UP ? "the network was up" : "no network start");
         return -1;
     }
+    start_begin(SS_FX);                      /* the loading screen names the step (the first start only) */
     fx_start();                              /* the SPUs behind their job screen, or RSX only */
+    start_end(SS_FX);
     if (net_state != NET_UP) {
         int before = net_state;
+        start_begin(SS_NET);
         net_start(fs_ok);
+        start_end(SS_NET);
         if (net_state == NET_UP || net_state == NET_FAILED)
             couch_log("net_start: rc 0x%08x, address %s; the netctl module rc 0x%08x, netCtlInit rc 0x%08x", (unsigned)net_rc, net_ip,
                       (unsigned)net_mod_rc, (unsigned)net_ctl_rc);
@@ -209,11 +225,12 @@ static int board_enter(void)
 /* A page change by the pad. Leaving the Info page opens the Board as CIRCLE
  * did in 0.1.0 (the network start runs again after a clear of the journal):
  * -1 for a quit there. */
-static int go(int to)
+static int go(int to, int dir)
 {
     int from = page;
     if (to == from) return 0;
     page = to;
+    page_slide(from, to, dir);               /* design 3.8: the old page out, the new one in */
     if (to == PAGE_INFO) info_open();
     if (from == PAGE_INFO) return board_enter();
     return 0;
@@ -245,22 +262,34 @@ static const int t_sec[T_DONE] = {30, 40, 45, 50};
 
 int main(void)
 {
+    boot_mark("main");                       /* boot.txt: the first statement, before any other call */
+    start_main();
     ui_init(&(const ui_app){"Couch", APP_VERSION, APP_DIR});
     t_start = sysGetSystemTime();
+    start_end(SS_UI);                        /* the loading screen's first frame, at once */
+    start_begin(SS_UTF8);
 #ifdef COUCH_UTF8_OFF
     utf8_rc = -1;                            /* the preview's utf8_off build: a console whose text_utf8 failed */
 #else
     utf8_rc = text_utf8();                   /* the Board's text is UTF-8 (the degree sign, a city's accents) */
 #endif
+    start_end(SS_UTF8);
+    start_begin(SS_DIGITS);
     digits_rc = digits_init();               /* the Board's big numbers (design 6.3: after text_utf8) */
+    start_end(SS_DIGITS);
+    start_begin(SS_ICONS);
     icons_rc = icons_init();                 /* the weather's and the chips' icons */
+    start_end(SS_ICONS);
+    start_begin(SS_FS);
     fs_ok = fs_selftest(APP_DIR, &fs_mk, &fs_op, &fs_wr) == 0;
+    start_end(SS_FS);
     unattended = auto_read();
     if (unattended >= 0 && fs_ok) fs_write_file(AUTO, "0\n", 2, 0);   /* at once: a later start by hand, also after a freeze, is not a round */
     if (!safe_load() && fs_ok && unattended < 0) safe_calibrate(1);   /* the first start: the visible area of this TV */
     atexit(leave);
     board_init();
     log_start();
+    start_log_early();
     if (unattended == 0 || (unattended > 0 && !fs_ok)) {
         const char *why = !fs_ok ? "the app cannot write its folder" : "auto.txt does not hold a number of seconds";
         char line[160];
@@ -269,7 +298,7 @@ int main(void)
         while (!quit && sysGetSystemTime() - t_start < HOLD_US) {
             read_pad();
             if (ui_leave() < 0) break;
-            board_draw(line, YELLOW);
+            page_draw_msg(line, YELLOW);
         }
         return 0;                            /* to the XMB: exit() runs leave() */
     }
@@ -278,21 +307,29 @@ int main(void)
     ui_stats(&st, 1);                        /* the frame times from here: the Board's loop */
     int step = 0;
     page = PAGE_BOARD;
+    start_anim_begin();                      /* the loading screen hands over to the start animation */
     while (!quit) {
         int was = page;
         read_pad();
         ambient_input();                     /* a press that wakes the screen is cleared: START then does not exit */
+        start_anim_input(pressed);           /* any button ends the start animation */
+        if (pressed) page_slide_end();       /* and a slide (design 3.8) */
         int lv = ui_leave();
         if (lv < 0) break;
         board_take();
+        if (board_fetches) {                 /* once: the first fetch's boot.txt mark and the start's times in couch.txt */
+            start_end(SS_FETCH);
+            start_log_late();
+        }
         if (pressed & (BTN_L1 | BTN_R1)) {
-            if (go((page + (pressed & BTN_R1 ? 1 : PAGE_N - 1)) % PAGE_N) < 0) break;
+            int r = pressed & BTN_R1 ? 1 : -1;
+            if (go((page + (r > 0 ? 1 : PAGE_N - 1)) % PAGE_N, r) < 0) break;
         } else if (page == PAGE_INFO) {
             if (lv == 0) {                   /* CIRCLE: back to the Board */
-                if (go(PAGE_BOARD) < 0) break;
+                if (go(PAGE_BOARD, -1) < 0) break;
             } else info_input();
         } else if (pressed & BTN_SELECT) {
-            go(PAGE_INFO);
+            go(PAGE_INFO, 1);
         } else if ((pressed & BTN_SQUARE) && square() < 0) break;
         s64 t = sysGetSystemTime() - t_start;
         if (unattended > 0) {
@@ -309,10 +346,10 @@ int main(void)
         ambient_tick();
         fx_tick(ambient ? FXM_AURORA : FXM_SKY);   /* after the last ui_flip: a picture's swap, the next picture */
         sky_tick();                          /* the moon's sphere (into the texture no frame shows), the bolts */
+        marquee_tick();                      /* the ticker's text: a headline a frame into the picture no frame shows */
         if (page != was) frame_ev |= EV_PAGE;
-        if (page == PAGE_INFO) info_draw();
-        else if (page == PAGE_NEWS) news_draw();
-        else board_draw(NULL, 0);
+        page_draw();
+        start_end(SS_FRAME);                 /* once: the first Board frame (boot.txt's mark) */
         slow_note();                         /* the frame that this draw's ui_flip ended, and what it did */
         if (unattended > 0 && (step == T_SHOT_BOARD || step == T_SHOT_INFO) && t >= t_sec[step] * 1000000LL) {
             shot(step == T_SHOT_BOARD ? APP_DIR "/board.ppm" : APP_DIR "/info.ppm");   /* between ui_flip and the next begin_frame */

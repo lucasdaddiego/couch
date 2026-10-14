@@ -288,16 +288,6 @@ void board_next_words(char *buf, int n)
 
 /* ---- the page -------------------------------------------------------------------- */
 
-void board_foot(float x, float y, float w, const char *src, const board_feed *f)
-{
-    char a[24];
-    age_words(a, sizeof a, f->age + board_age());
-    if (!strcmp(f->state, "stale")) text_fit(x, y, F_SMALL, YELLOW, w, "%s. The data is %s old.", f->reason[0] ? f->reason : src, a);
-    else if (!strcmp(f->state, "none")) text_fit(x, y, F_SMALL, GREY, w, "%s: no data", src);
-    else if (f->age < 0) text_fit(x, y, F_SMALL, GREY, w, "%s", src);
-    else text_fit(x, y, F_SMALL, GREY, w, "%s, %s old", src, a);
-}
-
 u32 board_status_words(char *buf, int n)
 {
     char t[24];
@@ -335,21 +325,4 @@ u32 board_status_words(char *buf, int n)
     clock_words(t, sizeof t, clock_utc() - board_age(), 0);
     snprintf(buf, (size_t)n, "Board updated at %s.", t);
     return GREY;
-}
-
-void board_status(void)
-{
-    char line[300];
-    u32 c = board_status_words(line, sizeof line);
-    status_line(line, c);
-}
-
-void board_note(void)
-{
-    char next[48];
-    board_next_words(next, sizeof next);
-    float nw = next[0] ? (float)text_w(F_SMALL, next) + 40 : 0;
-    if (next[0]) text_r(SW - MG, Y_NOTE, F_SMALL, GREY, "%s", next);
-    if (board_url_note[0]) text_fit(MG, Y_NOTE, F_SMALL, YELLOW, SW - 2 * MG - nw, "%s", board_url_note);
-    else if (board_url_file) text_fit(MG, Y_NOTE, F_SMALL, GREY, SW - 2 * MG - nw, "Board URL from board_url.txt: %s", board_url);
 }

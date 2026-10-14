@@ -2,6 +2,7 @@
  * builds this file with the host's cc, the preview and ppu-gcc as it is. */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "parse.h"
 
 /* ---- text ------------------------------------------------------------------ */
@@ -668,6 +669,44 @@ void ambient_shift(long step, int *dx, int *dy)
 }
 
 int ambient_page(long step, int has_news) { return has_news && (step % 2 == 1 || step % 2 == -1); }
+
+void ambient_place(double t, float *x, float *y)
+{
+    if (t < 0) t = 0;
+    long step = (long)(t / AMBIENT_STEP_SEC);
+    double in = t - (double)step * AMBIENT_STEP_SEC, k = in >= AMBIENT_GLIDE_S ? 1 : in / AMBIENT_GLIDE_S;
+    int x1, y1, x0, y0;
+    ambient_shift(step, &x1, &y1);
+    ambient_shift(step - 1, &x0, &y0);
+    if (step == 0) x0 = x1, y0 = y1;
+    k = k * k * (3 - 2 * k);                     /* ease in and out */
+    *x = (float)((x0 + (x1 - x0) * k) / AMBIENT_PX * AMBIENT_BLOCK_X);
+    *y = (float)((y0 + (y1 - y0) * k) / AMBIENT_PX * AMBIENT_BLOCK_Y);
+}
+
+int ambient_line(long minute, unsigned has)
+{
+    if (minute < 0) minute = 0;
+    for (int k = 0; k < 3; k++) {
+        int l = (int)((minute + k) % 3);
+        if (has & (1u << l)) return l;
+    }
+    return -1;
+}
+
+const char *news_category(const char *source)
+{
+    if (!strncmp(source, "Ambito", 6) || !strncmp(source, "\xc3\x81mbito", 7) || !strncmp(source, "\xc3\xa1mbito", 7)) return "Economy";
+    if (!strncmp(source, "BBC", 3)) return "World";
+    return NULL;
+}
+
+double ticker_offset(double t, double px_s, double period)
+{
+    if (!(period > 0) || !(px_s > 0) || t < 0) return 0;
+    double d = fmod(t * px_s, period);
+    return d < 0 ? 0 : d;
+}
 
 /* ---- the changes, the series, the numbers (0.3.0) ------------------------------ */
 

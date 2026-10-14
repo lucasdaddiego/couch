@@ -293,4 +293,30 @@ void ambient_shift(long step, int *dx, int *dy);
  * headlines). */
 int ambient_page(long step, int has_news);
 
+/* The ambient block over the aurora (0.3.0, design 3.12): the clock, the
+ * date and a line, at the next of 9 places each AMBIENT_STEP_SEC (the
+ * places of ambient_shift, times AMBIENT_BLOCK_X and AMBIENT_BLOCK_Y px from
+ * the canvas's centre), gliding to it over AMBIENT_GLIDE_S (ease in and
+ * out, so the text moves by whole pixels for a moment only). t: seconds
+ * since the mode began; *x, *y the offset. The line of the minute: 0 the
+ * weather, 1 Blue's price, 2 the newest headline (by minute, then the next
+ * that has data: has is a mask of 1 << line). */
+#define AMBIENT_BLOCK_X 300
+#define AMBIENT_BLOCK_Y 150
+#define AMBIENT_GLIDE_S 6.0
+void ambient_place(double t, float *x, float *y);
+int ambient_line(long minute, unsigned has);
+
+/* A headline's category from its source's label (0.3.0's News page): the
+ * Worker sends no category (its feed weights name them, but a new key is not
+ * for this stage), so only a source with one feed tells it: "Economy" for
+ * Ambito (its economy feed), "World" for BBC (its world feed); NULL for any
+ * other (Clarin has politics and world, Infobae comes from a search). The
+ * label as the reply has it, UTF-8 or folded ("\xc3\x81mbito", "Ambito"). */
+const char *news_category(const char *source);
+
+/* The ticker's offset in px at t seconds for a speed of px_s px a second,
+ * wrapped to [0, period): any fraction (the marquee draws it bilinear). */
+double ticker_offset(double t, double px_s, double period);
+
 #endif

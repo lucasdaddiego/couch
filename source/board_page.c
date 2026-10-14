@@ -1,26 +1,31 @@
-/* The Board page (board.h's board_draw; design 2026-10-13, section 1.4):
- * dashboard tiles of frosted glass over the live sky. Left, the weather:
- * the hero tile (the icon, the temperature, the words, feels and humidity,
- * the min/max bar, the wind dial, the rain line, the 12 h curve with its
- * rain columns), the sky tile (the sun arc, the moon), the three days.
- * Right, the money: Blue's tile (the price, the change chip, the 30 days'
- * sparkline and range), then a grid of small tiles (the other rates, the
- * money extras). Under them the news ticker and the bottom bar.
+/* The Board page (page.h's board_body and board_bar; design 2026-10-13,
+ * section 1.4): dashboard tiles of frosted glass over the live sky. Left,
+ * the weather: the hero tile (the icon, the temperature, the words, feels
+ * and humidity, the min/max bar, the wind dial, the rain line, the 12 h
+ * curve with its rain columns), the sky tile (the sun arc, the moon), the
+ * three days. Right, the money: Blue's tile (the price, the change chip,
+ * the 30 days' sparkline and range), then a grid of small tiles (the other
+ * rates, the money extras). Under them the news ticker; the bottom bar is
+ * page.c's.
  *
  * The layout comes from SW and SH each frame, in two forms: wide (SH 980
  * and up: the TV area and the default area, the heights scaled by the
  * content's height over 800) and narrow (the narrow area, 1600 x 900).
  * Every value has its "-" form when the reply lacks its key (a Worker
- * before 0.3.0) or before the first reply; every tile is a solid panel in
- * RSX-only mode (fx_glass). A value that changed at the last good reply
- * counts from its old value in 400 ms and its tile gets a halo: up in 200
- * ms, two pulses of 500 ms, then a fade in 400 ms to a lower glow that
- * stays until the next reply. Every motion reads sky_time (real time, not
- * a count of frames) and is a whole pixel before a text, digits or S/M
- * icon call (design 1.12); the L icons (bilinear) and the anti-aliased
- * lines move by fractions. The lines, the rings, the discs and the arrow
- * are anti-aliased (fx.h's aa_*: the round of 2026-10-14 found them
- * rough). The main thread only. */
+ * before 0.3.0); before the first reply each tile shows the skeleton
+ * (page.c's skel_bar); every tile is a solid panel in RSX-only mode
+ * (fx_glass). A value that changed at the last good reply counts from its
+ * old value in 400 ms and its tile gets a halo: up in 200 ms, two pulses of
+ * 500 ms, then a fade in 400 ms to a lower glow that stays until the next
+ * reply. Every motion reads sky_time (real time, not a count of frames).
+ * A text or digits call takes a whole pixel (design 1.12); since stage 10
+ * every icon that moves goes through icon_rot (bilinear: the S and M sets
+ * too), the anti-aliased lines move by fractions, and the ticker's text is
+ * marquee.c's bilinear picture, so nothing moves in whole-pixel steps. The
+ * lines, the rings, the discs and the arrow are anti-aliased (fx.h's aa_*:
+ * the round of 2026-10-14 found them rough). The two columns and the
+ * ticker rise into place in the start animation (start.h). The main thread
+ * only. */
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -36,17 +41,20 @@
 #include "astro.h"
 #include "sky.h"
 #include "spu_fx_run.h"
+#include "marquee.h"
+#include "start.h"
 
-#define G 16                         /* the gap between the columns */
-#define RG 12                        /* the gap between rows of tiles */
-#define TR 20                        /* a tile's corner radius */
 #define HALO 24                      /* the glow outside a changed tile */
 #define COUNT_S 0.4                  /* the counting's time (stage 9: 0.8 s read as slow) */
 #define HALO_UP 0.2f                 /* a changed tile's halo: up in 200 ms, */
 #define HALO_PULSE 0.5f              /* two pulses of 500 ms, */
 #define HALO_FADE 0.4f               /* a fade to the resting glow in 400 ms (stage 9: 3 s of pulses, a fade to 6 s) */
-#define TICK_STEP 2                  /* the ticker: 2 px each display period, 119.9 px a second at 59.94 Hz (stage 9: */
-#define TICK_HZ 59.94                /* 90 px a second moved 1 and 2 px in turn); the steps follow the clock */
+/* The ticker's speed in px a second (Lucas, 2026-10-14: "the text marquee is
+ * fast", "an slower marquee"; stage 9b moved 2 px a frame, 119.9 px a
+ * second). Any value: the text moves by fractions of a pixel (marquee.c),
+ * so no speed judders at 59.94 Hz. The one number to tune after the
+ * console's round. */
+#define TICKER_PX_S 55.0
 #define PI_F 3.14159265f
 
 static int wide;                     /* SH >= 980 */
@@ -94,15 +102,7 @@ static void temp_digits(char *out, int n, const char *s)
 
 /* ---- the tiles ----------------------------------------------------------------------- */
 
-static u32 glass_tint(void) { return GLASS_TINT | (u32)(0x73 + (0x9c - 0x73) * fx_sc.light); }
-
-/* A glass tile (design 3.4): the blurred sky, the tint, the 1 px edge and the bottom line. */
-static void tile(float x, float y, float w, float h)
-{
-    fx_glass(x, y, w, h, TR, glass_tint());
-    round_frame(x, y, w, h, TR, 1, GLASS_EDGE);
-    rect(x + TR, y + h - 1, w - 2 * TR, 1, GLASS_SHADE);
-}
+#define tile glass_tile                  /* page.c's glass tile (design 3.4) */
 
 /* ---- the changes since the reply before: the counting and the glow ------------------- */
 
@@ -235,36 +235,46 @@ static float value(float x, float y, int big_size, int font, int dec_font, u32 c
 static const int m_icon[9] = {IC_M_SUN_FILL,        IC_M_MOON_STARS_FILL, IC_M_CLOUD_SUN_FILL,  IC_M_CLOUD_MOON_FILL,      IC_M_CLOUD_FILL,
                               IC_M_CLOUD_FOG_FILL,  IC_M_CLOUD_RAIN_FILL, IC_M_CLOUD_SNOW_FILL, IC_M_CLOUD_LIGHTNING_FILL};
 
-/* An M icon of the weather (the fill tinted, the outline WHITE). */
-static void wx_icon_m(int wi, float cx, float cy)
+/* An M icon of the weather (the fill tinted, the outline WHITE), turned by
+ * angle and scaled: icon_rot binds it bilinear, so it moves by fractions of
+ * a pixel (the round of 2026-10-14: the day icons' 2 px bob on whole pixels
+ * moved in steps a few seconds apart, "in installments"). */
+static void wx_icon_m(int wi, float cx, float cy, float angle, float scale)
 {
     if (wi < 0 || wi > WI_CLOUD_LIGHTNING) return;
     u32 fill = wi == WI_SUN || wi == WI_CLOUD_SUN ? 0xffd36b60 : wi == WI_MOON_STARS || wi == WI_CLOUD_MOON ? 0xe9edf550
                : wi == WI_CLOUD_LIGHTNING                     ? 0xc9a4ff60
                                                               : 0xb8c4d660;
-    icon(m_icon[wi], cx, cy, fill);
-    icon(m_icon[wi] + 1, cx, cy, WHITE);
+    icon_rot(m_icon[wi], cx, cy, angle, scale, fill);
+    icon_rot(m_icon[wi] + 1, cx, cy, angle, scale, WHITE);
 }
 
-/* The hero's icon (design 3.9): layers of the L set that move. k: WK_*. */
+/* The hero's icon (design 3.9): layers of the L set that move, by
+ * fractions of a pixel (bilinear), slowly and over a wider range since the
+ * round of 2026-10-14 (Lucas: "a bit bigger and more range of movement"):
+ * the sun turns once a minute and breathes 3 % on 5 s; the cloud drifts 14
+ * px on 8 s, a grey one behind it 10 px on 11 s; the rain falls 70 px; the
+ * snow falls 70 px and sways; the fog's bars slide 18 px; the moon sways 4
+ * deg on 7 s with two stars that twinkle. k: WK_*. */
 static void hero_icon(int k, int day, float cx, float cy, float box)
 {
     float s = box / 168, t = (float)T;
     int still = fx_reduced();
-    /* the L layers bind bilinear (icon_rot): the drift by fractions, smooth (stage 9 rounded it: 1 px steps) */
-    float drift = still ? 0 : 8 * s * sinf(2 * PI_F * t / 6), drift2 = still ? 0 : 6 * s * sinf(2 * PI_F * t / 9);
+    float drift = still ? 0 : 14 * s * sinf(2 * PI_F * t / 8), drift2 = still ? 0 : 10 * s * sinf(2 * PI_F * t / 11);
+    float breathe = still ? 1 : 1 + 0.03f * sinf(2 * PI_F * t / 5);
     if (k == WK_NONE) return;
     if (k == WK_CLEAR) {
         if (day) {
             float a = still ? 0 : 2 * PI_F * (float)fmod(T, 60.0) / 60;   /* one turn a minute */
-            icon_rot(IC_L_SUN_FILL, cx, cy, a, s, 0xffd36b55);
-            icon_rot(IC_L_SUN_LINE, cx, cy, a, s, SUN);
+            icon_rot(IC_L_SUN_FILL, cx, cy, a, s * breathe, 0xffd36b55);
+            icon_rot(IC_L_SUN_LINE, cx, cy, a, s * breathe, SUN);
         } else {
-            icon_rot(IC_L_MOON_FILL, cx - 4 * s, cy, 0, s * 0.86f, 0xe9edf540);
-            icon_rot(IC_L_MOON_LINE, cx - 4 * s, cy, 0, s * 0.86f, MOON_LIT);
+            float sw = still ? 0 : 4 * PI_F / 180 * sinf(2 * PI_F * t / 7);
+            icon_rot(IC_L_MOON_FILL, cx - 4 * s, cy, sw, s * 0.86f, 0xe9edf540);
+            icon_rot(IC_L_MOON_LINE, cx - 4 * s, cy, sw, s * 0.86f, MOON_LIT);
             for (int i = 0; i < 2; i++) {                    /* two small stars that twinkle */
                 float tw = still ? 1 : 0.55f + 0.45f * sinf(t * (1.7f + (float)i) + (float)i * 2);
-                aa_disc(rnd(cx + (i ? 64 : 52) * s), rnd(cy + (i ? 18 : -48) * s), i ? 3 : 5, (WHITE & ~0xffu) | (u32)(0xff * tw));
+                aa_disc(cx + (i ? 64 : 52) * s, cy + (i ? 18 : -48) * s, i ? 3 : 5, (WHITE & ~0xffu) | (u32)(0xff * tw));
             }
         }
         return;
@@ -273,8 +283,8 @@ static void hero_icon(int k, int day, float cx, float cy, float box)
     if (k == WK_PARTLY) {
         if (day) {
             float a = still ? 0 : 2 * PI_F * (float)fmod(T, 60.0) / 60;
-            icon_rot(IC_L_SUN_FILL, cx + 30 * s, cy - 32 * s, a, s * 0.6f, 0xffd36b55);
-            icon_rot(IC_L_SUN_LINE, cx + 30 * s, cy - 32 * s, a, s * 0.6f, SUN);
+            icon_rot(IC_L_SUN_FILL, cx + 30 * s, cy - 32 * s, a, s * 0.6f * breathe, 0xffd36b55);
+            icon_rot(IC_L_SUN_LINE, cx + 30 * s, cy - 32 * s, a, s * 0.6f * breathe, SUN);
         } else {
             icon_rot(IC_L_MOON_FILL, cx + 30 * s, cy - 32 * s, 0, s * 0.55f, 0xe9edf540);
             icon_rot(IC_L_MOON_LINE, cx + 30 * s, cy - 32 * s, 0, s * 0.55f, MOON_LIT);
@@ -284,23 +294,24 @@ static void hero_icon(int k, int day, float cx, float cy, float box)
         icon_rot(IC_L_CLOUD_FILL, cx + 18 * s + drift2, cy - 30 * s, 0, s * 0.6f, 0x9ba7ba50);
         icon_rot(IC_L_CLOUD_LINE, cx + 18 * s + drift2, cy - 30 * s, 0, s * 0.6f, GREY);
     }
-    if (k == WK_RAIN || k == WK_STORM) {                     /* 10 RSX streaks under the cloud that fall 40 px and fade */
+    if (k == WK_RAIN || k == WK_STORM) {                     /* 10 streaks under the cloud that fall 70 px and fade */
         for (int i = 0; i < 10; i++) {
-            float ph = still ? 0.3f : (float)fmod(T / 0.9 + i * 0.37, 1.0);
-            float x = ccx - 52 * s + (float)i * 11.5f * s, y = ccy + 36 * s + ph * 40 * s;
+            float ph = still ? 0.3f : (float)fmod(T / 1.1 + i * 0.37, 1.0);
+            float x = ccx - 52 * s + (float)i * 11.5f * s, y = ccy + 34 * s + ph * 70 * s;
             aa_line(x, y, x - 4 * s, y + 20 * s, 3, (BLUE & ~0xffu) | (u32)(0xd0 * (1 - ph)));
         }
     }
-    if (k == WK_SNOW)                                        /* 6 flakes that fall and sway */
+    if (k == WK_SNOW)                                        /* 6 flakes that fall 70 px and sway */
         for (int i = 0; i < 6; i++) {
-            float ph = still ? 0.3f + 0.1f * (float)i : (float)fmod(T / 2.4 + i * 0.29, 1.0);
-            float x = ccx - 46 * s + (float)i * 18 * s + 6 * s * sinf(t * 2 + (float)i), y = ccy + 34 * s + ph * 46 * s;
-            icon_rot(IC_L_SNOWFLAKE_LINE, x, y, (float)i, s * 0.16f, (WHITE & ~0xffu) | (u32)(0xff * (1 - ph * 0.8f)));
+            float ph = still ? 0.3f + 0.1f * (float)i : (float)fmod(T / 3.0 + i * 0.29, 1.0);
+            float x = ccx - 46 * s + (float)i * 18 * s + 8 * s * sinf(t * 1.6f + (float)i), y = ccy + 34 * s + ph * 70 * s;
+            icon_rot(IC_L_SNOWFLAKE_LINE, x, y, (float)i + t * 0.4f, s * 0.16f, (WHITE & ~0xffu) | (u32)(0xff * (1 - ph * 0.8f)));
         }
-    if (k == WK_FOG)                                         /* three DIM bars that slide */
+    if (k == WK_FOG)                                         /* three bars that slide 18 px, anti-aliased (no whole-pixel steps) */
         for (int i = 0; i < 3; i++) {
-            float dx = still ? 0 : rnd(10 * s * sinf(t * 0.8f + (float)i * 2));
-            round_rect(rnd(cx - 62 * s + dx + (float)(i & 1) * 14 * s), rnd(cy + 36 * s + (float)i * 16 * s), rnd(110 * s), rnd(7 * s), 3, DIM);
+            float dx = still ? 0 : 18 * s * sinf(t * 0.6f + (float)i * 2);
+            float x0 = cx - 62 * s + dx + (float)(i & 1) * 14 * s, y0 = cy + 40 * s + (float)i * 16 * s;
+            aa_line(x0, y0, x0 + 110 * s, y0, 7 * s, DIM);
         }
     icon_rot(IC_L_CLOUD_FILL, ccx, ccy, 0, s * 0.86f, 0xb8c4d670);
     icon_rot(IC_L_CLOUD_LINE, ccx, ccy, 0, s * 0.86f, WHITE);
@@ -417,9 +428,21 @@ static void hero(float x, float y, float w, float h, const board_data *b)
     int has = board_have && b->has_wx;
     int k = board_have && b->has_fx ? wmo_kind(b->fx_code) : WK_NONE, day = has ? b->is_day : fx_sc.elev > 0;
     int tsize = wide ? D_XL : D_L;
-    float ic = wide ? 168 : 132, R = wide ? 76 : 58;
+    float ic = wide ? 184 : 140, R = wide ? 76 : 58;     /* the icon's box (stage 9: 168 and 132) */
     float dx = x + w - 40 - 2 * R, dcx = x + w - 40 - R, dcy = y + 30 + R;
     tile(x, y, w, h);
+    if (!board_have) {                                       /* before the first reply: the skeleton (design 3.9) */
+        float sx = x + 28 + ic + 24;
+        skel_bar(x + 40, y + 40, ic - 24, ic - 40);
+        skel_bar(sx, y + 34, wide ? 230 : 170, wide ? 110 : 80);
+        skel_bar(sx + (wide ? 260 : 200), y + 52, 150, 30);
+        skel_bar(sx + (wide ? 260 : 200), y + 96, 210, 24);
+        aa_ring(dcx, dcy, R, 3, 0xffffff26);
+        float band = rnd((wide ? 170 : 130) * sc), yb = rnd(y + h - band - 14);
+        skel_bar(x + 48, yb, 260, 26);
+        skel_bar(x + 48, yb + 50, w - 96, band - 74);
+        return;
+    }
     hero_icon(k, day, x + 28 + ic / 2, y + 22 + ic / 2, ic);
     float tx = k == WK_NONE ? x + 32 : x + 28 + ic + 24;     /* no code: the temperature takes the icon's place */
     temp_digits(t, sizeof t, has ? b->temp : "-");
@@ -492,6 +515,14 @@ static void sky_tile(float x, float y, float w, float h, const board_data *b)
     clock_offset(&off);
     if (board_have && b->has_offset) off = b->offset;
     tile(x, y, w, h);
+    if (!board_have) {
+        skel_bar(x + 24, y + 16, 220, 26);
+        skel_bar(x + 50, y + h - 46, w / 2 - 100, 12);
+        skel_bar(x + w / 2 + 40, y + (h - 80) / 2, 80, 80);
+        skel_bar(x + w / 2 + 150, y + h / 2 - 36, 200, 28);
+        skel_bar(x + w / 2 + 150, y + h / 2 + 8, 120, 22);
+        return;
+    }
     float half = w / 2, ax0 = x + 50, ax1 = x + half - 50, aw = ax1 - ax0, ah = h - (wide ? 88 : 80);
     float acx = (ax0 + ax1) / 2, acy = rnd(y + h - 34);
     int rise = board_have && b->has_sun ? hm_parse(b->sunrise) : -1, set = board_have && b->has_sun ? hm_parse(b->sunset) : -1;
@@ -545,6 +576,10 @@ static void sky_tile(float x, float y, float w, float h, const board_data *b)
 
 /* ---- the three days ------------------------------------------------------------------ */
 
+/* The three days: the day, the M icon at 1.25 times (80 px) that bobs 4 px
+ * on 5 s, sways 3 px on 7 s and tilts 2.5 deg on 6 s, each card a third of
+ * a period apart, by fractions of a pixel (icon_rot, bilinear); max and
+ * min; the rain chip. Before the first reply: the skeleton. */
 static void days(float x, float y, float w, float h, const board_data *b)
 {
     float cw = (w - 2 * G) / 3;
@@ -552,10 +587,17 @@ static void days(float x, float y, float w, float h, const board_data *b)
         const board_day *d = board_have && i < b->n_day ? &b->day[i] : NULL;
         float cx = rnd(x + (float)i * (cw + G));
         tile(cx, y, rnd(cw), h);
-        text_fit(cx + 24, y + 18, wide ? F_MED : F_BODY, d ? WHITE : DIM, cw - 120, "%s", d ? d->label : "-");
+        if (!board_have) {
+            skel_bar(cx + 24, y + 20, 90, 28);
+            skel_bar(cx + 24, y + h - 70, 130, 26);
+            continue;
+        }
+        text_fit(cx + 24, y + 18, wide ? F_MED : F_BODY, d ? WHITE : DIM, cw - 130, "%s", d ? d->label : "-");
         int k = d && i < b->n_day_code ? wmo_kind(b->day_code[i]) : WK_NONE;
-        float bob = fx_reduced() ? 0 : rnd(2 * sinf(2 * PI_F * ((float)T / 4 + (float)i / 3)));
-        wx_icon_m(wx_icon(k, 1), cx + cw - 60, rnd(y + h / 2 - 4 + bob));
+        float ph = (float)i / 3, still = (float)fx_reduced();
+        float bob = still ? 0 : 4 * sinf(2 * PI_F * ((float)T / 5 + ph)), sway = still ? 0 : 3 * sinf(2 * PI_F * ((float)T / 7 + ph));
+        float tilt = still ? 0 : 2.5f * PI_F / 180 * sinf(2 * PI_F * ((float)T / 6 + ph));
+        wx_icon_m(wx_icon(k, 1), cx + cw - 66 + sway, y + h / 2 - 2 + bob, tilt, wide ? 1.25f : 1.1f);
         float yy = rnd(y + h - (wide ? 76 : 66)), xx;
         xx = text(cx + 24, yy, F_MED | TNUM, d && !miss(d->max) ? WHITE : DIM, "%s", d ? d->max : "-");
         text(xx + 8, yy + (float)base_dy(F_MED, F_BODY), F_BODY | TNUM, GREY, "/ %s", d ? d->min : "-");
@@ -585,6 +627,12 @@ static void blue(float x, float y, float w, float h, const board_data *b)
     tile(x, y, w, h);
     icon(IC_S_CURRENCY_DOLLAR, x + 40, y + 37, GREEN);
     text(x + 62, y + 18, F_MED, WHITE, "%s", label);
+    if (!board_have) {
+        skel_bar(x + 30, rnd(y + (wide ? 70 * sc : 56)), 300, wide ? 70 : 56);
+        skel_bar(x + w - 220, y + 70, 196, 26);
+        skel_bar(x + 30, y + h - (wide ? 50 : 36), w - 60, 18);
+        return;
+    }
     float cl = chip(x + w - 24, y + 20, board_have ? board_chg_find(b, 0, label) : NULL, 0);
     const board_spark *sp = board_have ? board_spark_find(b, label) : NULL;
     int lo = 0, hi = 0, nv = sp ? spark_range(sp, &lo, &hi) : 0;
@@ -712,43 +760,27 @@ static void money(float x, float y, float w, float h, const board_data *b)
     for (int i = 0; i < 8; i++) {
         float cx = rnd(x + (float)(i % 2) * (gw + RG)), cy = rnd(y + fh + RG + (float)(i / 2) * (rh + RG));
         if (i < n) small_tile(cx, cy, rnd(gw), rnd(rh), &it[i]);
-        else if (!board_have) {                              /* no reply yet: the tiles' "-" forms */
-            item e = {"-", "-", "-", "-", NULL, 1, 0, 0, ""};
-            small_tile(cx, cy, rnd(gw), rnd(rh), &e);
+        else if (!board_have) {                              /* no reply yet: the skeleton */
+            tile(cx, cy, rnd(gw), rnd(rh));
+            skel_bar(cx + 22, cy + 12, 110, 22);
+            skel_bar(cx + 22, cy + (wide ? rh / 2 - 8 : 40), rnd(gw) * 0.6f, wide ? 40 : 36);
         }
     }
 }
 
 /* ---- the ticker and the bottom bar --------------------------------------------------- */
 
-static u32 source_colour(const char *s)
-{
-    if (!strncmp(s, "Clar", 4)) return CLARIN;
-    if (!strncmp(s, "Infobae", 7)) return INFOBAE;
-    return 0x3a5a8cff;
-}
-
-/* The ticker's offset, whole and even pixels: TICK_STEP each display
- * period, the count of steps from the clock (a late frame moves it more, a
- * stall makes no jump back), so the text moves the same each frame. */
-static double tick_px;
-
-static float tick_offset(void)
-{
-    double d = T * TICK_HZ * TICK_STEP - tick_px;
-    long n = (long)floor(d / TICK_STEP + 0.5);
-    if (n > 0) tick_px += (double)(n * TICK_STEP);
-    return (float)tick_px;
-}
-
-/* The ticker (design 1.8): a glass band over the screen's width, the
- * headlines moving right to left at 2 px a frame (119.9 px a second) apart
- * by a dot, the source's pill fixed at the canvas's left over them. */
+/* The ticker (design 1.8): a glass band over the screen's width (it moves
+ * with its page in a slide: page_dx), the headlines moving right to left
+ * at TICKER_PX_S by fractions of a pixel (marquee.c: the text as a
+ * bilinear picture), apart by a dot, the pill of the headline at the pill's
+ * place fixed at the canvas's left over them. */
 static void ticker(float y, float h, const board_data *b)
 {
     const float sep = 56;
     float ox, oy, wsum = 0, ws[BOARD_NEWS];
     screen_origin(&ox, &oy);
+    ox += (float)page_dx;
     fx_glass(ox, y, 1920, h, 0, (glass_tint() & ~0xffu) | 0xa8);
     rect(ox, y, 1920, 1, GLASS_EDGE);
     for (int i = 0; i < b->n_news; i++) {                    /* measured as text() draws it: its format buffer holds 320 bytes */
@@ -757,14 +789,14 @@ static void ticker(float y, float h, const board_data *b)
         wsum += ws[i] = (float)text_w(F_BODY, t) + sep;
     }
     float pill = (float)text_w(F_SMALL, "Infobae") + 28;     /* one width for every source */
-    float start = MG + pill + 20, off = (float)fmod((double)tick_offset(), (double)wsum);
+    float start = MG + pill + 20, off = (float)ticker_offset(T, TICKER_PX_S, (double)wsum);
     float ty = rnd(y + (h - (float)line_h(F_BODY)) / 2), x = start - off;
     while (x > ox) x -= wsum;                                /* from the screen's left edge */
     const char *under = b->news[0].source;
     for (int i = 0; x < ox + 1920; i = (i + 1) % b->n_news) {
         if (x + ws[i] > ox) {
-            text(x, ty, F_BODY, WHITE, "%s", b->news[i].title);
-            disc(x + ws[i] - sep / 2, y + h / 2, 3, GREY);
+            marquee_title(i, x, ty, WHITE);
+            aa_disc(x + ws[i] - sep / 2, y + h / 2, 3, GREY);
         }
         if (x <= MG + pill && MG + pill < x + ws[i]) under = b->news[i].source;   /* the headline at the pill's right end */
         x += ws[i];
@@ -777,39 +809,19 @@ static void ticker(float y, float h, const board_data *b)
     text_fit(MG + 14, rnd(y + (h - (float)line_h(F_SMALL)) / 2), F_SMALL, WHITE, pill - 20, "%s", under);
 }
 
-/* The width footer_at gives its items: a face button 44 px, a label its
- * text and 30, each action its text and 36. */
-static float footer_w(const char *s)
-{
-    float w = 0;
-    char item_s[64];
-    while (*s) {
-        const char *e = strstr(s, "  ");
-        int n = e ? (int)(e - s) : (int)strlen(s);
-        snprintf(item_s, sizeof item_s, "%.*s", n, s);
-        char *sp = strchr(item_s, ' ');
-        if (sp) *sp = 0;
-        w += !strcmp(item_s, "SQUARE") ? 44 : (float)text_w(F_SMALL, item_s) + 30;
-        if (sp) w += (float)text_w(F_SMALL, sp + 1) + 36;
-        s += n;
-        while (*s == ' ') s++;
-    }
-    return w - 36;
-}
-
 /* The bottom bar (design 1.2): the status and the schedule on the left
- * (board_url.txt's note after them in YELLOW), the buttons on the right. */
-static void bottom_bar(float y, const char *msg, u32 msg_color)
+ * (board_url.txt's note after them in YELLOW), the buttons on the right;
+ * msg in place of the status when it is not NULL. */
+void board_bar(float y, const char *msg, u32 msg_color)
 {
     static const char hints[] = "L1/R1 pages  SQUARE refresh  SELECT info  START exit";
     char st[300], nx[48], line[400];
-    float hw = footer_w(hints), hx = SW - MG - hw;
-    footer_at(hx, y + 4, hints);
     u32 c = msg_color;
     if (msg) snprintf(line, sizeof line, "%s", msg);
     else {
         c = board_status_words(st, sizeof st);
         board_next_words(nx, sizeof nx);
+        if (!board_fetches && !strncmp(nx, "Fetching", 8)) nx[0] = 0;   /* the status says it already */
         int n = (int)strlen(st);
         if (n && st[n - 1] == '.') st[--n] = 0;
         if (nx[0] && !strncmp(st, "Board updated", 13)) {
@@ -818,33 +830,38 @@ static void bottom_bar(float y, const char *msg, u32 msg_color)
         } else if (nx[0]) snprintf(line, sizeof line, "%s. %s.", st, nx);
         else snprintf(line, sizeof line, "%s.", st);
     }
-    float room = hx - 30 - MG;
-    float xe = text_fit(MG, y + 8, F_SMALL, c, room, "%s", line);
-    if (board_url_note[0] && room - (xe - MG) > 200) text_fit(xe + 16, y + 8, F_SMALL, YELLOW, room - (xe - MG) - 16, "%s", board_url_note);
+    bar_draw(y, line, c, board_url_note, hints);
 }
 
 /* ---- the page ------------------------------------------------------------------------ */
 
-void board_draw(const char *msg, u32 msg_color)
+/* The Board's body (design 1.4): the left column, the right column and the
+ * ticker, each rising into place in the start animation (start.h). */
+void board_body(void)
 {
     const board_data *b = &board_cur;
-    page_begin();
     T = sky_time();
     deg = utf8_rc == 0 ? "\xc2\xb0" : "";
-    wide = SH >= 980;
+    wide = page_wide();
     changes();
     int news = board_have && b->n_news > 0;
-    float top = wide ? 152 : 132, tick_h = wide ? 52 : 48, ty = SH - (wide ? 112 : 100);
+    float top = page_top(), tick_h = wide ? 52 : 48, ty = SH - (wide ? 112 : 100);
     float bot = news ? SH - (wide ? 124 : 112) : ty + tick_h - 12, ch = bot - top;
     float Wi = SW - 2 * MG, lw = rnd(0.585f * Wi), rw = Wi - lw - G;
     sc = wide ? ch / 800 : 1;
     float hero_h = wide ? rnd(440 * sc) : 360, sky_h = wide ? rnd(160 * sc) : 128;   /* narrow: the strip takes the rest */
     float strip_h = ch - hero_h - sky_h - 2 * RG;
+    shift_push(0, (int)rnd(SA_RISE * (1 - start_k(SA_LEFT))));
     hero(MG, top, lw, hero_h, b);
     sky_tile(MG, top + hero_h + RG, lw, sky_h, b);
     days(MG, top + hero_h + sky_h + 2 * RG, lw, strip_h, b);
+    shift_pop();
+    shift_push(0, (int)rnd(SA_RISE * (1 - start_k(SA_RIGHT))));
     money(MG + lw + G, top, rw, ch, b);
-    if (news) ticker(ty, tick_h, b);
-    bottom_bar(SH - (wide ? 52 : 48), msg, msg_color);
-    page_end();
+    shift_pop();
+    if (news) {
+        shift_push(0, (int)rnd(SA_RISE * (1 - start_k(SA_BOTTOM))));
+        ticker(ty, tick_h, b);
+        shift_pop();
+    }
 }

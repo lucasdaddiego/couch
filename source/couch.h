@@ -27,6 +27,8 @@ extern s64 t_start;                  /* sysGetSystemTime at the start */
 #define TEMP_HOT    0xff8a5cff       /* its hot end */
 #define CLARIN      0xe5484dff       /* Clarin's pill */
 #define INFOBAE     0xf28c28ff       /* Infobae's pill */
+#define AMBITO      0x2f72d6ff       /* Ambito's pill (0.3.0's News page) */
+#define BBC         0x4a505cff       /* BBC's pill */
 
 /* One line appended to couch.txt, with its line end; nothing when the folder
  * is not writable. The main thread only. */

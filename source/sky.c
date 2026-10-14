@@ -296,16 +296,25 @@ static void sun(float ox, float oy)
     if (g) tex_sub(g, x - 260, y - 260, 520, 520, 0, 0, 1, 1, 0xffd36b00u | (u32)(0x70 * gain));
     aa_disc(x, y, 30, 0xffe9a800u | (u32)(0xff * gain * (1 - fx_sc.cover)));   /* the disc only through a thin cover */
     if (fx_sc.cover >= 0.6f || fx_sc.elev <= 0 || fx_reduced()) return;
-    /* the rays: 9 thin triangles from the sun, 0x20 at the sun to 0 at the end, turning 1 deg a second */
+    /* the rays: 9 that turn 1 deg a second, each a soft wedge: its middle
+     * line 0x30 at 40 px from the sun to 0 at its end, its two sides 0
+     * (stage 9's hard-edged triangles crawled a pixel at a time as they
+     * turned; now no edge has a step), the inner end under the disc */
     float turn = (float)sky_time() * PI_F / 180.0f;
-    u32 c0 = 0xffd36b00u | (u32)(0x20 * gain), c1 = 0xffd36b00u;
+    const float r0 = 40, L = 1300, w = 0.022f, h0 = 6;
+    u32 c0 = 0xffd36b00u | (u32)(0x30 * gain), c1 = 0xffd36b00u;
     gfx_texture(NULL);
-    gfx_vtx *q = gfx_prim(GFX_TRIANGLES, 27);
+    gfx_vtx *q = gfx_prim(GFX_TRIANGLES, 9 * 12);
     for (int k = 0; k < 9; k++) {
-        float a = turn + (float)k * (2 * PI_F / 9), w = 0.022f, L = 1300;
-        q = gfx_put(q, x, y, c0, 0, 0);
-        q = gfx_put(q, x + cosf(a - w) * L, y + sinf(a - w) * L, c1, 0, 0);
-        q = gfx_put(q, x + cosf(a + w) * L, y + sinf(a + w) * L, c1, 0, 0);
+        float a = turn + (float)k * (2 * PI_F / 9), ca = cosf(a), sa = sinf(a);
+        float mx0 = x + ca * r0, my0 = y + sa * r0, mx1 = x + ca * L, my1 = y + sa * L;
+        float l0x = mx0 - sa * h0, l0y = my0 + ca * h0, r0x = mx0 + sa * h0, r0y = my0 - ca * h0;
+        float l1x = x + cosf(a - w) * L, l1y = y + sinf(a - w) * L, r1x = x + cosf(a + w) * L, r1y = y + sinf(a + w) * L;
+        /* the near side: (l0, m0, m1) and (l0, m1, l1); the far side: (m0, r0, r1) and (m0, r1, m1) */
+        q = gfx_put(q, l0x, l0y, c1, 0, 0), q = gfx_put(q, mx0, my0, c0, 0, 0), q = gfx_put(q, mx1, my1, c1, 0, 0);
+        q = gfx_put(q, l0x, l0y, c1, 0, 0), q = gfx_put(q, mx1, my1, c1, 0, 0), q = gfx_put(q, l1x, l1y, c1, 0, 0);
+        q = gfx_put(q, mx0, my0, c0, 0, 0), q = gfx_put(q, r0x, r0y, c1, 0, 0), q = gfx_put(q, r1x, r1y, c1, 0, 0);
+        q = gfx_put(q, mx0, my0, c0, 0, 0), q = gfx_put(q, r1x, r1y, c1, 0, 0), q = gfx_put(q, mx1, my1, c1, 0, 0);
     }
 }
 

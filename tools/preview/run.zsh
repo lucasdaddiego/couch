@@ -157,6 +157,20 @@ snowday_line() {
     (*) print -r -- "$1";;
     esac
 }
+body_newsmix() { NEWS_I=0; each newsmix_line; }   # the rainy day with mixed sources: Ambito (economy) and BBC (world) too
+newsmix_line() {
+    case $1 in
+    (news=*)
+        (( NEWS_I++ ))
+        case $NEWS_I in
+        (2) print -r -- "news="$'\xc3\x81'"mbito|540|El d"$'\xc3\xb3'"lar blue cerr"$'\xc3\xb3'" estable y el riesgo pa"$'\xc3\xad'"s baj"$'\xc3\xb3'" a 589 puntos";;
+        (3) print -r -- "news="$'\xc3\x81'"mbito|1980|Inflaci"$'\xc3\xb3'"n: las consultoras esperan un dato por debajo del 2% para octubre";;
+        (6) print -r -- "news=BBC|3600|Storm warnings issued across the Atlantic coast as a deep low moves in";;
+        (*) dayrain_line "$1";;
+        esac;;
+    (*) dayrain_line "$1";;
+    esac
+}
 body_v1() {    # a Worker of 0.1.0's time (the reply of 2026-10-10): no money, no sky, no news
     print -rn -- "couch-board 1
 now=1791614218
@@ -219,7 +233,7 @@ ends() {   # name: the start's and the exit's lines in couch.txt, and the netctl
 
 case ${1:-all} in
 board_ok|all)      # the reply of the Worker test: the clock, both cards; the Info screen; back
-    scn board_ok "120:SNAP=board_ok 122:SELECT 126:SNAP=info 128:CIRCLE 132:SNAP=board_back 133:EXIT"
+    scn board_ok "120:SNAP=board_ok 122:SELECT 150:SNAP=info 152:CIRCLE 180:SNAP=board_back 181:EXIT"
     print -r -- "  the request: $(command grep -m1 '^GET' $P/build/sbx/board_ok$SFX/peer.log | tr -d '\r')"
     ends board_ok ;|
 board_stale|all)   # the dollar upstream failed, the Worker kept its old rates: the card's foot in YELLOW
@@ -227,28 +241,29 @@ board_stale|all)   # the dollar upstream failed, the Worker kept its old rates: 
 board_none|all)    # both upstreams failed with no old data
     BODY=none scn board_none "120:SNAP=board_none 121:EXIT" ;|
 pages|all)         # L1 and R1: the Board, the News, the Info page, R1 wraps to the Board, L1 back to the Info page
-    scn pages "120:SNAP=pages_board 122:R1 126:SNAP=pages_news 128:R1 132:SNAP=pages_info 134:R1 138:SNAP=pages_back 140:L1 144:SNAP=pages_l1 145:EXIT" ;|
+    scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_info 182:R1 210:SNAP=pages_back 212:L1 240:SNAP=pages_l1 241:EXIT" ;|
 board_extras|all)  # the money extras none and stale, a dry forecast, the feeds failed: the News page says why
-    BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 126:SNAP=news_none 127:EXIT" ;|
+    BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 150:SNAP=news_none 151:EXIT" ;|
 board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines (the new Couch draws what came)
-    BODY=v1 scn board_v1 "120:SNAP=board_v1 122:R1 126:SNAP=news_v1 127:EXIT" ;|
+    BODY=v1 scn board_v1 "120:SNAP=board_v1 122:R1 150:SNAP=news_v1 151:EXIT" ;|
 net_slow|all)      # the answer takes 4 s: the header says the internet is slow
-    scn net_slow "400:SNAP=net_slow 402:SELECT 406:SNAP=net_slow_info 407:EXIT" PV_BOARD_FAIL=slow ;|
+    scn net_slow "400:SNAP=net_slow 402:SELECT 430:SNAP=net_slow_info 431:EXIT" PV_BOARD_FAIL=slow ;|
 net_down|all)      # a good reply, then SQUARE after 10 s and a refused connect: no internet since 09:00
-    scn net_down "120:SNAP=net_down_first 700:SQUARE 820:SNAP=net_down 822:SELECT 826:SNAP=net_down_info 827:EXIT" PV_BOARD_FAIL=ok,refused ;|
-ambient|all)       # 10 min with no button: dimmed (the Board); a minute on, the News moved 6 px; then the Board moved
-                   # again; START wakes the screen and does not exit; the fetches go on every 5 min
+    scn net_down "120:SNAP=net_down_first 700:SQUARE 820:SNAP=net_down 822:SELECT 850:SNAP=net_down_info 851:EXIT" PV_BOARD_FAIL=ok,refused ;|
+ambient|all)       # 10 min with no button: the aurora with the clock, the date and the weather's line (0.3.0); a
+                   # minute on, the block glided to its next place with Blue's price; then the newest headline;
+                   # START wakes the screen (the Board) and does not exit; the fetches go on every 5 min
     scn ambient "120:SNAP=ambient_before 36120:SNAP=ambient 39720:SNAP=ambient_news 43320:SNAP=ambient_board2 43340:START 43360:SNAP=ambient_awake 43370:EXIT" PV_MAXFRAMES=44000
     print -r -- "  requests: $(command grep -c '^GET' $P/build/sbx/ambient$SFX/peer.log); couch.txt: $(command grep -h '^ambient' $P/build/sbx/ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 board_smn|all)     # Junin, the now line from SMN: the weather card's foot names both sources; the same folded to ASCII
     BODY=smn scn board_smn "120:SNAP=board_smn 121:EXIT"
     BIN=pv_utf8_off BODY=smn scn board_smn_utf8_off "120:SNAP=board_smn_utf8_off 121:EXIT" ;|
 board_301|all)     # the host redirects plain HTTP (Always Use HTTPS back on)
-    scn board_301 "120:SNAP=board_301 122:SELECT 126:SNAP=board_301_info 127:EXIT" PV_BOARD_FAIL=301 ;|
+    scn board_301 "120:SNAP=board_301 122:SELECT 150:SNAP=board_301_info 151:EXIT" PV_BOARD_FAIL=301 ;|
 board_stale301|all) # a good reply, then SQUARE after 10 s and a 301: the stale line keeps the data's time, the Info screen the Location
-    scn board_stale301 "120:SNAP=board_stale301_first 700:SQUARE 820:SNAP=board_stale301 822:SELECT 826:SNAP=board_stale301_info 827:EXIT" PV_BOARD_FAIL=ok,301 ;|
+    scn board_stale301 "120:SNAP=board_stale301_first 700:SQUARE 820:SNAP=board_stale301 822:SELECT 850:SNAP=board_stale301_info 851:EXIT" PV_BOARD_FAIL=ok,301 ;|
 board_cut|all)     # a good reply, then SQUARE after 10 s and a cut one: the old Board stays
-    scn board_cut "120:SNAP=board_cut_first 700:SQUARE 820:SNAP=board_cut 822:SELECT 826:SNAP=board_cut_info 827:EXIT" PV_BOARD_FAIL=ok,cut ;|
+    scn board_cut "120:SNAP=board_cut_first 700:SQUARE 820:SNAP=board_cut 822:SELECT 850:SNAP=board_cut_info 851:EXIT" PV_BOARD_FAIL=ok,cut ;|
 board_v2|all)      # a reply of format version 2
     scn board_v2 "120:SNAP=board_v2 121:EXIT" PV_BOARD_FAIL=v2 ;|
 board_silent|all)  # the peer accepts and never answers (SO_RCVTIMEO)
@@ -258,20 +273,20 @@ board_refused|all) # nothing listens on the port
 board_dns|all)     # no board_url.txt: the default host, and the preview has no DNS
     URL=none scn board_dns "120:SNAP=board_dns 121:EXIT" ;|
 frozen|all)        # the network start froze before: the Board says so; SELECT, SQUARE twice, CIRCLE: the start runs and the Board fills
-    JOURNAL=$'start net_start\n'$TZ_DONE scn frozen "60:SNAP=frozen 62:SELECT 66:SNAP=frozen_info 70:SQUARE 74:SQUARE 78:SNAP=frozen_cleared 80:CIRCLE 200:SNAP=frozen_after 201:EXIT" ;|
+    JOURNAL=$'start net_start\n'$TZ_DONE scn frozen "100:SNAP=frozen 102:SELECT 130:SNAP=frozen_info 132:SQUARE 136:SQUARE 140:SNAP=frozen_cleared 142:CIRCLE 260:SNAP=frozen_after 261:EXIT" ;|
 tz_skip|all)       # a first start: the clock's prompt, CIRCLE skips it, the Board's offset sets the clock
-    JOURNAL= scn tz_skip "10:SNAP=prompt 12:CIRCLE 130:SNAP=tz_skip 132:SELECT 136:SNAP=tz_skip_info 137:EXIT" ;|
+    JOURNAL= scn tz_skip "30:SNAP=prompt 32:CIRCLE 150:SNAP=tz_skip 152:SELECT 180:SNAP=tz_skip_info 181:EXIT" ;|
 tz_12h|all)        # CROSS at the prompt; TIME_FORMAT 0 (a 12-hour clock), UTC+5:30
-    JOURNAL= scn tz_12h "12:CROSS 130:SNAP=tz_12h 132:SELECT 136:SNAP=tz_12h_info 137:EXIT" PV_TIMEFMT=0 PV_TZ=330 ;|
+    JOURNAL= scn tz_12h "32:CROSS 150:SNAP=tz_12h 152:SELECT 180:SNAP=tz_12h_info 181:EXIT" PV_TIMEFMT=0 PV_TZ=330 ;|
 utf8_off|all)      # text_utf8 failed (the preview's second build): the fold to ASCII
-    BIN=pv_utf8_off BODY=accents scn utf8_off "120:SNAP=utf8_off 122:SELECT 126:SNAP=utf8_off_info 127:EXIT" ;|
+    BIN=pv_utf8_off BODY=accents scn utf8_off "120:SNAP=utf8_off 122:SELECT 150:SNAP=utf8_off_info 151:EXIT" ;|
 accents|all)       # the same reply with UTF-8 text
     BODY=accents scn accents "120:SNAP=accents 121:EXIT" ;|
 refresh|all)       # SQUARE 3 s after the first fetch: the refresh waits for the 10 s mark, then a second request
     scn refresh "200:SQUARE 210:SNAP=refresh_wait 900:SNAP=refresh_done 901:EXIT"
     print -r -- "  requests: $(command grep -c '^GET' $P/build/sbx/refresh$SFX/peer.log)" ;|
 net_fail|all)      # netInitialize fails: CIRCLE and SQUARE try again (netCtlInit once), the exit ends netctl only
-    scn net_fail "120:SNAP=net_fail 122:SELECT 126:SNAP=net_fail_info 128:CIRCLE 132:SQUARE 136:EXIT" PV_NET_FAIL=1
+    scn net_fail "120:SNAP=net_fail 122:SELECT 150:SNAP=net_fail_info 152:CIRCLE 180:SQUARE 184:EXIT" PV_NET_FAIL=1
     ends net_fail ;|
 netctl_fail|all)   # netCtlInit fails: the Board runs, the address is not read, the exit has no netCtlTerm
     scn netctl_fail "120:EXIT" PV_NETCTL_FAIL=1
@@ -285,23 +300,23 @@ quit_net|all)      # Quit Game during the network start: no Board thread, no fet
 noip|all)          # no address and a refused connect: the Board names the missing address
     scn noip "120:SNAP=noip 121:EXIT" PV_NOIP=1 PV_BOARD_FAIL=refused ;|
 nofolder|all)      # the app folder cannot be written: no journal (no counter, no clock prompt), the default URL
-    NOFOLDER=1 JOURNAL= scn nofolder "120:SNAP=nofolder 122:SELECT 126:SNAP=nofolder_info 127:EXIT" ;|
+    NOFOLDER=1 JOURNAL= scn nofolder "120:SNAP=nofolder 122:SELECT 150:SNAP=nofolder_info 151:EXIT" ;|
 auto|all)          # auto.txt 60: no prompt (the round is the consent), the shots at 30 and 45 s, the exit at 60 s
     JOURNAL= AUTO=60 scn auto "1810:SNAP=auto_board 2710:SNAP=auto_info 3300:SNAP=auto_back 4000:EXIT"
     print -r -- "  the sandbox: $(cd $P/build/sbx/auto$SFX/$DIR && print -r -- *(N)); auto.txt now: $(< $P/build/sbx/auto$SFX/$DIR/auto.txt)" ;|
 fx_rain|all)       # the effects on a rainy day: the sky, the clouds and the slanted rain behind the cards; the Info page's
                    # Effects row; the exit: the six exit reports, the join, the exit statuses, the destroy, the close
-    BODY=rain scn fx_rain "120:SNAP=fx_rain 122:SELECT 126:SNAP=fx_rain_info 127:EXIT"
+    BODY=rain scn fx_rain "120:SNAP=fx_rain 122:SELECT 150:SNAP=fx_rain_info 151:EXIT"
     fxends fx_rain ;|
 fx_snow|all)       # snow: 300 flakes with the round texture
     BODY=snow scn fx_snow "120:SNAP=fx_snow 121:EXIT" ;|
 fx_frozen|all)     # fx_first froze the console before: no SPU call at all, RSX only (four cloud sprites, the PPU's 300 drops);
                    # SELECT, SQUARE twice, CIRCLE: the journal is clear, the Board's opening starts the SPUs
-    JOURNAL=$'start fx_first\n'$TZ_DONE BODY=rain scn fx_frozen "120:SNAP=fx_frozen 122:SELECT 126:SNAP=fx_frozen_info 128:SQUARE 130:SQUARE 134:SNAP=fx_frozen_cleared 136:CIRCLE 300:SNAP=fx_frozen_after 301:EXIT"
+    JOURNAL=$'start fx_first\n'$TZ_DONE BODY=rain scn fx_frozen "120:SNAP=fx_frozen 122:SELECT 150:SNAP=fx_frozen_info 152:SQUARE 154:SQUARE 158:SNAP=fx_frozen_cleared 160:CIRCLE 320:SNAP=fx_frozen_after 321:EXIT"
     fxends fx_frozen ;|
 fx_late|all)       # SPU 5 never reports its 30th rain job (inside fx_first): the 50 ms deadline, the terminate and the join,
                    # fx_first closed as failed, RSX only for the session
-    BODY=rain scn fx_late "120:SNAP=fx_late 122:SELECT 126:SNAP=fx_late_info 127:EXIT" PV_FX_LATE=rain PV_FX_LATE_AT=30
+    BODY=rain scn fx_late "120:SNAP=fx_late 122:SELECT 150:SNAP=fx_late_info 151:EXIT" PV_FX_LATE=rain PV_FX_LATE_AT=30
     fxends fx_late ;|
 fx_late_sky|all)   # the sky's 10th picture never comes: RSX only 2 s after it was sent
     scn fx_late_sky "200:SNAP=fx_late_sky 201:EXIT" PV_FX_LATE=sky PV_FX_LATE_AT=10
@@ -335,7 +350,19 @@ board_old|all)     # a Worker of 0.2.0's time (no geo, wx_fx, wx_hours, days_fx,
 board_fxoff|all)   # the effects off (fx_first froze before: RSX only): solid panels, the sprites, the PPU's rain; the glow too
     JOURNAL=$'start fx_first\n'$TZ_DONE BODY=dayrain_before BODY2=dayrain scn board_fxoff "120:SNAP=board_fxoff_first 700:SQUARE 1150:SNAP=board_fxoff 1151:EXIT" ;|
 tv|all)            # Lucas's visible area, 0 2 1920 1078 (not in the narrow pass: it sets its own area)
-    [[ $AREA != narrow ]] && SAFE='0 2 1920 1078' scn tv "120:SNAP=tv_board 122:SELECT 126:SNAP=tv_info 127:EXIT" ;|
+    [[ $AREA != narrow ]] && SAFE='0 2 1920 1078' scn tv "120:SNAP=tv_board 122:R1 150:SNAP=tv_news 152:R1 180:SNAP=tv_info 181:EXIT" ;|
+ambient_rsx|all)   # the ambient mode in RSX-only mode (fx_first froze before): 0.2.0's dimmed page, 6 px moves, the page each minute
+    JOURNAL=$'start fx_first\n'$TZ_DONE scn ambient_rsx "36120:SNAP=ambient_rsx 39720:SNAP=ambient_rsx_news 39730:EXIT" PV_MAXFRAMES=40000 ;|
+start|all)         # the start (0.3.0): the loading screen from the first frame after ui_init (frame 3: the icons'
+                   # step), during the effects' job (its counter), the start animation half way, then the Board;
+                   # couch.txt's start times and boot.txt's marks
+    scn start "3:SNAP=loading 7:SNAP=loading_fx 30:SNAP=start_mid 120:SNAP=start_end 121:EXIT"
+    print -r -- "  couch.txt: $(command grep -h '^start' $P/build/sbx/start$SFX/$DIR/couch.txt | tr '\n' ';')"
+    print -r -- "  boot.txt: $(tr '\n' ' ' < $P/build/sbx/start$SFX/$DIR/boot.txt)" ;|
+skeleton|all)      # before the first reply (a 4 s answer): the skeleton's bars on the Board and on the News page
+    scn skeleton "120:SNAP=skeleton 122:R1 150:SNAP=skeleton_news 151:EXIT" PV_BOARD_FAIL=slow ;|
+news_rain|all)     # the News page on the rainy day of the mockups (the sources' pills, the categories, the ages)
+    BODY=newsmix scn news_rain "120:R1 150:SNAP=news_rain 151:EXIT" ;|
 esac
 py=${PYTHON:-python3}
 $py -I - $OUT <<'PY' 2>/dev/null || print "no Pillow: the snapshots stay .ppm"

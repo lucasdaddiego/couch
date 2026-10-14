@@ -1,11 +1,20 @@
-/* Couch's pages (page.h): the header every page shares, the ambient mode
- * and the News page. Only the main thread runs here. */
+/* Couch's pages (page.h): the frame every page shares, the header with the
+ * flip clock, the slides, the ambient mode, the bottom bar, the News page.
+ * Every motion is a whole pixel before a text, digits or S/M icon call
+ * (design 1.12), except the icons that move (icon_rot binds them bilinear)
+ * and the ticker's text (marquee.c). Every time comes from sky_time (the
+ * system clock since the start: the preview's frame clock). Only the main
+ * thread runs here. */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <sys/systime.h>
 #include <lv2/systime.h>
 #include <ps3gfx/ui.h>
+#include <ps3gfx/gfx.h>
 #include <ps3gfx/fx.h>
+#include <ps3gfx/digits.h>
+#include <ps3gfx/icons.h>
 #include "couch.h"
 #include "page.h"
 #include "board.h"
@@ -14,21 +23,138 @@
 #include "parse.h"
 #include "spu_fx_run.h"
 #include "sky.h"
+#include "start.h"
 
-#define DIM_LAYER 0x000000a8         /* black at 66 %: the picture at a third of its light */
+#define DIM_LAYER 0x000000a8         /* RSX only: black at 66 %, the picture at a third of its light */
 #define DOT_R 7
 #define DOT_STEP 24
+#define SLIDE_S 0.28                 /* a page's slide (design 3.8) */
+#define FLIP_S 0.30                  /* a digit's flip (design 3.10) */
+#define PI_F 3.14159265f
 
 int page = PAGE_BOARD;
 const char *const page_name[PAGE_N] = {"Board", "News", "Info"};
 int ambient;
+int page_dx;
 
 static s64 idle_since, amb_since;
-static int amb_saved, amb_dx, amb_dy, shifted;
+static int amb_saved, amb_dx, amb_dy;
 static long amb_step = -1;
-static int keep_l, keep_t, keep_r, keep_b;
 
-/* ---- the header ------------------------------------------------------------------ */
+static float rnd(float x) { return floorf(x + 0.5f); }
+static float asc_of(int line) { return (float)(int)((float)line * 0.797f + 0.5f); }
+
+int page_wide(void) { return SH >= 980; }
+float page_top(void) { return page_wide() ? 152 : 132; }
+float page_bar_y(void) { return (float)SH - (page_wide() ? 52 : 48); }
+
+/* ---- the moves of the canvas ------------------------------------------------------- */
+
+static struct {
+    int l, t, r, b, dx;
+} shs[4];
+static int nsh;
+
+void shift_push(int dx, int dy)
+{
+    if (nsh >= 4) return;
+    shs[nsh].l = safe_l, shs[nsh].t = safe_t, shs[nsh].r = safe_r, shs[nsh].b = safe_b, shs[nsh].dx = page_dx;
+    nsh++;
+    if (!dx && !dy) return;
+    safe_l += dx, safe_r += dx, safe_t += dy, safe_b += dy;
+    page_dx += dx;
+    safe_apply();
+}
+
+void shift_pop(void)
+{
+    if (nsh <= 0) return;
+    nsh--;
+    int moved = safe_l != shs[nsh].l || safe_t != shs[nsh].t;
+    safe_l = shs[nsh].l, safe_t = shs[nsh].t, safe_r = shs[nsh].r, safe_b = shs[nsh].b, page_dx = shs[nsh].dx;
+    if (moved) safe_apply();
+}
+
+/* ---- what the pages share ---------------------------------------------------------- */
+
+u32 glass_tint(void) { return GLASS_TINT | (u32)(0x73 + (0x9c - 0x73) * fx_sc.light); }
+
+void glass_tile(float x, float y, float w, float h)
+{
+    fx_glass(x, y, w, h, TR, glass_tint());
+    round_frame(x, y, w, h, TR, 1, GLASS_EDGE);
+    rect(x + TR, y + h - 1, w - 2 * TR, 1, GLASS_SHADE);
+}
+
+/* The skeleton: the bar, and the light band where it crosses it (a quad
+ * pair whose alpha rises to the band's middle and falls: no hard edge, so
+ * it moves by fractions of a pixel). */
+void skel_bar(float x, float y, float w, float h)
+{
+    float ox, oy, r = h / 2;
+    round_rect(x, y, w, h, r, 0xffffff1a);
+    screen_origin(&ox, &oy);
+    const float half = 180, period = 1.6f;
+    float c = ox - half + (float)fmod(sky_time(), period) / period * (1920 + 2 * half);
+    float a0 = c - half, a1 = c + half, x0 = x + r, x1 = x + w - r;
+    if (a1 <= x0 || a0 >= x1) return;
+    gfx_texture(NULL);
+    for (int k = 0; k < 2; k++) {                            /* the rising half, then the falling half */
+        float s0 = k ? c : a0, s1 = k ? a1 : c;
+        float q0 = s0 < x0 ? x0 : s0, q1 = s1 > x1 ? x1 : s1;
+        if (q1 <= q0) continue;
+        float f0 = (q0 - a0) / half, f1 = (q1 - a0) / half;     /* 0 to 2 across the band */
+        u32 c0 = 0xffffff00u | (u32)(0x2a * (f0 <= 1 ? f0 : 2 - f0)), c1 = 0xffffff00u | (u32)(0x2a * (f1 <= 1 ? f1 : 2 - f1));
+        gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
+        q = gfx_put(q, q0, y, c0, 0, 0);
+        q = gfx_put(q, q1, y, c1, 0, 0);
+        q = gfx_put(q, q1, y + h, c1, 0, 0);
+        gfx_put(q, q0, y + h, c0, 0, 0);
+    }
+}
+
+u32 source_colour(const char *s)
+{
+    if (!strncmp(s, "Clar", 4)) return CLARIN;
+    if (!strncmp(s, "Infobae", 7)) return INFOBAE;
+    if (!strncmp(s, "Ambito", 6) || !strncmp(s, "\xc3\x81mbito", 7)) return AMBITO;
+    if (!strncmp(s, "BBC", 3)) return BBC;
+    return 0x3a5a8cff;
+}
+
+/* The width footer_at gives its items: a face button 44 px, a label its
+ * text and 30, each action its text and 36. */
+static float footer_w(const char *s)
+{
+    float w = 0;
+    char item_s[64];
+    while (*s) {
+        const char *e = strstr(s, "  ");
+        int n = e ? (int)(e - s) : (int)strlen(s);
+        snprintf(item_s, sizeof item_s, "%.*s", n, s);
+        char *sp = strchr(item_s, ' ');
+        if (sp) *sp = 0;
+        w += !strcmp(item_s, "SQUARE") || !strcmp(item_s, "CIRCLE") || !strcmp(item_s, "CROSS") || !strcmp(item_s, "TRIANGLE")
+                 ? 44 : (float)text_w(F_SMALL, item_s) + 30;
+        if (sp) w += (float)text_w(F_SMALL, sp + 1) + 36;
+        s += n;
+        while (*s == ' ') s++;
+    }
+    return w - 36;
+}
+
+/* The bottom bar (design 1.2): the left words (and a note after them in
+ * YELLOW: board_url.txt's), the buttons on the right. */
+void bar_draw(float y, const char *left, u32 color, const char *note, const char *hints)
+{
+    float hw = footer_w(hints), hx = SW - MG - hw;
+    footer_at(hx, y + 4, hints);
+    float room = hx - 30 - MG;
+    float xe = text_fit(MG, y + 8, F_SMALL, color, room, "%s", left);
+    if (note && note[0] && room - (xe - MG) > 200) text_fit(xe + 16, y + 8, F_SMALL, YELLOW, room - (xe - MG) - 16, "%s", note);
+}
+
+/* ---- the header: the flip clock ---------------------------------------------------- */
 
 /* The internet's dot colour and words, from the Board thread's last fetches. */
 static u32 net_words(char *buf, int n)
@@ -53,14 +179,13 @@ static u32 net_words(char *buf, int n)
     }
 }
 
-/* The right column: the page's name and its dots on the clock's row, the city
- * and the internet on the row under it. Its width, so the clock's row knows
- * where to stop. */
+/* The right column: the page's name and its dots; under them the city, the
+ * wifi icon and the internet's words with a dot. Its left edge. */
 static float header_right(float y)
 {
     char net[64];
     float r = SW - MG, dots = PAGE_N * DOT_STEP - (DOT_STEP - 2 * DOT_R);
-    float y1 = y + (float)base_dy(F_LARGE, F_MED), y2 = y + (float)line_h(F_LARGE) + 2;
+    float y1 = y, y2 = y + (float)line_h(F_MED) + 8;
     for (int i = 0; i < PAGE_N; i++) {
         float cx = r - dots + DOT_R + i * DOT_STEP, cy = y1 + (float)line_h(F_MED) / 2;
         if (i == page) aa_disc(cx, cy, DOT_R, BLUE);
@@ -70,69 +195,224 @@ static float header_right(float y)
     text_r(r - dots - 18, y1, F_MED, WHITE, "%s", page_name[page]);
     u32 c = net_words(net, sizeof net);
     text_r(r, y2, F_SMALL, GREY, "%s", net);
-    float nw = (float)text_w(F_SMALL, net);
-    aa_disc(r - nw - 16, y2 + (float)line_h(F_SMALL) / 2, 6, c);
-    float w2 = nw + 28;
+    float nw = (float)text_w(F_SMALL, net), my = y2 + (float)line_h(F_SMALL) / 2;
+    aa_disc(r - nw - 14, my, 6, c);
+    float w2 = nw + 26;
+    if (!icons_rc) {
+        icon(net_state == NET_UP && board_net_q != NQ_DOWN ? IC_S_WIFI_HIGH : IC_S_WIFI_SLASH, r - w2 - 18, my, c == DIM ? DIM : GREY);
+        w2 += 40;
+    }
     if (board_have && board_cur.city[0]) {   /* at most 560 px: a long CITY ends in "..." and leaves the clock its room */
         float cw = (float)text_w(F_SMALL, board_cur.city);
         if (cw > 560) cw = 560;
-        text_fit(r - w2 - 20 - cw, y2, F_SMALL, WHITE, cw, "%s", board_cur.city);
-        w2 += 20 + cw;
+        text_fit(r - w2 - 14 - cw, y2, F_SMALL, WHITE, cw, "%s", board_cur.city);
+        w2 += 14 + cw;
     }
-    return w1 > w2 ? w1 : w2;
+    return r - (w1 > w2 ? w1 : w2);
+}
+
+/* The flip clock (design 3.10): each digit of HH:MM on a small glass card;
+ * a digit that changes flips in FLIP_S: the old top half folds down to the
+ * middle line (shaded as it falls), then the new bottom half unfolds from
+ * it. The start animation shows 00:00 and flips each digit to the time, a
+ * little apart. */
+#define CLOCK_N 8
+static char fl_shown[CLOCK_N + 1], fl_from[CLOCK_N + 1];
+static double fl_t0[CLOCK_N];
+static int fl_init;
+
+static void flip_digit(float x, float y, float cw, float card_y, float card_h, int i, char ch, double now)
+{
+    float mid = y + (float)digits_mid(D_L), px = x + (cw - (float)digits_w(D_L, "0")) / 2;
+    u32 flap = (glass_tint() & ~0xffu) | 0xe0;
+    fx_glass(x, card_y, cw, card_h, 10, glass_tint());
+    round_frame(x, card_y, cw, card_h, 10, 1, GLASS_EDGE);
+    double p = fl_t0[i] > 0 ? (now - fl_t0[i]) / FLIP_S : 1;
+    if (p >= 1 || fl_from[i] == ch) {
+        digits_half(px, y, D_L, ch, 0, 1, WHITE);
+        digits_half(px, y, D_L, ch, 1, 1, WHITE);
+    } else {
+        if (p < 0) p = 0;
+        digits_half(px, y, D_L, ch, 0, 1, WHITE);                 /* the new top half, behind the falling flap */
+        digits_half(px, y, D_L, fl_from[i], 1, 1, WHITE);         /* the old bottom half, until the flap lands */
+        if (p < 0.5) {                                            /* the old top half folds down */
+            float s = cosf((float)p * PI_F), fh = (mid - card_y) * s;
+            rect(x + 1, mid - fh, cw - 2, fh, flap);
+            digits_half(px, y, D_L, fl_from[i], 0, s, WHITE);
+            rect(x + 1, mid - fh, cw - 2, fh, (u32)(0x60 * (1 - s)));
+        } else {                                                  /* the new bottom half unfolds */
+            float s = sinf(((float)p - 0.5f) * PI_F), fh = (card_y + card_h - mid) * s;
+            rect(x + 1, mid, cw - 2, fh, flap);
+            digits_half(px, y, D_L, ch, 1, s, WHITE);
+            rect(x + 1, mid, cw - 2, fh, (u32)(0x60 * (1 - s)));
+        }
+    }
+    rect(x, mid - 1, cw, 2, 0x000000a0);                        /* the card's middle line */
+}
+
+static float flip_clock(float x, float y, float right)
+{
+    int off, src = clock_offset(&off);
+    civil_time c;
+    const char *ampm;
+    char hm[16], line[200];
+    double now = sky_time();
+    civil_from_unix(clock_utc() + off, &c);
+    clock_hm(hm, sizeof hm, c.hour, c.min, clock_h24(), &ampm);
+    int n = (int)strlen(hm);
+    if (n > CLOCK_N) n = CLOCK_N;
+    double at = start_anim_on() ? start_k(SA_CLOCK) : -1;        /* the start: 00:00, then each digit flips */
+    if (!fl_init) {
+        for (int i = 0; i < CLOCK_N; i++) fl_shown[i] = fl_from[i] = hm[i] >= '0' && hm[i] <= '9' ? (at >= 0 ? '0' : hm[i]) : hm[i];
+        fl_init = 1;
+    }
+    float cw = (float)digits_w(D_L, "0") + 22, mid = (float)digits_mid(D_L);
+    float card_y = y + mid - 54, card_h = 108, xx = x;
+    for (int i = 0, k = 0; i < n; i++) {
+        char ch = hm[i];
+        if (ch < '0' || ch > '9') {                                /* the colon, plain */
+            xx = digits(xx + 4, y, D_L, WHITE, ":") + 4;
+            continue;
+        }
+        int may = at < 0 || at >= 0.3 + 0.07 * k;
+        if (fl_shown[i] != ch && may) {                            /* a new digit: its flip starts */
+            fl_from[i] = fl_shown[i];
+            fl_shown[i] = ch;
+            fl_t0[i] = now;
+        }
+        flip_digit(xx, y, cw, card_y, card_h, i, fl_shown[i], now);
+        xx += cw + 8;
+        k++;
+    }
+    float base = y + asc_of(digits_h(D_L)), dy = base - asc_of(line_h(F_MED));
+    float xe = text(xx + 4, rnd(dy), F_MED | TNUM, GREY, ":%02d", c.sec);
+    if (ampm) xe = text(xe + 10, rnd(dy), F_MED, GREY, "%s", ampm);
+    float dx = xe + 36, dw = right - 40 - dx, ty = y + mid - (float)line_h(F_MED) + 2;
+    char date[64];
+    snprintf(date, sizeof date, "%s %d %s", weekday_name[c.wday], c.day, month_name[c.month - 1]);
+    if (text_w(F_MED, date) > dw) snprintf(date, sizeof date, "%d %s", c.day, month_name[c.month - 1]);   /* narrow: no weekday */
+    text_fit(dx, rnd(ty), F_MED, WHITE, dw, "%s", date);
+    clock_source(line, sizeof line);
+    text_fit(dx, rnd(ty + (float)line_h(F_MED) + 6), F_SMALL, src == CLK_UTC ? YELLOW : GREY, dw, "%s", line);
+    return xe;
 }
 
 static void header(void)
 {
-    const float y = 20;
-    float rw = header_right(y);
-    clock_draw(MG, y, SW - 2 * MG - rw - 40);
-    rect(MG, CONTENT_Y - 16, SW - 2 * MG, 2, LINE);
+    int dy = (int)rnd(-SA_DROP * (1 - start_k(SA_HEADER)));
+    shift_push(0, dy);
+    float right = header_right(page_wide() ? 22 : 16);
+    if (!digits_rc) flip_clock(MG, page_wide() ? 4 : 0, right);
+    else clock_draw(MG, 20, right - 40 - MG);                     /* no display digits: 0.2.0's clock */
+    shift_pop();
 }
 
-float page_begin(void)
+/* ---- the frame ----------------------------------------------------------------------- */
+
+static int sl_from = -1, sl_dir;
+static double sl_t0;
+
+void page_slide(int from, int to, int dir)
 {
-    if (ambient && (amb_dx || amb_dy)) {     /* the whole picture moves: the viewport, as the visible area does */
-        keep_l = safe_l, keep_t = safe_t, keep_r = safe_r, keep_b = safe_b;
-        safe_l += amb_dx, safe_r += amb_dx, safe_t += amb_dy, safe_b += amb_dy;
-        safe_apply();
-        shifted = 1;
+    (void)to;
+    if (from == to) return;
+    sl_from = from;
+    sl_dir = dir;
+    sl_t0 = sky_time();
+}
+
+void page_slide_end(void) { sl_from = -1; }
+
+/* 0 to 1 of the slide, eased; -1 when none */
+static float slide_k(void)
+{
+    if (sl_from < 0) return -1;
+    double x = (sky_time() - sl_t0) / SLIDE_S;
+    if (x >= 1 || fx_reduced()) {
+        sl_from = -1;
+        return -1;
     }
-    begin_frame();
-    /* the background (design 3): the gradient, the sky's objects (the
-     * stars, the moon, the sun's glow and rays), the clouds, or the aurora
-     * in the ambient mode; then the rain (dimmer over the aurora), a bolt
-     * and its flash, the scrims behind the header and the bottom bar. The
-     * Board's glass tiles go over it. */
-    int aurora = ambient && fx_draw_aurora();
-    if (!aurora) {
-        fx_draw_gradient();
-        sky_behind();
-        fx_draw_clouds();
-    }
-    fx_draw_rain(aurora ? 0.5f : 1.0f);
-    if (!aurora) sky_front();
+    if (x < 0) x = 0;
+    x = 1 - x;
+    return (float)(1 - x * x * x);
+}
+
+static void body(int pg, int dx)
+{
+    shift_push(dx, 0);
+    if (pg == PAGE_INFO) info_body();
+    else if (pg == PAGE_NEWS) news_body();
+    else board_body();
+    shift_pop();
+}
+
+static void bar_of(int pg, const char *msg, u32 msg_color)
+{
+    float y = page_bar_y();
+    int dy = (int)rnd(SA_RISE * (1 - start_k(SA_BOTTOM)));
+    shift_push(0, dy);
+    if (pg == PAGE_INFO) info_bar(y);
+    else if (pg == PAGE_NEWS) news_bar(y);
+    else board_bar(y, msg, msg_color);
+    shift_pop();
+}
+
+/* The sky: the gradient, the sky's objects (the stars, the moon, the sun's
+ * glow and rays), the clouds; the rain; a bolt and its flash; the scrims
+ * behind the header and the bottom bar. */
+static void sky(void)
+{
+    fx_draw_gradient();
+    sky_behind();
+    fx_draw_clouds();
+    fx_draw_rain(1.0f);
+    sky_front();
     if (fx_state != FXS_NONE) sky_scrims();
-    header();
-    return CONTENT_Y;
 }
 
-void page_end(void)
+static void ambient_frame(void);
+
+static void draw_frame(const char *msg, u32 msg_color)
 {
+    if (ambient_aurora()) {
+        ambient_frame();
+        return;
+    }
+    int shifted = ambient && (amb_dx || amb_dy);             /* RSX only: 0.2.0's mode, the whole picture moves */
+    if (shifted) shift_push(amb_dx, amb_dy);
+    begin_frame();
+    sky();
+    header();
+    float k = slide_k();
+    if (k >= 0) {                                            /* the old page out, the new one in (design 3.8) */
+        int d = (int)rnd((float)SW * k);
+        body(sl_from, -sl_dir * d);
+        body(page, sl_dir * (SW - d));
+    } else body(page, 0);
+    bar_of(page, msg, msg_color);
+    if (start_anim_on()) {                                   /* the start: the sky from the loading screen's colours */
+        float f = start_k(SA_FADE), ox, oy;
+        u32 a = (u32)(255 * (1 - f));
+        if (a) {
+            screen_origin(&ox, &oy);
+            rect_v(ox, oy, 1920, 1080, (LOADING_TOP & ~0xffu) | a, (LOADING_BOT & ~0xffu) | a);
+        }
+    }
     if (ambient) {
         float ox, oy;
         screen_origin(&ox, &oy);
         rect(ox - AMBIENT_PX, oy - AMBIENT_PX, 1920 + 2 * AMBIENT_PX, 1080 + 2 * AMBIENT_PX, DIM_LAYER);
     }
     ui_flip();
-    if (shifted) {
-        safe_l = keep_l, safe_t = keep_t, safe_r = keep_r, safe_b = keep_b;
-        safe_apply();
-        shifted = 0;
-    }
+    if (shifted) shift_pop();
 }
 
-/* ---- the ambient mode ------------------------------------------------------------ */
+void page_draw(void) { draw_frame(NULL, 0); }
+void page_draw_msg(const char *msg, u32 color) { draw_frame(msg, color); }
+
+/* ---- the ambient mode ---------------------------------------------------------------- */
+
+int ambient_aurora(void) { return ambient && fx_state == FXS_SPU; }
 
 int ambient_input(void)
 {
@@ -145,6 +425,7 @@ int ambient_input(void)
     amb_step = -1;
     amb_dx = amb_dy = 0;
     page = amb_saved;
+    page_slide_end();
     couch_log("ambient: off after %.0f s, a button", (double)(now - amb_since) / 1e6);
     pressed = 0;                             /* the press woke the screen: no action, no exit */
     armed = 0;
@@ -160,79 +441,234 @@ void ambient_tick(void)
         amb_since = now;
         amb_saved = page;
         amb_step = -1;
-        couch_log("ambient: on after %d min with no button", AMBIENT_SEC / 60);
+        page_slide_end();
+        couch_log("ambient: on after %d min with no button (%s)", AMBIENT_SEC / 60, ambient_aurora() ? "the aurora" : "RSX only: dimmed");
     }
     if (!ambient) return;
     long step = (long)((now - amb_since) / (AMBIENT_STEP_SEC * 1000000LL));
     if (step == amb_step) return;
     amb_step = step;
+    if (ambient_aurora()) {                  /* the aurora: the block moves (ambient_frame), the page stays */
+        amb_dx = amb_dy = 0;
+        page = amb_saved;
+        return;
+    }
     ambient_shift(step, &amb_dx, &amb_dy);
     page = ambient_page(step, board_have && board_cur.n_news > 0) ? PAGE_NEWS : PAGE_BOARD;
 }
 
-/* ---- the News page --------------------------------------------------------------- */
+/* The aurora (design 3.12): the SPUs' picture over the screen (its mean
+ * brightness at most 20 %), the rain or the snow dimmer over it, and the
+ * block: the clock in D_XL GREY, the date in F_MED, a line in F_BODY that
+ * changes each minute (the weather, Blue's price, the newest headline). The
+ * block moves to the next of 9 places each minute, gliding there over 6 s
+ * (parse.c's ambient_place). */
+static void ambient_frame(void)
+{
+    int off;
+    civil_time c;
+    const char *ampm;
+    char hm[16], date[64], line[360];
+    const board_data *b = &board_cur;
+    begin_frame();
+    if (!fx_draw_aurora()) {                 /* no picture yet (its first frames): the night sky's colours */
+        float ox, oy;
+        screen_origin(&ox, &oy);
+        rect_v(ox, oy, 1920, 1080, 0x040814ff, 0x0a1222ff);
+    }
+    fx_draw_rain(0.5f);
+    double t = (double)(sysGetSystemTime() - amb_since) / 1e6;
+    float px, py;
+    ambient_place(t, &px, &py);
+    clock_offset(&off);
+    civil_from_unix(clock_utc() + off, &c);
+    clock_hm(hm, sizeof hm, c.hour, c.min, clock_h24(), &ampm);
+    snprintf(date, sizeof date, "%s %d %s", weekday_name[c.wday], c.day, month_name[c.month - 1]);
+    unsigned has = 0;
+    const board_usd *blue = NULL;
+    for (int i = 0; board_have && i < b->n_usd; i++)
+        if (!strcmp(b->usd[i].label, "Blue")) blue = &b->usd[i];
+    if (board_have && b->has_wx) has |= 1;
+    if (blue && strcmp(blue->sell, "-")) has |= 2;
+    if (board_have && b->n_news) has |= 4;
+    int l = ambient_line((long)(t / AMBIENT_STEP_SEC), has);
+    line[0] = 0;
+    if (l == 0) snprintf(line, sizeof line, "%s, %s", b->temp, b->words);
+    else if (l == 1) snprintf(line, sizeof line, "Blue %s", blue->sell);
+    else if (l == 2) snprintf(line, sizeof line, "%s: %s", b->news[0].source, b->news[0].title);
+    float cx = rnd((float)SW / 2 + px), cy = rnd((float)SH / 2 + py);
+    int big = !digits_rc ? D_XL : -1;
+    float h = big >= 0 ? (float)digits_h(D_XL) : (float)line_h(F_LARGE), y = cy - (h + 60 + 40) / 2;
+    if (big >= 0) digits(rnd(cx - (float)digits_w(D_XL, hm) / 2), y, D_XL, GREY, hm);
+    else text_c(cx, y, F_LARGE | TNUM, GREY, "%s", hm);
+    y += h + 4;
+    text_c(cx, y, F_MED, DIM, "%s%s%s", date, ampm ? "  " : "", ampm ? ampm : "");
+    if (line[0]) {
+        float w = (float)text_w(F_BODY, line), mw = 1100;
+        if (w > mw) w = mw;
+        text_fit(rnd(cx - w / 2), y + 52, F_BODY, DIM, mw, "%s", line);
+    }
+    ui_flip();
+}
 
-/* "Infobae and Clarin": the sources of the headlines, each once, in order. */
-static void news_sources(char *buf, int n)
+/* ---- the News page (design 1.5; stage 10: "the news section can have more love") ---- */
+
+/* A source's pill: the name in F_SMALL WHITE on its colour; its end x. */
+static float pill(float x, float y, float h, const char *source)
+{
+    float w = (float)text_w(F_SMALL, source) + 24;
+    if (w > 220) w = 220;
+    u32 c = source_colour(source);
+    round_rect(x, y, w, h, h / 2, c);
+    aa_corners(x, y, w, h, h / 2, c);
+    text_fit(x + 12, y + (h - (float)line_h(F_SMALL)) / 2, F_SMALL, WHITE, w - 22, "%s", source);
+    return x + w;
+}
+
+/* The height of n lines of text_wrap in font: n - 1 steps and a line. */
+static float lines_h(int font, int n) { return (float)((n - 1) * wrap_step(font) + line_h(font)); }
+
+/* The category tag (from the source: news_category), an outlined pill; its end x. */
+static float tag(float x, float y, float h, const char *source)
+{
+    const char *c = news_category(source);
+    if (!c) return x;
+    float w = (float)text_w(F_SMALL, c) + 22;
+    round_frame(x, y, w, h, h / 2, 1, 0xffffff50);
+    text(x + 11, y + (h - (float)line_h(F_SMALL)) / 2, F_SMALL, GREY, "%s", c);
+    return x + w;
+}
+
+/* The age with the clock icon, right-aligned at xr; its left x. */
+static float age(float xr, float y, float h, long a)
+{
+    char w[24];
+    if (a < 0) return xr;
+    age_words(w, sizeof w, a + board_age());
+    float x = text_r(xr, y + (h - (float)line_h(F_SMALL)) / 2, F_SMALL, GREY, "%s", w);
+    if (!icons_rc) icon_rot(IC_S_CLOCK, rnd(x - 16), rnd(y + h / 2), 0, 0.75f, GREY);
+    return x - 30;
+}
+
+/* The newest headline (design 1.5: the first card, a 3 px top edge in its
+ * source's colour): large, two lines. */
+static void featured(float x, float y, float w, float h, const board_news *n)
+{
+    glass_tile(x, y, w, h);
+    u32 c = source_colour(n->source);
+    rect(x + TR, y, w - 2 * TR, 3, c);
+    if (!icons_rc) icon_rot(IC_S_NEWSPAPER, x + w - 90, y + h / 2, 0, 3.0f, 0xffffff14);   /* a large faint mark */
+    float xe = pill(x + 28, y + 22, 30, n->source);
+    xe = tag(xe + 12, y + 22, 30, n->source);
+    text(xe + 16, y + 24, F_SMALL, BLUE, "Latest");
+    age(x + w - 28, y + 22, 30, n->age);
+    float ty = y + 22 + 30 + 14, room = y + h - 12 - ty;     /* F_TITLE in two lines where they fit (the TV area), else F_MED */
+    int font = room >= lines_h(F_TITLE, 2) ? F_TITLE : room >= lines_h(F_MED, 2) ? F_MED : F_BODY;
+    text_wrap(x + 28, ty, font, WHITE, w - 56 - 120, room >= lines_h(font, 2) ? 2 : 1, n->title);
+}
+
+/* A card of the grid: the pill, the tag, the age, the title in two lines
+ * (F_MED where it fits, else F_BODY). */
+static void card_news(float x, float y, float w, float h, const board_news *n)
+{
+    glass_tile(x, y, w, h);
+    int wide = page_wide();
+    float tp = wide ? 12 : 10, ph = wide ? 30 : 26;
+    float xe = pill(x + 20, y + tp, ph, n->source);
+    tag(xe + 10, y + tp, ph, n->source);
+    age(x + w - 20, y + tp, ph, n->age);
+    float ty = y + tp + ph + (wide ? 8 : 6), room = y + h - (wide ? 8 : 6) - ty;
+    int font = room >= lines_h(F_MED, 2) ? F_MED : F_BODY;
+    text_wrap(x + 20, ty, font, WHITE, w - 40, room >= lines_h(font, 2) ? 2 : 1, n->title);
+}
+
+/* The grid's last place: the count, the sources, the age. */
+static void summary(float x, float y, float w, float h)
 {
     const board_data *b = &board_cur;
+    char src[160], a[24];
     int k = 0, cnt = 0;
-    buf[0] = 0;
+    src[0] = 0;
     for (int i = 0; i < b->n_news; i++) {
         int seen = 0;
         for (int j = 0; j < i; j++) seen |= !strcmp(b->news[j].source, b->news[i].source);
         if (seen) continue;
         cnt++;
-        k += snprintf(buf + k, (size_t)(n - k > 0 ? n - k : 0), "%s%s", k ? ", " : "", b->news[i].source);
-        if (k >= n) break;
+        int r = snprintf(src + k, sizeof src - (size_t)k, "%s%s", k ? ", " : "", b->news[i].source);
+        if (r < 0 || k + r >= (int)sizeof src - 1) break;
+        k += r;
     }
-    if (!cnt) snprintf(buf, (size_t)n, "News");
+    glass_tile(x, y, w, h);
+    if (!icons_rc) icon(IC_S_NEWSPAPER, x + 40, y + 34, BLUE);
+    text(x + 66, y + 16, F_MED, WHITE, "%d headlines", b->n_news);
+    text_fit(x + 24, y + 16 + (float)line_h(F_MED) + 6, F_SMALL, GREY, w - 48, "%s", cnt ? src : "-");
+    age_words(a, sizeof a, b->news_feed.age >= 0 ? b->news_feed.age + board_age() : board_age());
+    text_fit(x + 24, y + 16 + (float)line_h(F_MED) + 6 + (float)line_h(F_SMALL) + 4, F_SMALL, DIM, w - 48, "%s old, every 5 min", a);
 }
 
-void news_draw(void)
+void news_body(void)
 {
     const board_data *b = &board_cur;
-    char src[96], a[24];
-    float y = page_begin(), x = MG, w = SW - 2 * MG, h = BOTTOM - y;
-    float ix = x + 32, iw = w - 64, fy = y + h - 22 - (float)line_h(F_SMALL);
-    card(x, y, w, h);
-    round_rect(x + 16, y + 26, 5, 30, 2, C_SQUARE);
-    text(ix, y + 20, F_MED, WHITE, "News");
-    news_sources(src, sizeof src);
-    if (!board_have || !b->n_news) {
-        char line[200];
-        if (!board_have) snprintf(line, sizeof line, "The news shows after the first reply.");
-        else if (!b->news_feed.state[0]) snprintf(line, sizeof line, "The Board's Worker sends no news (no NEWS_FEEDS).");
-        else snprintf(line, sizeof line, "No news data: %s.", b->news_feed.reason[0] ? b->news_feed.reason : "the reply has none");
-        text_wrap(ix, y + 90, F_BODY, board_have ? YELLOW : DIM, iw, 4, line);
-        if (board_have && b->news_feed.state[0]) board_foot(ix, fy, iw, src, &b->news_feed);
-    } else {
-        /* a row: the source and the age on the left (the age right-aligned in
-         * its column), the title in up to two lines; a row that does not fit
-         * whole is left off (8 one-line rows fit at 1786 wide) */
-        const float col = 270, tx = ix + col, tw = iw - col;
-        const float dy = (float)base_dy(F_BODY, F_SMALL);
-        float ry = y + 84;
-        for (int i = 0; i < b->n_news; i++) {
-            const board_news *nw = &b->news[i];
-            int lines = text_wrap_lines(F_BODY, tw, 2, nw->title);
-            float rh = (float)(lines * wrap_step(F_BODY));
-            if (ry + rh > fy - 20) break;
-            if (i) rect(ix, ry - 11, iw, 1, LINE);
-            float sw = nw->age >= 0 ? 0 : col - 24;
-            if (nw->age >= 0) {
-                age_words(a, sizeof a, nw->age + board_age());
-                sw = col - 34 - (float)text_w(F_SMALL, a) - 16;
-                text_r(ix + col - 34, ry + dy, F_SMALL, GREY, "%s", a);
-            }
-            text_fit(ix, ry + dy, F_SMALL, BLUE, sw, "%s", nw->source);
-            text_wrap(tx, ry, F_BODY, WHITE, tw, 2, nw->title);
-            ry += rh + 22;
+    float top = page_top(), bot = page_bar_y() - 12, x = MG, w = SW - 2 * MG, ch = bot - top;
+    float fh = rnd(ch * 0.25f), gw = (w - G) / 2, rh = (ch - fh - RG - 3 * RG) / 4;
+    int dyl = (int)rnd(SA_RISE * (1 - start_k(SA_LEFT))), dyr = (int)rnd(SA_RISE * (1 - start_k(SA_RIGHT)));
+    if (!board_have) {                                       /* before the first reply: the skeleton */
+        shift_push(0, dyl);
+        glass_tile(x, top, w, fh);
+        skel_bar(x + 28, top + 22, 130, 30);
+        skel_bar(x + 28, top + 76, w * 0.62f, 40);
+        skel_bar(x + 28, top + 130, w * 0.4f, 40);
+        shift_pop();
+        for (int i = 0; i < 8; i++) {
+            shift_push(0, i % 2 ? dyr : dyl);
+            float cx = rnd(x + (float)(i % 2) * (gw + G)), cy = rnd(top + fh + RG + (float)(i / 2) * (rh + RG));
+            glass_tile(cx, cy, rnd(gw), rnd(rh));
+            skel_bar(cx + 20, cy + 12, 110, 28);
+            skel_bar(cx + 20, cy + 54, gw * 0.8f, 26);
+            if (rh > 110) skel_bar(cx + 20, cy + 90, gw * 0.5f, 26);
+            shift_pop();
         }
-        board_foot(ix, fy, iw, src, &b->news_feed);
+        return;
     }
-    board_status();
-    footer("SQUARE refresh  L1/R1 pages  SELECT info  START exit");
-    board_note();
-    page_end();
+    if (!b->n_news) {                                        /* no headlines: one wide tile with the reason */
+        char line[200];
+        if (!b->news_feed.state[0]) snprintf(line, sizeof line, "The Board's Worker sends no news (no NEWS_FEEDS).");
+        else snprintf(line, sizeof line, "No news data: %s.", b->news_feed.reason[0] ? b->news_feed.reason : "the reply has none");
+        shift_push(0, dyl);
+        glass_tile(x, top, w, 200);
+        if (!icons_rc) icon(IC_S_NEWSPAPER, x + 46, top + 52, DIM);
+        text(x + 76, top + 34, F_MED, WHITE, "News");
+        text_wrap(x + 32, top + 100, F_BODY, YELLOW, w - 64, 2, line);
+        shift_pop();
+        return;
+    }
+    shift_push(0, dyl);
+    featured(x, top, w, fh, &b->news[0]);
+    shift_pop();
+    for (int i = 0; i < 8; i++) {
+        float cx = rnd(x + (float)(i % 2) * (gw + G)), cy = rnd(top + fh + RG + (float)(i / 2) * (rh + RG));
+        shift_push(0, i % 2 ? dyr : dyl);
+        if (i + 1 < b->n_news && i < 7) card_news(cx, cy, rnd(gw), rnd(rh), &b->news[i + 1]);
+        else if (i == 7 || i + 1 == b->n_news) summary(cx, cy, rnd(gw), rnd(rh));
+        shift_pop();
+        if (i + 1 >= b->n_news && i != 7) break;
+    }
+}
+
+void news_bar(float y)
+{
+    static const char hints[] = "L1/R1 pages  SQUARE refresh  SELECT info  START exit";
+    char line[300], a[24];
+    u32 c = GREY;
+    const board_data *b = &board_cur;
+    if (!board_have) c = board_status_words(line, sizeof line);
+    else if (!strcmp(b->news_feed.state, "stale")) {
+        age_words(a, sizeof a, b->news_feed.age + board_age());
+        snprintf(line, sizeof line, "%s. The news is %s old.", b->news_feed.reason[0] ? b->news_feed.reason : "The feeds failed", a);
+        c = YELLOW;
+    } else if (b->n_news && b->news_feed.reason[0]) {        /* a feed failed, the others answered */
+        snprintf(line, sizeof line, "%s", b->news_feed.reason);
+        c = YELLOW;
+    } else c = board_status_words(line, sizeof line);
+    bar_draw(y, line, c, board_url_note, hints);
 }

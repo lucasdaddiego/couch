@@ -422,6 +422,43 @@ static void extras(void)
     group("net_quality (slow from 3 s), the ambient shift (each of 9 places once, 6 px a step), the ambient page", f0);
 }
 
+/* 0.3.0's stage 10: the ambient block's places and lines, the News page's
+ * categories, the ticker's offset. */
+static void check_stage10(void)
+{
+    int f0 = fails;
+    float x, y, px = 0, py = 0;
+    ambient_place(0, &x, &y);
+    CHECK(x == 0 && y == 0);                                   /* the centre first, no glide in from nowhere */
+    int seen = 0, bad = 0;
+    for (long st = 0; st < AMBIENT_SHIFTS; st++) {             /* each minute's place, after its glide */
+        int dx, dy;
+        ambient_shift(st, &dx, &dy);
+        ambient_place(st * AMBIENT_STEP_SEC + AMBIENT_GLIDE_S + 1, &x, &y);
+        if (x != (float)dx / AMBIENT_PX * AMBIENT_BLOCK_X || y != (float)dy / AMBIENT_PX * AMBIENT_BLOCK_Y) bad++;
+        seen++;
+    }
+    CHECK(!bad && seen == 9);
+    int jumps = 0;                                             /* the glides: no frame moves more than 2 px */
+    for (double t = 0; t < 9 * AMBIENT_STEP_SEC; t += 1.0 / 60) {
+        ambient_place(t, &x, &y);
+        if (t > 0 && (fabsf(x - px) > 2.0f || fabsf(y - py) > 2.0f)) jumps++;
+        px = x, py = y;
+    }
+    CHECK(!jumps);
+    ambient_place(-5, &x, &y);
+    CHECK(x == 0 && y == 0);
+    CHECK(ambient_line(0, 7) == 0 && ambient_line(1, 7) == 1 && ambient_line(2, 7) == 2 && ambient_line(3, 7) == 0);
+    CHECK(ambient_line(2, 3) == 0 && ambient_line(1, 4) == 2 && ambient_line(5, 0) == -1 && ambient_line(-3, 1) == 0);
+    CHECK(!strcmp(news_category("\xc3\x81mbito"), "Economy") && !strcmp(news_category("Ambito"), "Economy"));
+    CHECK(!strcmp(news_category("BBC"), "World") && news_category("Clar\xc3\xadn") == NULL && news_category("Infobae") == NULL);
+    CHECK(news_category("") == NULL && news_category("Am") == NULL);
+    CHECK(ticker_offset(0, 55, 1000) == 0 && ticker_offset(2, 55, 1000) == 110 && fabs(ticker_offset(20, 55, 1000) - 100) < 1e-9);
+    CHECK(ticker_offset(1.0 / 59.94, 55, 1000) > 0.9 && ticker_offset(1.0 / 59.94, 55, 1000) < 0.92);   /* 0.92 px a frame: a fraction */
+    CHECK(ticker_offset(5, 55, 0) == 0 && ticker_offset(-1, 55, 100) == 0 && ticker_offset(5, 0, 100) == 0);
+    group("stage 10: the ambient block's places and glides, its lines; the News categories; the ticker's offset", f0);
+}
+
 /* ---- the keys of 0.3.0 (design 5.1) ------------------------------------------------ */
 
 /* Each usd buy and sell, money value, change pct and abs of b: num_parse
@@ -1116,6 +1153,7 @@ int main(int argc, char **argv)
     worker_reply(w, wn);
     rules();
     extras();
+    check_stage10();
     new_reply(w, wn, w2, w2n);
     new_rules();
     numbers();

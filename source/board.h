@@ -56,17 +56,8 @@ extern int board_net_q;
 extern s64 board_net_us, board_connect_us;
 extern long board_net_down_utc;
 
-/* The Board page (board_page.c, design 1.4): the weather tiles on the
- * left, the money tiles on the right, the news ticker and the bottom bar;
- * msg replaces the status in the bar when it is not NULL. */
-void board_draw(const char *msg, u32 msg_color);
-/* What the Board and the News pages share: a card's foot (its source and the
- * data's age, or the reason in YELLOW), the status in words and its colour
- * (board_status draws it on 0.2.0's status line), the note line (the
- * schedule, the URL of board_url.txt). */
-void board_foot(float x, float y, float w, const char *src, const board_feed *f);
+/* The status in words and its colour, for the bottom bar of the Board and
+ * the News pages (page.h has the pages' bodies and bars). */
 u32 board_status_words(char *buf, int n);
-void board_status(void);
-void board_note(void);
 
 #endif

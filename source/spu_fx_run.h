@@ -59,8 +59,8 @@ typedef struct {
 extern fx_scene fx_sc;
 
 /* The start (design 6.3), at each opening of the Board before the network
- * start: the textures, then the SPU calls behind run_job("Starting the
- * effects"), the six start reports (2 s) and their known-answer test. It
+ * start: the textures, then the SPU calls behind start_job (the loading
+ * screen's counter), the six start reports (2 s) and their known-answer test. It
  * runs once, and again only after an entry that the journal held was
  * cleared (SQUARE twice on the Info page, as net_start). With no writable
  * folder, a pending quit or a frozen entry: RSX only, no SPU call.
@@ -117,6 +117,17 @@ int fx_reduced(void);                /* 1 from step 5 */
 /* The Info page's line, and the fetch line's suffix in couch.txt (the last
  * job serials and the late frames: a freeze hours in leaves a trace). */
 void fx_words(char *buf, int n);
+/* The numbers of the Info page's Effects tile: the pictures shown, the
+ * slowest SPU's mean busy time of each kind (and the sky's most), the rain
+ * jobs and their mean, the late rain reports, the pictures a second at
+ * this step and its words, the drops or flakes now. */
+typedef struct {
+    u32 sky_n, aur_n, rain_jobs, rain_late;
+    double sky_ms, sky_max, aur_ms, rain_ms;
+    int sky_rate, aur_rate, drops, flakes;
+    const char *step_words;
+} fx_stats;
+void fx_get_stats(fx_stats *st);
 void fx_log_words(char *buf, int n);
 
 #endif

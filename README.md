@@ -45,8 +45,10 @@ is a deploy, not a console round); no headline opens (titles only).
 
 ## The pages (0.2.0)
 
-(Since stage 9 of 0.3.0 the Board page is the dashboard tiles: "The Board
-page" below. The header, the News page and the Info page are still these.)
+(Since stage 9 of 0.3.0 the Board page is the dashboard tiles, and since
+stage 10 the header, the News page, the Info page and the ambient mode are
+0.3.0's: "The Board page" and "The frame" below. The rest of this section
+is 0.2.0's, kept for the words and the rules that stay.)
 
 - **The header** (every page, `page.c`): on the left the clock and the date,
   and the clock's source line under them; on the right the page's name with
@@ -463,10 +465,154 @@ the Info page are 0.2.0's until stage 10.
   clear sky's luminance at most, so an overcast night is not brighter than
   a clear one (the design's rule gave 434e61 against 050a18).
 
+## The frame (0.3.0, stage 10 of the revamp)
+
+Stage 10 of the design (`~/.claude/plans/2026-10-13-couch-revamp-design.md`)
+and Lucas's notes of 2026-10-14 from the pre2 round ("the news section can
+have more love. the background is too blurry, and the text marquee is fast.
+and the icons moves in installments, and not smooth"; "maybe they can be a
+bit bigger and have more range of movement"; "an slower marquee"; and of
+the round before, "it had a nice black delay. can we add a loading
+screen").
+
+- **The loading screen** (`start.c`): the first frame comes right after
+  `ui_init`, before `text_utf8`, `digits_init`, `icons_init`,
+  `fs_selftest` and the SPUs: a sofa, "Couch" and the version, "Starting
+  ..." and the steps under it (the picture, the accented letters, the
+  display digits, the icons, the app folder, the effects, the network),
+  each done (GREEN), running (a spinner) or to come (DIM). Only the kit's
+  ASCII text and shapes: nothing else is loaded yet. The effects' and the
+  network's starts run their calls in a job thread while this screen draws
+  a counter (`start_job`: the kit's `run_job` in this look, the same
+  thread priority and stack, the same freeze promise under it); a later
+  start of either (after SQUARE twice on the Info page) shows the same
+  screen with only its step.
+- **The start's times** (`couch.txt`): each step is timed from main's first
+  statement. After the start line: `start: ui_init 0.31 s, text_utf8 ...,
+  fs_selftest ...; the loading screen's first frame on the TV at ... s from
+  main`; at the first fetch's reply (or at the exit): `start: fx_start ...,
+  net_start ...; from main: the first Board frame at ... s, the first
+  fetch's reply at ... s`. The time before main (the ELF's load) is not
+  measurable from Couch.
+- **boot.txt** (`boot.c`, PS3 Health's `source/boot.c` with Couch's
+  folder): Couch hung the whole console before its first file write once
+  (2026-10-14 16:40). Each start writes `main` as main's first statement,
+  then a mark after `ui_init`, `text_utf8`, `digits_init`, `icons_init`,
+  `fs_selftest`, `fx_start`, `net_start`, `first_frame` (the first Board
+  frame) and `first_fetch`; the exit writes `leave`, `fx_stop`, `net_end`,
+  `ui_end` before each step and `left` at the end. Each line is the name and
+  `sysGetSystemTime()` in microseconds; sysLv2Fs calls only, each mark
+  synced; past 32 KB the `main` mark moves the file to `boot.old.txt`. ps3gfx's
+  `ui.c` is unchanged (PS3 Health and Cell Bench stay byte-identical).
+- **The start animation** (design 3.9), from the loop's first frame, 1.2 s,
+  any button ends it: the loading screen's colours fade from the sky in 0.5
+  s, the header comes down 24 px, the left column, the right column and the
+  bottom rise 30 px into place a little apart (the design's tiles one by
+  one, and their fade, are simplified to the columns and the screen's
+  fade), and the clock's digits flip from 00:00 to the time.
+- **The header** (design 1.3): the clock as a flip clock, each digit of
+  HH:MM in the display digits (D_L) on a small glass card with a dark
+  middle line; a digit that changes flips in 300 ms (the old top half folds
+  down to the middle line, shaded, then the new bottom half unfolds); the
+  seconds in F_MED GREY; the date (without the weekday when the row is too
+  short) and the clock's source line. Right: the page's name and its dots;
+  under them the city, the wifi icon (wifi-high, or wifi-slash with no
+  internet) and the internet's words with their dot. No display digits
+  (`digits_init` failed): 0.2.0's clock.
+- **The slides** (design 3.8): L1, R1, SELECT and CIRCLE change the page
+  with a slide of 280 ms (ease-out cubic): the old page goes out and the new
+  one comes in, the sky, the header and the bottom bar stay. The move is the
+  viewport's (`shift_push`, whole pixels), so the glass of a tile follows
+  it; the Board's ticker band moves with its page. A button during a slide
+  ends it at once (and does its own action).
+- **The bottom bar** on every page: the status on the left (the Board and the
+  News: "Board updated at 09:00, next update in 4 min", or the failure;
+  the Info page: its messages), the buttons on the right.
+- **The News page** ("more love"): the newest headline large in a tile of
+  the whole width (its source's pill, its category, "Latest", the age with
+  the clock icon, the title in two lines of F_TITLE where they fit, else
+  F_MED; a 3 px top edge in the source's colour; a faint newspaper mark),
+  then a grid of 2 x 4 glass cards: the next 7 headlines (the pill, the
+  category, the age, the title in two lines of F_MED where they fit, else
+  F_BODY) and a summary (the count, the sources, the age). The pills:
+  Clarin red, Infobae orange, Ambito blue, BBC grey. The category comes from
+  the source (`news_category` in `parse.c`): Ambito "Economy" (its one
+  feed), BBC "World"; Clarin (politics and world) and Infobae (a search)
+  have none, since the Worker sends no category and this stage adds no key.
+  8 headlines fit at 1080p and at the narrow area. No headlines: one tile
+  with the reason; before the first reply: the skeleton.
+- **The Info page** (design 1.6): three glass tiles. "Board" and "Console"
+  side by side (0.2.0's rows; a value wraps to 3 lines, F_SMALL at the
+  narrow area), "Effects" under them: the SPUs' state or why RSX only, the
+  pictures a second and the frame budget's step, the busy time of each job
+  (the slowest SPU's mean), the rain, the display's rate (`ui_stats`).
+- **The ambient mode** (design 3.12, Lucas: "the dim aurora (20 % max) with
+  the drift"): with the SPUs, the aurora over the screen (its mean
+  brightness at most 20 %: the kernel's cap), the rain at half over it, and
+  a block: the clock in D_XL GREY, the date, and a line that changes each
+  minute (the temperature and the words, Blue's price, the newest headline,
+  skipping a line with no data). Each minute the block glides over 6 s to
+  the next of the 9 places of the 3 x 3 grid (300 px apart across, 150 down:
+  `ambient_place`), so no text stays in one place. This replaces 0.2.0's
+  dim layer and stage 8's aurora under it. RSX only: 0.2.0's mode (the dim
+  layer, the 6 px moves, the page each minute).
+- **The skeleton** (design 3.9): before the first reply each tile shows grey
+  bars in place of its values, with a light band that crosses the screen
+  every 1.6 s (a gradient pair of quads: no hard edge, so it moves by
+  fractions of a pixel).
+- **The ticker**, slower and smooth: 55 px a second (`TICKER_PX_S` in
+  `board_page.c`, the one number to tune after the console's round; stage
+  9b moved 2 px a frame, 119.9 px a second). ps3gfx draws text pixel exact
+  (nearest filtering at 1080p, each glyph on a whole pixel), so a speed that
+  is not a whole number of pixels a frame judders at 59.94 Hz. `marquee.c`
+  draws each headline once into a texture of its own, from the same
+  atlases (`fonts.bin`, and `latin.bin` with UTF-8 on) and with ui.c's own
+  glyph placement, and the ticker draws that texture bilinear at the exact
+  fractional x of the clock (`ticker_offset`). At a whole pixel it is
+  byte-identical to `text()` (checked once on 2026-10-14 with a temporary
+  preview build that drew the four first headlines of the `accents` reply
+  both ways, UTF-8 accents included; the hook is not kept); between two
+  pixels each column mixes
+  its two neighbours. Two textures of 4096 x 304 (A4R4G4B4, 2.5 MB each)
+  take turns: when the headlines change, one headline a frame goes into
+  the texture no frame shows (after `ui_flip`), then the swap; meanwhile
+  the ticker draws them with `text()`.
+- **The icons that move**, smooth (the console's video of pre2: the day
+  icon held still 17 to 53 frames, then jumped a pixel): every moving icon
+  goes through `icon_rot`, which binds every set bilinear since this stage
+  (ps3gfx, below), at fractional places. Larger and with a wider, calm
+  range (Lucas): the day icons at 1.25 times (80 px; 1.1 narrow), a bob of
+  4 px on 5 s, a sway of 3 px on 7 s and a tilt of 2.5 deg on 6 s, each
+  card a third of a period apart; the hero's box 184 px (140 narrow; stage
+  9: 168 and 132), its cloud drifting 14 px on 8 s and the one behind 10 px
+  on 11 s, the sun turning once a minute and breathing 3 % on 5 s, the rain
+  falling 70 px, the snow 70 px with a sway, the fog's bars sliding 18 px
+  as anti-aliased lines, the moon swaying 4 deg on 7 s. The sun's rays in
+  the sky are soft wedges (their middle line 0x30, their sides 0): stage 9's
+  hard-edged triangles crawled a pixel at a time as they turned.
+- **The clouds, crisper** (ps3gfx's `spu_fx` kernel, below): five octaves
+  of noise in place of three, the fine ones heavier, a coverage band half
+  as wide, and the finest octaves shading the inside of a cloud. The glass
+  behind the tiles stays blurred.
+
+The ps3gfx changes of this stage are in ps3gfx's working tree (not
+committed): `source/icons.c` (`icon_rot` always bilinear: a second
+`gfx_tex` of each set's texels, no new RSX memory), `source/spu_fx_kern.h`
+(the clouds: `FX_CLOUD_W1` to `W5`, `FX_CLOUD_BAND` 0.085, `FX_CLOUD_THICK`,
+`FX_CLOUD_TEX`, the quantile table `FX_CLOUD_MID` re-measured), `data/spu_fx.spu`
+rebuilt (26,136 B, `_end` 0x22890), `test/test_spu_fx.c` (the new golden
+hashes, `--quantiles`), kitcheck (`icon_rot` at a fractional centre), the
+README. Neither file is linked by PS3 Health or Cell Bench: their ELFs are
+byte-identical against ps3gfx 7ad9547 (and their link maps hold no `icons.o`
+or `spu_fx`). The SPU cost: about 84 cycles a cloud pixel in place of 72
+(spu-objdump's inner loop), so about 2.2 ms a picture on the slowest SPU in
+place of the console's 1.97 ms: 13 % of each SPU at 60 pictures a second.
+
 ## Files in /dev_hdd0/tmp/couch
 
 | File | Written by | Content |
 |---|---|---|
+| `boot.txt`, `boot.old.txt` | Couch (`boot.c`), since 0.3.0 | a line per step of the start and of the exit (the name and the console's microseconds), synced at once; past 32 KB the next start moves it to `boot.old.txt` |
 | `starts.txt`, `journal.txt` | ps3gfx | `start` per start; the journal's `start`, `done`, `froze` and `skip` lines (`net_start`, `tz_params`; since 0.3.0 the effects' `fx_init`, `fx_import`, `fx_group`, `fx_start`, `fx_first`, `fx_aurora`, `fx_terminate`, `fx_join`, `fx_exit_status`, `fx_destroy`, `fx_close`: 13 names) |
 | `safe_area.txt` | ps3gfx | the visible area, measured at the first start |
 | `gfx_init.txt` | ps3gfx, only when the picture cannot start | the failed step |
@@ -522,6 +668,15 @@ committed. Until the commit and the pin move, the build is
 (371,936 B); still 48 syscall numbers at 93 call sites, no compiler
 warning. Health's and Cell Bench's ELFs and link maps are byte-identical
 on that tree (no `fx.o` in either map).
+
+Stage 10 (0.3.0, 2026-10-14) builds the same way against ps3gfx's working
+tree with its stage 10 changes (`icons.c`, the `spu_fx` kernel and program:
+"The frame" above), installed in `~/ps3dev` (stamp `02af1b5...-dirty`;
+the library's code is 7ad9547's plus those files). The pkg is 389 KB
+(388,896 B); 48 syscall numbers at 108 call sites (`boot.c`'s sysLv2Fs
+calls and `start.c`'s job thread add call sites of numbers already in the
+list, no new number), every `sc` resolved, the EBOOT matches the ELF, no
+compiler warning.
 
 `art/make_icon.py <Inter variable TTF>` draws `pkgfiles/ICON0.PNG` (a sofa,
 "Couch" and "Board", in PS3 Health's icon style); the font is
@@ -639,11 +794,22 @@ preview's clock is fixed at 12:00 UTC), `board_storm` (WMO 95; frame 360 is
 the first bolt with its flash), `board_snow` (-1 deg: the digits' minus
 sign), `board_old` (the reply without the keys of 0.3.0: the "-" forms),
 `board_fxoff` (`start fx_first` in the journal: RSX only, solid panels,
-the glow too). Every text
-fits at 1786 and at 1600 wide (at 1600 the News page shows 6 of the 8
-headlines, two of them in two lines). With `PASSES=2`, the snapshots repeat byte
-for byte, at both areas: 84 at the default area and 81 narrow (2026-10-13, stage 9; again 2026-10-14 with the sky at 60
-pictures a second and the anti-aliased lines, about 20 min for both areas twice). Before, an Info page after a
+the glow too). Stage 10's: `start` (the loading screen at frame 3, during
+the effects' job with its counter at frame 7, the start animation half way
+at frame 30, the Board at 120; it prints the `start:` lines of `couch.txt`
+and `boot.txt`), `skeleton` (a 4 s answer: the skeleton on the Board and
+on the News page), `news_rain` (the News page with mixed sources: Ambito
+"Economy", BBC "World", Infobae, Clarin), `pages_slide` (in `pages`: 6
+frames into the slide to the News page), `ambient_rsx` (`start fx_first`
+in the journal: 0.2.0's dimmed mode), `tv_news` and `tv_info`. The
+`ambient` snapshots now show the aurora with the block at three of its
+places. Since stage 10 a snapshot after a page change waits 28 frames (the
+slide is 17), and `frozen`, `tz_skip` and `tz_12h` start later (the loading
+screen's frames come before the prompt and the Board). Every text fits at
+1786 and at 1600 wide, the News page's 8 headlines too. With `PASSES=2`,
+the snapshots repeat byte for byte, at both areas: 95 at the default area
+and 91 narrow (2026-10-14, stage 10; about 26 min for both areas twice;
+stage 9: 84 and 81). Before, an Info page after a
 fetch could differ at times (`board_cut_info`, `board_stale301_info`,
 `tz_12h_info`, `tz_skip_info`): the Board thread runs in host time while the
 preview's clock moves per frame, so a fetch's duration reads 0.00 or 0.02 s.

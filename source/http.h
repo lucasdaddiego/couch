@@ -16,7 +16,7 @@ extern s32 net_mod_rc, net_ctl_rc;   /* the netctl module load's and netCtlInit'
 extern char net_ip[32];              /* the console's address, "no address", or "not read" */
 
 /* The main thread only: journal_start("net_start"), then netInitialize, the
- * netctl module, netCtlInit and the first address read (behind run_job's
+ * netctl module, netCtlInit and the first address read (behind start_job's
  * counter when the journal works, fs_ok), then journal_done. A frozen or
  * skipped entry runs nothing (NET_BLOCKED), and so does a pending quit (the
  * state stays as it was). A failed netInitialize runs again at the next
