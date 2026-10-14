@@ -10,6 +10,9 @@
  *   PV_BOARD=<file>       the body (default: the Worker test's reply of
  *                         2026-10-10, a reply of 0.1.0's time, below;
  *                         run.zsh always passes the current one)
+ *   PV_BOARD2=<file>      the body of the second and later connects (a
+ *                         refresh with new values: the Board's counting
+ *                         and glow); absent: PV_BOARD's
  *   PV_BOARD_FAIL=<list>  per connect, comma-separated, the last entry
  *                         repeats: ok, refused, silent (no answer: the
  *                         10 s SO_RCVTIMEO runs out at once), cut (the body
@@ -106,7 +109,7 @@ static void note(const char *fmt, ...)
 #define NSOCK 8
 #define FD0 3
 static struct {
-    int used, kind, in_len, out_len, out_pos;
+    int used, kind, n, in_len, out_len, out_pos;   /* n: the connect's number, 0 first */
     volatile int shut;                       /* netShutdown came (the main thread) */
     u64 t0;                                  /* the preview's clock at the connect */
     char in[2048];
@@ -159,14 +162,16 @@ s32 netConnect(s32 s, const struct sockaddr *a, socklen_t l)
         return -1;
     }
     sk[i].kind = kind;
+    sk[i].n = connects - 1;
     sk[i].t0 = sysGetSystemTime();
     return 0;
 }
 
-/* The body: PV_BOARD's file, or the default; malloc'd, *len bytes. */
-static char *body_text(int *len)
+/* The body of connect n: PV_BOARD2's file after the first when it is set,
+ * else PV_BOARD's, else the default; malloc'd, *len bytes. */
+static char *body_text(int n, int *len)
 {
-    const char *p = getenv("PV_BOARD");
+    const char *p = n > 0 && getenv("PV_BOARD2") ? getenv("PV_BOARD2") : getenv("PV_BOARD");
     FILE *f = p ? fopen(p, "rb") : NULL;
     char *b = malloc(65536);
     if (!b) return NULL;
@@ -184,7 +189,7 @@ static char *body_text(int *len)
 static void answer(int i)
 {
     int blen = 0;
-    char *body = body_text(&blen);
+    char *body = body_text(sk[i].n, &blen);
     char *out = malloc(65536 + 512);
     if (!body || !out) {
         free(body);

@@ -706,6 +706,8 @@ static void numbers(void)
     group("hm_parse", f0);
 }
 
+static double lum(unsigned c) { return 0.299 * ((c >> 16) & 0xff) + 0.587 * ((c >> 8) & 0xff) + 0.114 * (c & 0xff); }
+
 static void sky(void)
 {
     int f0 = fails;
@@ -721,7 +723,16 @@ static void sky(void)
         CHECK(t2 == t && h2 == h);
     }
     sky_colors(-20, 100, 0, &t, &h);
-    CHECK(t == 0x434e61);                            /* night toward 5d6b80 by 0.7 */
+    CHECK(t == 0x080a10 && h == 0x141923);           /* night: the grey scaled to the clear sky's luminance */
+    sky_colors(30, 100, 0, &t, &h);
+    CHECK(t == 0x4e6a94 && h == 0x90a7be);           /* day: toward 5d6b80 and 8a96a8 by 0.7, the design's rule */
+    sky_colors(6, 100, 0, &t, &h);
+    CHECK(t == 0x52698d && h == 0xa09e9e);           /* 6 deg: the grey whole */
+    for (double e = -12; e <= -6; e += 0.5) {        /* an overcast night is not brighter than a clear one */
+        sky_colors(e, -1, 0, &t, &h);
+        sky_colors(e, 100, 0, &t2, &h2);
+        CHECK(lum(t2) <= lum(t) + 1 && lum(h2) <= lum(h) + 1);
+    }
     sky_colors(-20, 0, 1, &t, &h);
     CHECK(t == 0x040812);                            /* night darkened by 25 % */
     sky_colors(30, 100, 1, &t, &h);
@@ -735,7 +746,7 @@ static void sky(void)
         pt = t;
     }
     CHECK(mono);
-    group("sky_colors: the stops, clamped, between, the cover's grey, the rain's 25 %", f0);
+    group("sky_colors: the stops, clamped, between, the cover's grey (scaled by the light at night), the rain's 25 %", f0);
 
     f0 = fails;
     int bad = 0;

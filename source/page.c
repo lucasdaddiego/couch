@@ -12,6 +12,7 @@
 #include "http.h"
 #include "parse.h"
 #include "spu_fx_run.h"
+#include "sky.h"
 
 #define DIM_LAYER 0x000000a8         /* black at 66 %: the picture at a third of its light */
 #define DOT_R 7
@@ -97,12 +98,20 @@ float page_begin(void)
         shifted = 1;
     }
     begin_frame();
-    /* the background (design 3): the sky and its clouds, or the aurora in
-     * the ambient mode, then the rain (dimmer over the aurora). Stage 9's
-     * glass tiles go over it; 0.2.0's cards still hide most of it. */
+    /* the background (design 3): the gradient, the sky's objects (the
+     * stars, the moon, the sun's glow and rays), the clouds, or the aurora
+     * in the ambient mode; then the rain (dimmer over the aurora), a bolt
+     * and its flash, the scrims behind the header and the bottom bar. The
+     * Board's glass tiles go over it. */
     int aurora = ambient && fx_draw_aurora();
-    if (!aurora) fx_draw_sky();
+    if (!aurora) {
+        fx_draw_gradient();
+        sky_behind();
+        fx_draw_clouds();
+    }
     fx_draw_rain(aurora ? 0.5f : 1.0f);
+    if (!aurora) sky_front();
+    if (fx_state != FXS_NONE) sky_scrims();
     header();
     return CONTENT_Y;
 }

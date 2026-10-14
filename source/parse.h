@@ -181,7 +181,12 @@ int hm_parse(const char *s);
  * middle of each elevation band of the table (-12 night and below, -9, -3,
  * 3, 13, 20 and above), linear between them; then the cloud cover (0 to
  * 100, -1 none) moves both toward grey by cover / 100 x 0.7; then wet (rain
- * or a storm now: wmo_wet) darkens both by 25 %. */
+ * or a storm now: wmo_wet) darkens both by 25 %. The grey is the design's
+ * (5d6b80 top, 8a96a8 horizon) from 6 deg up; below, it is scaled down by
+ * the light, to the luminance of the clear colour under it at most, so an
+ * overcast night is not brighter than a clear one (the design's rule made
+ * it 434e61 against 050a18). The scale is the larger of (elev + 6) / 12 and
+ * that luminance ratio, so it moves with no step. */
 void sky_colors(double elev, int cover, int wet, unsigned *top, unsigned *horizon);
 
 /* A WMO weather code as a kind (design 1.11), WK_NONE for a missing code

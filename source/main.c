@@ -29,6 +29,9 @@
 #include "page.h"
 #include "parse.h"
 #include "spu_fx_run.h"
+#include "sky.h"
+#include <ps3gfx/digits.h>
+#include <ps3gfx/icons.h>
 
 #ifndef PS3GFX_COMMIT
 #define PS3GFX_COMMIT "unknown"      /* the preview: the Makefile defines it on the console */
@@ -41,6 +44,7 @@
 
 int fs_ok, fs_mk, fs_op, fs_wr;
 int utf8_rc = -1;
+int digits_rc = -1, icons_rc = -1;
 int unattended = -1;
 s64 t_start;
 
@@ -102,7 +106,7 @@ static void log_start(void)
     civil_from_unix(clock_utc(), &c);
     couch_log("couch %s on ps3gfx %s: start at %04d-%02d-%02d %02d:%02d:%02d UTC, %s", APP_VERSION, PS3GFX_COMMIT, c.year, c.month, c.day,
               c.hour, c.min, c.sec, unattended > 0 ? "unattended" : unattended == 0 ? "unattended, auto.txt is not a number" : "by hand");
-    couch_log("text_utf8: rc %d", utf8_rc);
+    couch_log("text_utf8: rc %d, digits_init: rc %d, icons_init: rc %d", utf8_rc, digits_rc, icons_rc);
     couch_log("board: %s (%s)%s%s", board_url, board_url_file ? "board_url.txt" : "the default", board_url_note[0] ? ". " : "", board_url_note);
 }
 
@@ -184,6 +188,8 @@ int main(void)
 #else
     utf8_rc = text_utf8();                   /* the Board's text is UTF-8 (the degree sign, a city's accents) */
 #endif
+    digits_rc = digits_init();               /* the Board's big numbers (design 6.3: after text_utf8) */
+    icons_rc = icons_init();                 /* the weather's and the chips' icons */
     fs_ok = fs_selftest(APP_DIR, &fs_mk, &fs_op, &fs_wr) == 0;
     unattended = auto_read();
     if (unattended >= 0 && fs_ok) fs_write_file(AUTO, "0\n", 2, 0);   /* at once: a later start by hand, also after a freeze, is not a round */
@@ -237,6 +243,7 @@ int main(void)
         }
         ambient_tick();
         fx_tick(ambient ? FXM_AURORA : FXM_SKY);   /* after the last ui_flip: a picture's swap, the next picture */
+        sky_tick();                          /* the moon's sphere (into the texture no frame shows), the bolts */
         if (page == PAGE_INFO) info_draw();
         else if (page == PAGE_NEWS) news_draw();
         else board_draw(NULL, 0);

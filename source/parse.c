@@ -807,6 +807,19 @@ static unsigned rgb_mix(unsigned a, unsigned b, double t)
     return o;
 }
 
+/* the luminance of a colour, 0 to 255 (ITU-R BT.601 weights) */
+static double rgb_lum(unsigned c) { return 0.299 * ((c >> 16) & 0xff) + 0.587 * ((c >> 8) & 0xff) + 0.114 * (c & 0xff); }
+
+/* The cover's grey at the sky's light (parse.h): the grey as it is from 6
+ * deg up; below, scaled toward black, at most to the clear colour's
+ * luminance. */
+static unsigned grey_lit(unsigned grey, unsigned clear, double elev)
+{
+    double k = rgb_lum(clear) / rgb_lum(grey), day = (elev + 6) / 12;
+    if (day > k) k = day;
+    return k >= 1 ? grey : rgb_mix(0, grey, k);
+}
+
 void sky_colors(double elev, int cover, int wet, unsigned *top, unsigned *horizon)
 {
     int i = 0;
@@ -820,8 +833,8 @@ void sky_colors(double elev, int cover, int wet, unsigned *top, unsigned *horizo
     unsigned tp = rgb_mix(sky_top[i], sky_top[i + 1], t), hz = rgb_mix(sky_hor[i], sky_hor[i + 1], t);
     if (cover > 0) {
         double c = (cover > 100 ? 100 : cover) / 100.0 * 0.7;
-        tp = rgb_mix(tp, 0x5d6b80, c);
-        hz = rgb_mix(hz, 0x8a96a8, c);
+        tp = rgb_mix(tp, grey_lit(0x5d6b80, tp, elev), c);
+        hz = rgb_mix(hz, grey_lit(0x8a96a8, hz, elev), c);
     }
     if (wet) {
         tp = rgb_mix(tp, 0, 0.25);

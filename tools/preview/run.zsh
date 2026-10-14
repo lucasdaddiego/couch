@@ -93,6 +93,70 @@ body_rain() { each rain_line; }   # the design's rainy day: WMO 61, 88 % cover, 
 rain_line() { case $1 in wx_fx=*) print -r -- "wx_fx=61|88|1.2|135|20|30";; *) print -r -- "$1";; esac; }
 body_snow() { each snow_line; }   # moderate snow, 90 % cover, wind 10 km/h from the west
 snow_line() { case $1 in wx_fx=*) print -r -- "wx_fx=73|90|0.4|270|10|15";; *) print -r -- "$1";; esac; }
+# The Board page of 0.3.0 (stage 9): the mockups' scenes. The night ones put the place at longitude 165 (and
+# offset and PV_TZ at +11 h): the preview's clock is fixed at 12:00 UTC, which is 23:00 there.
+body_old() { each old_line; }     # a Worker of 0.2.0's time: the reply without the keys of 0.3.0 (the host check's first reply)
+old_line() { [[ $1 == (geo|wx_fx|wx_hours|days_fx|usd_chg|money_chg|spark)=* ]] || print -r -- "$1"; }
+body_dayrain() { each dayrain_line; }   # the mockup's rainy day: WMO 61, 88 %, 20 km/h from the SE; a chip of each kind
+dayrain_line() {
+    case $1 in
+    (wx_now=*) print -r -- "wx_now=19$D|17$D|88%|Rain|20 km/h|day|Open-Meteo";;
+    (wx_fx=*) print -r -- "wx_fx=61|88|1.2|135|20|34";;
+    (days_fx=*) print -r -- "days_fx=61|3|2";;
+    (day=Thu*) print -r -- "day=Thu|Partly cloudy|22$D|12$D|18%";;
+    (usd_chg=Oficial*) print -r -- "usd_chg=Oficial|up|+0,3%|+5,00|12 Oct";;
+    (usd_chg=MEP*) print -r -- "usd_chg=MEP|down|-0,2%|-3,10|12 Oct";;
+    (usd_chg=CCL*) print -r -- "usd_chg=CCL|up|+0,1%|+1,60|12 Oct";;
+    (usd_chg=Cripto*) print -r -- "usd_chg=Cripto|down|-0,4%|-6,40|12 Oct";;
+    (money_chg=*) print -r -- "${1%%|*}|up|+0,2%|+1|9 Oct";;
+    (*) print -r -- "$1";;
+    esac
+}
+body_dayrain_before() { each dayrain_before_line; }   # the reply before it: Oficial 5 pesos lower, MEP 2,10 higher
+dayrain_before_line() {
+    case $1 in
+    (usd=Oficial*) print -r -- "usd=Oficial|1.480,00|1.530,00|Fri 15:00";;
+    (usd=MEP*) print -r -- "usd=MEP|1.538,00|1.545,00|Fri 18:00";;
+    (*) dayrain_line "$1";;
+    esac
+}
+night_line() {   # $2: the wx_now words and wx_fx of the night
+    case $1 in
+    (offset=*) print -r -- "offset=39600";;
+    (geo=*) print -r -- "geo=-34.58|165.0000";;
+    (wx_now=*) print -r -- "wx_now=11$D|10$D|71%|$2|6 km/h|night|Open-Meteo";;
+    (wx_fx=*) print -r -- "wx_fx=$3";;
+    (wx_rain=*) print -r -- "wx_rain=dry|No rain in the next 12 h";;
+    (wx_hours=*) print -r -- "wx_hours=0|11 10 10 9 9 8 8 8 8 9 11 13|0 0 0 0 0 0 0 0 0 0 0 0|0 0 0 0 0 0 0 1 1 1 1 1";;
+    (days_fx=*) print -r -- "days_fx=61|2|0";;
+    (day=Thu*) print -r -- "day=Thu|Clear|22$D|12$D|0%";;
+    (*) print -r -- "$1";;
+    esac
+}
+body_night() { local l; for l in "${(@f)$(< $REPLY)}"; do night_line "$l" Clear "0|3|0|200|6|11"; done; }
+body_ocnight() { local l; for l in "${(@f)$(< $REPLY)}"; do night_line "$l" Overcast "3|100|0|200|8|15"; done; }
+body_storm() { each storm_line; }   # a thunderstorm by day: WMO 95, 100 %, 8.5 mm, 35 km/h from the NW
+storm_line() {
+    case $1 in
+    (wx_now=*) print -r -- "wx_now=18$D|18$D|94%|Thunderstorm|35 km/h|day|Open-Meteo";;
+    (wx_fx=*) print -r -- "wx_fx=95|100|8.5|300|35|62";;
+    (wx_rain=*) print -r -- "wx_rain=rain|Rain now (90%)";;
+    (days_fx=*) print -r -- "days_fx=95|61|3";;
+    (*) print -r -- "$1";;
+    esac
+}
+body_snowday() { each snowday_line; }   # snow by day, below 0: the minus sign of the digits
+snowday_line() {
+    case $1 in
+    (wx_now=*) print -r -- "wx_now=-1$D|-6$D|90%|Snow|10 km/h|day|Open-Meteo";;
+    (wx_fx=*) print -r -- "wx_fx=73|90|0.4|270|10|15";;
+    (wx_rain=*) print -r -- "wx_rain=rain|Snow now (80%)";;
+    (day=Today*) print -r -- "day=Today|Snow|1$D|-3$D|80%";;
+    (days_fx=*) print -r -- "days_fx=73|71|3";;
+    (wx_hours=*) print -r -- "wx_hours=15|-1 -1 -2 -2 -3 -3 -3 -2 -1 0 1 1|80 80 70 60 50 40 30 20 10 10 5 5|73 73 73 71 71 3 3 3 3 2 2 1";;
+    (*) print -r -- "$1";;
+    esac
+}
 body_v1() {    # a Worker of 0.1.0's time (the reply of 2026-10-10): no money, no sky, no news
     print -rn -- "couch-board 1
 now=1791614218
@@ -129,7 +193,9 @@ scn() {   # name script [VAR=value ...]; JOURNAL, BODY, URL, AUTO, BIN, SAFE fro
     [[ -n $AUTO ]] && print -r -- "$AUTO" > $sbx/$DIR/auto.txt
     [[ -n $NOFOLDER ]] && { rm -rf $sbx/$DIR; : > $sbx/$DIR }   # the app folder is a file: no folder, no journal
     body_${BODY:-ok} > $sbx/body.txt
-    env PV_ROOT=$sbx PV_OUT=$OUT PV_BOARD=$sbx/body.txt PV_SCRIPT="${(j: :)s}" "$@" $P/build/${BIN:-pv} 2>&1 | command grep -v '^snap' | head -5
+    local b2=()
+    [[ -n $BODY2 ]] && { body_$BODY2 > $sbx/body2.txt; b2=(PV_BOARD2=$sbx/body2.txt) }   # the second and later replies
+    env PV_ROOT=$sbx PV_OUT=$OUT PV_BOARD=$sbx/body.txt $b2 PV_SCRIPT="${(j: :)s}" "$@" $P/build/${BIN:-pv} 2>&1 | command grep -v '^snap' | head -5
     print -- "$name: exit ${pipestatus[1]}"
 }
 
@@ -250,6 +316,24 @@ fx_exit|all)       # START in the first half second, the SPUs up and the fetch i
                    # SPUs (fx_first closed at the exit), then the network
     BODY=rain scn fx_exit "30:START 400:EXIT" PV_BOARD_FAIL=hang
     fxends fx_exit ;|
+board_rain|all)    # the Board of 0.3.0 on the mockup's rainy day; SQUARE at 11.7 s brings Oficial 5 pesos up and MEP 2,10
+                   # down: they counted and pulsed, and keep a low glow (UP amber, DOWN teal) until the next reply
+    BODY=dayrain_before BODY2=dayrain scn board_rain "120:SNAP=board_rain_first 700:SQUARE 1150:SNAP=board_rain 1151:EXIT" ;|
+board_rain_tv|all) # the same at Lucas's area (not in the narrow pass)
+    [[ $AREA != narrow ]] && SAFE='0 2 1920 1078' BODY=dayrain_before BODY2=dayrain scn board_rain_tv "700:SQUARE 1150:SNAP=board_rain_tv 1151:EXIT" ;|
+board_night|all)   # a clear night (23:00): stars, the moon's sphere, the dark arc with the moon on it, no rain
+    BODY=night scn board_night "120:SNAP=board_night 121:EXIT" PV_TZ=660 ;|
+board_ocnight|all) # an overcast night: the cover's grey scaled by the light, no brighter than the clear night
+    BODY=ocnight scn board_ocnight "120:SNAP=board_ocnight 121:EXIT" PV_TZ=660 ;|
+board_storm|all)   # a thunderstorm (WMO 95): heavy slanted rain; frame 360 is the first bolt (6 s) with its flash
+    BODY=storm scn board_storm "120:SNAP=board_storm_rain 360:SNAP=board_storm 361:EXIT" ;|
+board_snow|all)    # snow by day at -1 deg: the flakes, the hero's snowflakes, the minus sign
+    BODY=snowday scn board_snow "120:SNAP=board_snow 121:EXIT" ;|
+board_old|all)     # a Worker of 0.2.0's time (no geo, wx_fx, wx_hours, days_fx, chips, spark): each value's "-" form,
+                   # the sky from wx_now's day or night
+    BODY=old scn board_old "120:SNAP=board_old 121:EXIT" ;|
+board_fxoff|all)   # the effects off (fx_first froze before: RSX only): solid panels, the sprites, the PPU's rain; the glow too
+    JOURNAL=$'start fx_first\n'$TZ_DONE BODY=dayrain_before BODY2=dayrain scn board_fxoff "120:SNAP=board_fxoff_first 700:SQUARE 1150:SNAP=board_fxoff 1151:EXIT" ;|
 tv|all)            # Lucas's visible area, 0 2 1920 1078 (not in the narrow pass: it sets its own area)
     [[ $AREA != narrow ]] && SAFE='0 2 1920 1078' scn tv "120:SNAP=tv_board 122:SELECT 126:SNAP=tv_info 127:EXIT" ;|
 esac

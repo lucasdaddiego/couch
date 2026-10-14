@@ -45,6 +45,9 @@ is a deploy, not a console round); no headline opens (titles only).
 
 ## The pages (0.2.0)
 
+(Since stage 9 of 0.3.0 the Board page is the dashboard tiles: "The Board
+page" below. The header, the News page and the Info page are still these.)
+
 - **The header** (every page, `page.c`): on the left the clock and the date,
   and the clock's source line under them; on the right the page's name with
   three dots (the page on the TV in BLUE), and under it the city (cut at 560
@@ -253,11 +256,11 @@ sections 3 and 6): one group of six SPU threads, modelled on PS3 Health's
 band each: the clouds and the frosted glass (`FX_SKY`, 480 x 270 and
 240 x 135) or the aurora (`FX_AURORA`, 640 x 360), into two textures of
 each that take turns. Thread 5 makes the rain or the snow (`FX_RAIN`) in
-every frame, into the frame's vertex area (`gfx_block`). Stage 8 draws
+every frame, into the frame's vertex area (`gfx_block`). Stage 8 drew
 only the background behind 0.2.0's cards: the gradient, the clouds, the
-rain (and the aurora under the ambient mode's dim layer). The pages of
-stages 9 and 10 call the same API: `fx_draw_gradient`, `fx_draw_clouds`
-(the moon and the stars go between the two), `fx_draw_rain`,
+rain (and the aurora under the ambient mode's dim layer). Stage 9's Board
+page (below) and stage 10's pages call the same API: `fx_draw_gradient`,
+`fx_draw_clouds` (the moon and the stars go between the two: `sky.c`), `fx_draw_rain`,
 `fx_draw_aurora`, `fx_glass` (a tile's frosted glass, or a solid panel),
 `fx_flash` (lightning), `fx_sc` (the scene's colours), `fx_reduced` (the
 frame budget's step 4).
@@ -313,10 +316,109 @@ frame budget's step 4).
 - **The scene** (`fx_tick`, each minute and at each reply): the sun from
   `geo` (`sun_pos`), the gradient from `sky_colors`, the cover, the wind
   and the rain from `wx_fx` (`wx_precip`: 300 to 1,500 drops by the code
-  and the hour's mm, 300 flakes), the cloud colours from the sky's. The
-  clouds drift with the wind at 0.15 picture pixels a second per km/h (20
-  km/h: 12 screen pixels a second); the PPU adds the wind times the frame's
-  time to the offset each frame, so a wind change makes no jump.
+  and the hour's mm, 300 flakes), the cloud colours from the sky's (by
+  night a dim blue-grey, 141a28 and 080c16, just over the night sky: stage
+  8's 2a3550 and 121a2c made an overcast night twice as bright as a clear
+  one), the sky's light for the glass tint (`light`, 0 from -6 deg down to 1
+  from 12 deg up). A reply with no `geo` (a Worker before 0.3.0) takes the
+  sun at 30 deg or -20 deg by `wx_now`'s day or night. The clouds drift with
+  the wind at 0.08 picture pixels a second per km/h (20 km/h: 6.4 screen
+  pixels a second, the screen's width in 5 min; stage 8's 0.15 was a first
+  guess, not judged in motion on the TV yet); the PPU adds the wind times
+  the frame's time to the offset each frame, so a wind change makes no jump.
+
+## The Board page (0.3.0, stage 9 of the revamp)
+
+`source/board_page.c` draws the Board in the design's dashboard tiles
+(section 1.4; the mockups `board_day_rain.png`, `board_night_clear.png` and
+`board_day_narrow.png`), over the live sky. The header, the News page and
+the Info page are 0.2.0's until stage 10.
+
+- **The layout**, from `SW` and `SH` each frame: wide (`SH` 980 and up: the
+  TV area and the default area, every row height times the content's height
+  over 800) or narrow (the narrow area). The content from y 152 (narrow 132)
+  to `SH` - 124 (narrow 112); with no headlines the ticker goes and the
+  content grows to its place. Left, 0.585 of the width: the weather hero
+  (440 px at the TV area, 360 narrow), the sky tile (160, 128), the three
+  days (the rest). Right: Blue's tile (236, 196) and a grid of 2 x 4 small
+  tiles. Under them the ticker (52 px, 48 narrow) and the bottom bar, which
+  replaces 0.2.0's status, footer and note lines on the Board only: the
+  status and the schedule on the left ("Board updated at 09:00, next update
+  in 4 min"; `board_url.txt`'s note after them in YELLOW), the buttons on
+  the right. The URL of `board_url.txt` shows on the Info page only.
+- **The tiles**: frosted glass (`fx_glass`: the SPU's blurred sky under the
+  tile's rect, then `GLASS_TINT` at 0x73 by night to 0x9c by day from the
+  scene's `light`), a 1 px edge and a bottom line; in RSX-only mode a solid
+  panel. Colour tokens in `couch.h` (design 1.10).
+- **The hero**: the weather's icon of the L set in layers that move (the sun
+  turns once a minute; the cloud drifts 8 px on 6 s, a grey one behind on 9
+  s; 10 RSX streaks under a rain cloud; the lightning layer flashes with a
+  bolt and every 6.5 s on a storm; 6 flakes fall on snow; 3 bars slide on
+  fog; the moon with two twinkling stars at night), the temperature in D_XL
+  (D_L narrow; F_LARGE when `digits_init` failed), the words, "Feels like
+  17 deg, humidity 61%" (two lines narrow, or when the row is too short), the
+  min/max bar (today's min and max, 8 steps from TEMP_COLD to TEMP_HOT, the
+  now marker), the wind dial (r 76, narrow 58 with N only; the arrow where
+  the wind goes with a 2 deg wobble, the speed, "SE, gusts 34"), the rain
+  line, and the 12 h curve (`wx_hours`: the line, the fill under it, a BLUE
+  column per hour's chance, the hours, every second temperature, every
+  third narrow).
+- **The sky tile**: the sun arc from `wx_sun` (solid SUN to the sun's place,
+  dashed DIM after, the sun with its glow; by night all dashed with a small
+  moon at the night's fraction), "Sunset in 4 h 29 min" or "Sunrise in ...";
+  the moon's sphere at the real phase (`sky.c`, 160 x 160, 16 rows a frame,
+  a new picture each 0.25 day of age, lit on the left of a waxing moon south
+  of the equator), its phase, "9% lit" and "New moon 11 Oct". The moon needs
+  no key: Couch computes it from the clock.
+- **The three days**: the day, the M icon from `days_fx` (bobbing 2 px on 4 s,
+  a third of a period apart), max and min, the rain chip.
+- **Blue's tile**: the sell in D_M with ",00" in F_LARGE, Buy and the time,
+  the change chip from `usd_chg`, the 30 days' range and sparkline from
+  `spark`. **The grid**: the other rates in the Worker's order, then the
+  money extras, 8 places (more: a `couch.txt` line once); a small tile has
+  its label, its chip, the value with its decimals smaller and a foot ("buy
+  1.485,00, Fri 15:00", "12 Oct", "TNA, 14:47" for "Plazo fijo BNA (TNA)");
+  narrow: the label's first word and the time on the label row, no foot. A
+  stale value's foot in YELLOW; a none value "-" with its reason.
+- **The change chips** (Lucas: amber up, teal down, a grey dash for flat):
+  the dollars show the change in %, riesgo pais in points.
+- **The changed tiles**: at each good reply the Board compares each rate's
+  sell and each extra's value with the reply before (`board_prev`, by
+  label). A changed value counts from the old value in 800 ms (`num_mix`,
+  ease-out) and its tile gets a halo (`glow9` with `sky.c`'s halo texture,
+  UP or DOWN): two pulses in 3 s, then a fade by 6 s to a lower glow that
+  stays until the next reply, so "changed at the last refresh" still shows
+  minutes later (the design faded it out by 6 s).
+- **The ticker**: a glass band over the screen's whole width, the headlines
+  moving at 90 px a second (a whole pixel each frame) apart by a dot, the
+  pill of the headline at its right end (Clarin red, Infobae orange, others
+  blue-grey) over a dark block from past the screen's left edge, so the text
+  goes under the pill.
+- **The "-" forms** (a Worker before 0.3.0, or before the first reply): no
+  weather code, no hero icon (the temperature takes its place) and no day
+  icons; no `wx_hours`, the curve's axis with "12 h: -"; no `wx_fx`, the
+  dial's speed from `wx_now`'s wind and no arrow; no `spark`, "30 d: -" and a
+  dashed line; no chips; no `wx_sun`, a dashed arc and "-" times; no reply,
+  every value "-" in DIM. A stale or none weather shows its reason at the
+  rain line's right in YELLOW, a stale dollar feed at Blue's range.
+- **The sky's objects** (`sky.c`, the same with or without the SPUs): the
+  stars (200, 7 brightness levels, twinkling, by night under a thin cover),
+  the moon's disc while it is up (`moon_pos`, under the clouds), the sun's
+  glow and its disc (the disc only through a thin cover) and 9 rays turning
+  1 deg a second (a cover under 60 %), lightning on a storm code (95 to 99:
+  a bolt at 6 s after the start and then every 6 to 20 s, 24 points by
+  midpoint displacement drawn 3 times over the clouds, 3 frames on, 2 off, 2
+  on; a white flash for 2 frames; `fx_flash` lights the next picture's
+  clouds), and the scrims behind the header and the bottom bar (strong to
+  canvas y 120 and from `SH` - 130, at any visible area: the design's 0x70
+  and 0x80 from the screen's edges were too light on a clear day). Every
+  motion reads `sky_time` (the system clock since the start), never a
+  reply's landing time, and `fx_reduced` stops the rays, the twinkle and
+  the hero's motion.
+- **The sky's colours** (`sky_colors`, `parse.c`): the cover's grey is the
+  design's from 6 deg up; below, it is scaled down by the light, to the
+  clear sky's luminance at most, so an overcast night is not brighter than
+  a clear one (the design's rule gave 434e61 against 050a18).
 
 ## Files in /dev_hdd0/tmp/couch
 
@@ -363,8 +465,9 @@ imports; the exit's `netShutdown`, `netDeinitialize`, `netCtlTerm` and
 add the nine SPU numbers of Health and Cell Bench: 165, 169, 170, 171, 172,
 173, 177, 178 and 190 (the image's import and close are SPRX imports): 48
 numbers at 93 call sites, every `sc` resolved. `build.sh` also copies
-ps3gfx's `PHOSPHOR.txt` (the icons' licence) beside `OFL.txt`. Out: `couch.gnpdrm.pkg` (about
-245 KB) and the unstripped `couch.elf`.
+ps3gfx's `PHOSPHOR.txt` (the icons' licence) beside `OFL.txt`. Out: `couch.gnpdrm.pkg` (365 KB
+since stage 9, which links the display digits and the icons) and the unstripped `couch.elf`. Stage 9
+adds no syscall: still 48 numbers at 93 call sites.
 
 `art/make_icon.py <Inter variable TTF>` draws `pkgfiles/ICON0.PNG` (a sofa,
 "Couch" and "Board", in PS3 Health's icon style); the font is
@@ -387,7 +490,9 @@ before and after.
 `tools/preview/pv_app.c` is the Board's HTTP peer: a connect to port 80 or
 8787 gets one answer and a close, every other port refuses. Each request
 goes to `peer.log` in the scenario's sandbox (`build/sbx/<name>`).
-`PV_BOARD=<file>` is the body (default: the Worker test's reply), and
+`PV_BOARD=<file>` is the body (default: the Worker test's reply),
+`PV_BOARD2=<file>` the body of the second and later connects (a refresh
+with new values: the Board's counting and glow), and
 `PV_BOARD_FAIL` gives each connect its answer, comma-separated, the last
 repeating: `ok`, `refused`, `silent` (the 10 s timeout at once), `cut` (the
 body without its last 30 bytes), `301`, `v2`, `hang` (the recv waits until a
@@ -459,7 +564,7 @@ network start: no Board thread, no fetch, `net_end`), `noip`, `nofolder`
 (the app folder is a file: no journal, no counter, no prompt), `auto` (`auto.txt` 60: the shots at 30 and 45 s, the
 exit at 60 s, `couch.txt`), `tv` (Lucas's area, `0 2 1920 1078`); the
 effects: `fx_rain` (WMO 61, 88 %, 20 km/h from the south-east: the slanted
-rain behind the cards; the Info page's Effects row; the exit's reports, the
+rain behind the tiles; the Info page's Effects row; the exit's reports, the
 join, the statuses), `fx_snow`, `fx_frozen` (`start fx_first` in the
 journal: no SPU call, the sprites and the PPU's rain; SQUARE twice, CIRCLE:
 the SPUs start), `fx_late` (SPU 5 never reports its 30th rain job: the 50
@@ -468,10 +573,21 @@ ms deadline, the terminate, the join, `fx_first` failed, RSX only),
 `fx_fail` (the group's start fails: the destroy, the close), `fx_exit`
 (START at 0.5 s during a fetch: the Board thread, then the SPUs with
 `fx_first` closed, then `net_end`). Each prints its `effects` lines, the
-journal's `fx_` lines and the SPU calls. Every text
+journal's `fx_` lines and the SPU calls. The Board page of stage 9:
+`board_rain` (the mockup's rainy day with a chip of each kind; SQUARE at
+11.7 s brings a reply where Oficial went up and MEP down: at 19 s they show
+the resting glow, amber and teal; `board_rain_first` is the first reply),
+`board_rain_tv` (the same at Lucas's area; not in the narrow pass),
+`board_night` and `board_ocnight` (23:00 clear and overcast: the reply puts
+the place at longitude 165 with the offset and `PV_TZ` at +11 h, since the
+preview's clock is fixed at 12:00 UTC), `board_storm` (WMO 95; frame 360 is
+the first bolt with its flash), `board_snow` (-1 deg: the digits' minus
+sign), `board_old` (the reply without the keys of 0.3.0: the "-" forms),
+`board_fxoff` (`start fx_first` in the journal: RSX only, solid panels,
+the glow too). Every text
 fits at 1786 and at 1600 wide (at 1600 the News page shows 6 of the 8
-headlines, two of them in two lines). With `PASSES=2`, the 73 snapshots repeat byte
-for byte, at both areas (2026-10-13, stage 8). Before, an Info page after a
+headlines, two of them in two lines). With `PASSES=2`, the snapshots repeat byte
+for byte, at both areas: 84 at the default area and 81 narrow (2026-10-13, stage 9). Before, an Info page after a
 fetch could differ at times (`board_cut_info`, `board_stale301_info`,
 `tz_12h_info`, `tz_skip_info`): the Board thread runs in host time while the
 preview's clock moves per frame, so a fetch's duration reads 0.00 or 0.02 s.
@@ -594,9 +710,11 @@ Round 3, 0.2.0 (the pkg goes up as `Couch-0.2.0-rcN.pkg`):
 `Makefile`, `build.sh`, `sfo.xml`, `pkgfiles/ICON0.PNG`, `art/make_icon.py`,
 `source/` (`main.c`: the start, the loop, the pages' keys, the unattended
 round, `couch.txt`; `board.c`: the thread, the handoff, the internet's
-state, the Board page; `page.c`: the header, the ambient mode, the News
-page, the background; `spu_fx_run.c`: the effects' SPU group and their
-RSX-only fallbacks; `http.c`: the network start and the HTTP client; `clock.c`: the
+state, the status words; `board_page.c`: the Board page; `page.c`: the
+header, the ambient mode, the News page, the background; `sky.c`: the
+stars, the moon, the sun, the lightning, the scrims and the shared
+textures; `spu_fx_run.c`: the effects' SPU group and their RSX-only
+fallbacks; `http.c`: the network start and the HTTP client; `clock.c`: the
 settings, the offset, the clock; `info.c`: the Info page; `parse.c`: the
 pure functions, also built by the host check), `tools/preview/`,
 `tools/hostcheck/` (with `old_check.c`, 0.1.0's parser), `tools/syscalls.allow`,

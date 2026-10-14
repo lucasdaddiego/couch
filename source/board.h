@@ -31,6 +31,11 @@ void board_take(void);               /* each frame, in every screen: a new reply
 /* The last good reply and the fetches, for the clock, the Info screen and the log. */
 extern board_data board_cur;
 extern int board_have;
+/* The good reply before it (board_prev_have 0: none), and the count of good
+ * replies: the Board page's changed tiles (the glow, the counting). */
+extern board_data board_prev;
+extern int board_prev_have;
+extern int board_gen;
 extern int board_fetches, board_fails, board_last_ok;
 extern char board_last_words[200];   /* the last fetch's result in words ("ok", "DNS failed for ...") */
 extern long board_last_utc;          /* the console's clock when the main thread took it */
@@ -51,14 +56,16 @@ extern int board_net_q;
 extern s64 board_net_us, board_connect_us;
 extern long board_net_down_utc;
 
-/* The Board page (page.h's frame): the dollar card with the money extras,
- * the weather card with the rain, the sun and the moon, the status line,
- * the footer; msg replaces the status line when it is not NULL. */
+/* The Board page (board_page.c, design 1.4): the weather tiles on the
+ * left, the money tiles on the right, the news ticker and the bottom bar;
+ * msg replaces the status in the bar when it is not NULL. */
 void board_draw(const char *msg, u32 msg_color);
 /* What the Board and the News pages share: a card's foot (its source and the
- * data's age, or the reason in YELLOW), the status line, the note line (the
+ * data's age, or the reason in YELLOW), the status in words and its colour
+ * (board_status draws it on 0.2.0's status line), the note line (the
  * schedule, the URL of board_url.txt). */
 void board_foot(float x, float y, float w, const char *src, const board_feed *f);
+u32 board_status_words(char *buf, int n);
 void board_status(void);
 void board_note(void);
 

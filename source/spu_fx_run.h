@@ -41,7 +41,7 @@ extern char fx_why[120];             /* why RSX only, "" while the SPUs run */
 
 /* The scene the effects show, from the last good reply and the clock
  * (fx_tick recomputes it each minute and at each new reply). Colours are
- * 0xRRGGBB. Stage 9's pages read it for the tints. */
+ * 0xRRGGBB. The Board page and sky.c read it (the glass tint, the sun, the stars). */
 typedef struct {
     double elev, azim;               /* the sun, degrees (no geo: -20, 0) */
     unsigned top, horizon;           /* the gradient (sky_colors) */
@@ -53,6 +53,7 @@ typedef struct {
     unsigned lit, shade, edge;       /* the clouds' colours */
     float edge_amt, sun_x, sun_y, sun_gain;   /* sun_x, sun_y in picture pixels */
     int wet;                         /* rain or a storm now */
+    float light;                     /* the sky's light, 0 (night, from -6 deg down) to 1 (day, from 12 deg up): the glass tint */
 } fx_scene;
 extern fx_scene fx_sc;
 
@@ -82,7 +83,7 @@ void fx_tick(int mode);
 
 /* The draws, between begin_frame and ui_flip, over the whole screen
  * (screen_origin): the gradient (three rect_v bands), then whatever sits
- * between the sky and the clouds (stage 9: the moon, the stars, the sun's
+ * between the sky and the clouds (sky.c's sky_behind: the moon, the stars, the sun's
  * glow), then the clouds (the SPU's picture, or four sprites); the rain or
  * the snow after the background layers (thread 5's block, or the PPU's);
  * the aurora in place of the sky (0 when none: RSX only, or no picture

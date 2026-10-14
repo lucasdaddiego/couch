@@ -48,7 +48,8 @@
 #define SEED 0x0c0c4c11u             /* the look of the clouds and the rain: fixed, so the particles live on */
 #define PPU_RAIN 300                 /* RSX only: the PPU's drops (design 3.5) */
 #define TB_HZ 79800000.0             /* the timebase (the decrementer's ticks) */
-#define CLOUD_SPEED 0.15f            /* the clouds' drift: picture pixels a second per km/h (20 km/h: 12 screen px/s) */
+#define CLOUD_SPEED 0.08f            /* the clouds' drift: picture pixels a second per km/h (20 km/h: 6.4 screen px/s, the
+                                        screen's width in 5 min; stage 8's 0.15 was a first guess) */
 #define DRIFT_WRAP (FX_NOISE_N * FX_CLOUD_CELL)   /* the noise's period: off_x and off_y stay small */
 #define LOG_LATE 10                  /* late rain frames named in couch.txt */
 
@@ -492,8 +493,8 @@ static float clampf(float x, float lo, float hi) { return x < lo ? lo : x > hi ?
 /* The scene from the last good reply and the clock (no geo yet: night,
  * 30 % cloud, dry, no wind). The cloud colours (design 3.3): by day the
  * horizon's colour lit toward white and the top's darkened, by night a
- * blue-grey (ps3gfx's test scene), darker in the rain, orange edges near
- * sunrise and sunset; stage 9 tunes them with the pages. */
+ * dim blue-grey, darker in the rain, orange edges near sunrise and
+ * sunset. */
 static void scene(long utc)
 {
     fx_scene s;
@@ -501,7 +502,7 @@ static void scene(long utc)
     memset(&s, 0, sizeof s);
     int geo = board_have && b->has_geo, fx = board_have && b->has_fx;
     if (geo) sun_pos(utc, b->lat, b->lon, &s.elev, &s.azim);
-    else s.elev = -20;
+    else s.elev = board_have && b->has_wx && b->is_day ? 30 : -20;   /* a reply with no geo (before 0.3.0): wx_now's day or night */
     int cover = fx ? b->fx_cover : -1, code = fx ? b->fx_code : -1;
     s.wet = wmo_wet(code);
     sky_colors(s.elev, cover, s.wet, &s.top, &s.horizon);
@@ -519,11 +520,14 @@ static void scene(long utc)
     s.precip = fx ? wx_precip(code, b->fx_mm, &kind) : 0;
     s.kind = kind == WP_FLAKES ? FX_FLAKES : FX_DROPS;
     float d = clampf((float)(s.elev + 6) / 12.0f, 0, 1);   /* 0 at -6 deg, 1 at +6 */
-    s.lit = mix_rgb(0x2a3550, mix_rgb(s.horizon, 0xffffff, 0.35f), d);   /* by day from the sky's own colours */
-    s.shade = mix_rgb(0x121a2c, mix_rgb(s.top, 0x000000, 0.2f), d);
+    /* by day from the sky's own colours; by night a dim blue-grey just over
+     * the night sky (stage 9: stage 8's 2a3550 and 121a2c made an overcast
+     * night twice as bright as a clear one) */
+    s.lit = mix_rgb(0x141a28, mix_rgb(s.horizon, 0xffffff, 0.35f), d);
+    s.shade = mix_rgb(0x080c16, mix_rgb(s.top, 0x000000, 0.2f), d);
     if (s.wet) {
-        s.lit = mix_rgb(s.lit, 0x5d6878, 0.5f * d + 0.2f);
-        s.shade = mix_rgb(s.shade, 0x2c3442, 0.5f * d + 0.2f);
+        s.lit = mix_rgb(s.lit, mix_rgb(0x181d26, 0x5d6878, d), 0.5f * d + 0.2f);   /* the rain's grey, dim at night */
+        s.shade = mix_rgb(s.shade, mix_rgb(0x0a0d14, 0x2c3442, d), 0.5f * d + 0.2f);
     }
     float tw = 1.0f - (float)fabs(s.elev) / 8.0f;
     s.edge = tw > 0 ? 0xf2a65a : s.lit;
@@ -537,6 +541,7 @@ static void scene(long utc)
     s.sun_x = (960.0f + da / 90.0f * 960.0f) / 4.0f;
     s.sun_y = (864.0f - (float)s.elev / 60.0f * 864.0f) / 4.0f;
     s.sun_gain = clampf((float)(s.elev + 2) / 8.0f, 0, 1) * (1.0f - 0.7f * s.cover);
+    s.light = clampf((float)(s.elev + 6) / 18.0f, 0, 1);   /* 0 from -6 deg down, 1 from 12 deg up */
     fx_sc = s;
 }
 

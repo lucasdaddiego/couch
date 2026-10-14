@@ -44,6 +44,9 @@ static int started;
 
 board_data board_cur;
 int board_have;
+board_data board_prev;
+int board_prev_have;
+int board_gen;
 int board_fetches, board_fails, board_last_ok;
 char board_last_words[200];
 long board_last_utc;
@@ -204,8 +207,11 @@ void board_take(void)
     if (r->step == H_OK) {
         prc = board_parse(slot.body, r->len, utf8_rc != 0, &tmp);
         if (prc == BP_OK) {
+            board_prev = board_cur;          /* the reply before, for the changed tiles (board_page.c) */
+            board_prev_have = board_have;
             board_cur = tmp;                 /* swapped in only whole: version 1 and the end line */
             board_have = 1;
+            board_gen++;
             cur_at = slot.at;
             board_has_skew = tmp.now > 0;
             if (board_has_skew) board_skew = clock_utc() - tmp.now;
@@ -281,27 +287,6 @@ void board_next_words(char *buf, int n)
 
 /* ---- the page -------------------------------------------------------------------- */
 
-/* The look of 0.2.0: a card with a colour mark and its title, rows parted by
- * a thin line (no stripes), the numbers in tabular digits, the source and
- * age at the card's foot. */
-#define PAD 32                       /* a card's inner margin */
-#define ROW_MAX 48                   /* a row's step, at most */
-
-/* A card with its colour mark and title; the x of its text. */
-static float card_head(float x, float y, float w, float h, u32 mark, const char *title_s)
-{
-    card(x, y, w, h);
-    round_rect(x + 16, y + 26, 5, 30, 2, mark);
-    text(x + PAD, y + 20, F_MED, WHITE, "%s", title_s);
-    return x + PAD;
-}
-
-/* The line between two rows, centred in the gap above the row at ty. */
-static void row_rule(float x, float ty, float w, float step)
-{
-    rect(x, ty - (step - (float)line_h(F_BODY)) / 2, w, 1, LINE);
-}
-
 void board_foot(float x, float y, float w, const char *src, const board_feed *f)
 {
     char a[24];
@@ -312,156 +297,50 @@ void board_foot(float x, float y, float w, const char *src, const board_feed *f)
     else text_fit(x, y, F_SMALL, GREY, w, "%s, %s old", src, a);
 }
 
-/* The card's body when it has no data: the reason, or the wait for the first reply. */
-static void no_data(float x, float y, float w, const char *what, const board_feed *f)
-{
-    char line[200];
-    if (!board_have) snprintf(line, sizeof line, "The %s shows after the first reply.", what);
-    else snprintf(line, sizeof line, "No %s data: %s.", what, f->reason[0] ? f->reason : "the reply has none");
-    text_wrap(x, y, F_BODY, board_have ? YELLOW : DIM, w, 4, line);
-}
-
-/* The dollar card: the rates (label, buy, sell, the rate's time), then the
- * money extras in the same columns (label, value under Sell, its date under
- * Updated: YELLOW when stale, "no data" when none). */
-static void usd_card(float x, float y, float w, float h)
-{
-    const board_data *b = &board_cur;
-    float ix = card_head(x, y, w, h, GREEN, "Dollar"), iw = w - 2 * PAD, fy = y + h - 22 - (float)line_h(F_SMALL);
-    if (!board_have || (!b->n_usd && !b->n_money)) {
-        no_data(ix, y + 90, iw, "dollar", &b->usd_feed);
-        if (board_have) board_foot(ix, fy, iw, "dolarapi.com", &b->usd_feed);
-        return;
-    }
-    float ru = x + w - PAD, rs = ru - 150, rb = rs - 150, hy = y + 20 + (float)base_dy(F_MED, F_SMALL);
-    if (b->n_usd) {
-        text_r(rb, hy, F_SMALL, GREY, "Buy");
-        text_r(rs, hy, F_SMALL, GREY, "Sell");
-    }
-    text_r(ru, hy, F_SMALL, GREY, "Updated");
-    float ry = y + 20 + (float)line_h(F_MED) + 22, gap = b->n_money && b->n_usd ? 26 : 0;
-    int rows = b->n_usd + b->n_money + (!b->n_usd ? 1 : 0);
-    float step = (fy - 16 - ry - gap) / (float)rows;
-    if (step > ROW_MAX) step = ROW_MAX;
-    if (!b->n_usd) {                         /* the rates failed, the extras came */
-        text_fit(ix, ry, F_BODY, YELLOW, iw, "No dollar data: %s.", b->usd_feed.reason[0] ? b->usd_feed.reason : "the reply has none");
-        ry += step;
-    }
-    for (int i = 0; i < b->n_usd; i++, ry += step) {
-        const board_usd *u = &b->usd[i];
-        if (i) row_rule(ix, ry, iw, step);
-        text_fit(ix, ry, F_BODY, WHITE, rb - 126 - ix, "%s", u->label);
-        text_r(rb, ry, F_BODY | TNUM, WHITE, "%s", u->buy);
-        text_r(rs, ry, F_BODY | TNUM, WHITE, "%s", u->sell);
-        text_r(ru, ry, F_BODY | TNUM, GREY, "%s", u->when);
-    }
-    if (gap) {
-        rect(ix, ry - (step - (float)line_h(F_BODY)) / 2 + gap / 2 - 1, iw, 2, LINE);
-        ry += gap;
-    }
-    for (int i = 0; i < b->n_money; i++, ry += step) {
-        const board_money *m = &b->money[i];
-        int none = !strcmp(m->state, "none"), stale = !strcmp(m->state, "stale");
-        if (i) row_rule(ix, ry, iw, step);
-        text_fit(ix, ry, F_BODY, WHITE, rs - 130 - ix, "%s", m->label);
-        text_r(rs, ry, F_BODY | TNUM, none ? DIM : WHITE, "%s", m->value);
-        if (none) text_r(ru, ry, F_BODY, DIM, "no data");
-        else text_r(ru, ry, F_BODY | TNUM, stale ? YELLOW : GREY, "%s", m->when);
-    }
-    board_foot(ix, fy, iw - (b->n_money ? (float)text_w(F_SMALL, "argentinadatos.com") + 30 : 0), "dolarapi.com", &b->usd_feed);
-    if (b->n_money) text_r(ru, fy, F_SMALL, GREY, "argentinadatos.com");
-}
-
-/* A raindrop: a disc and the point above it. */
-static void drop(float cx, float cy, u32 c)
-{
-    disc(cx, cy + 3, 7, c);
-    tri(cx - 6.5f, cy + 1, cx + 6.5f, cy + 1, cx, cy - 11, c);
-}
-
-/* The weather card: now (the temperature, the words, feels like, humidity,
- * wind), the sky (the rain of the next 12 h, the sun, the moon), the days. */
-static void wx_card(float x, float y, float w, float h)
-{
-    const board_data *b = &board_cur;
-    float ix = card_head(x, y, w, h, BLUE, "Weather"), iw = w - 2 * PAD, fy = y + h - 22 - (float)line_h(F_SMALL);
-    char src[48];
-    /* The foot's source: the now line's (wx_now's 7th field, "SMN 23:00") and
-     * Open-Meteo's for the days; Open-Meteo alone when the now line is
-     * Open-Meteo's too or names no source (a Worker before 2026-10-12). The
-     * age and the state stay Open-Meteo's (wx_age, wx_state). */
-    if (b->has_wx && b->wx_src[0] && strcmp(b->wx_src, "Open-Meteo")) snprintf(src, sizeof src, "%s, days Open-Meteo", b->wx_src);
-    else snprintf(src, sizeof src, "Open-Meteo");
-    if (!board_have || (!b->has_wx && !b->n_day)) {
-        no_data(ix, y + 90, iw, "weather", &b->wx_feed);
-        if (board_have) board_foot(ix, fy, iw, src, &b->wx_feed);
-        return;
-    }
-    float ny = y + 74;
-    if (b->has_wx) {
-        float tx = text(ix, ny, F_LARGE | TNUM, WHITE, "%s", b->temp);
-        text_fit(tx + 26, ny + (float)base_dy(F_LARGE, F_MED), F_MED, WHITE, x + w - PAD - tx - 26, "%s, %s", b->words, b->is_day ? "day" : "night");
-        ny += (float)line_h(F_LARGE) + 2;
-        text_fit(ix, ny, F_BODY, GREY, iw, "Feels like %s, humidity %s, wind %s", b->feels, b->humidity, b->wind);
-        ny += (float)line_h(F_BODY) + 16;
-    }
-    if (b->has_rain) {
-        u32 c = b->rain_wet ? BLUE : GREY;
-        drop(ix + 9, ny + (float)line_h(F_BODY) / 2, c);
-        text_fit(ix + 30, ny, F_BODY, b->rain_wet ? BLUE : GREY, iw - 30, "%s", b->rain);
-        ny += (float)line_h(F_BODY) + 10;
-    }
-    if (b->has_sun || b->moon[0]) {
-        float mw = b->moon[0] ? (float)text_w(F_BODY, b->moon) : 0;
-        if (b->has_sun) text_fit(ix, ny, F_BODY, GREY, iw - mw - 30, "Sunrise %s, sunset %s", b->sunrise, b->sunset);
-        if (b->moon[0]) text_r(x + w - PAD, ny, F_BODY, GREY, "%s", b->moon);
-        ny += (float)line_h(F_BODY) + 10;
-    }
-    if (b->n_day) {
-        float rr = x + w - PAD, rmin = rr - 120, rmax = rmin - 100, wx0 = ix + 130;
-        ny += 8;
-        text_r(rmax, ny, F_SMALL, GREY, "Max");
-        text_r(rmin, ny, F_SMALL, GREY, "Min");
-        text_r(rr, ny, F_SMALL, GREY, "Rain");
-        float ry = ny + (float)line_h(F_SMALL) + 14, step = (fy - 16 - ry) / (float)b->n_day;
-        if (step > ROW_MAX) step = ROW_MAX;
-        for (int i = 0; i < b->n_day; i++, ry += step) {
-            const board_day *d = &b->day[i];
-            if (i) row_rule(ix, ry, iw, step);
-            text_fit(ix, ry, F_BODY, WHITE, wx0 - 10 - ix, "%s", d->label);
-            text_fit(wx0, ry, F_BODY, GREY, rmax - 80 - wx0, "%s", d->words);
-            text_r(rmax, ry, F_BODY | TNUM, WHITE, "%s", d->max);
-            text_r(rmin, ry, F_BODY | TNUM, WHITE, "%s", d->min);
-            text_r(rr, ry, F_BODY | TNUM, BLUE, "%s", d->rain);
-        }
-    }
-    board_foot(ix, fy, iw, src, &b->wx_feed);
-}
-
-void board_status(void)
+u32 board_status_words(char *buf, int n)
 {
     char t[24];
     switch (net_state) {
     case NET_BLOCKED:
-        status_line(journal_state("net_start") == J_SKIPPED
-                        ? "Network not started: net_start was skipped before. SELECT info, then SQUARE twice clears the journal."
-                        : "Network not started: net_start froze this console before. SELECT info, then SQUARE twice clears the journal.",
-                    YELLOW);
-        return;
-    case NET_FAILED: status_linef(RED, "No network: netInitialize failed (rc 0x%08x). SQUARE tries again.", (unsigned)net_rc); return;
-    case NET_NONE: status_line("The network is not started yet.", GREY); return;
+        snprintf(buf, (size_t)n, "%s",
+                 journal_state("net_start") == J_SKIPPED
+                     ? "Network not started: net_start was skipped before. SELECT info, then SQUARE twice clears the journal."
+                     : "Network not started: net_start froze this console before. SELECT info, then SQUARE twice clears the journal.");
+        return YELLOW;
+    case NET_FAILED: snprintf(buf, (size_t)n, "No network: netInitialize failed (rc 0x%08x). SQUARE tries again.", (unsigned)net_rc); return RED;
+    case NET_NONE: snprintf(buf, (size_t)n, "The network is not started yet."); return GREY;
     }
-    if (!started) status_line("The Board thread did not start (couch.txt has the rc). SQUARE tries again.", RED);
-    else if (!board_fetches) status_line("Fetching the Board ...", GREY);
-    else if (!board_last_ok && !net_has_ip()) status_line("No network: the console has no IP address.", YELLOW);
-    else if (!board_last_ok && board_have) {
-        clock_words(t, sizeof t, clock_utc() - board_age(), 0);
-        status_linef(YELLOW, "The last fetch failed: %s. The Board shows the data of %s.", stale_words, t);
-    } else if (!board_last_ok) status_linef(YELLOW, "No Board data yet: %s.", board_last_words);
-    else {
-        clock_words(t, sizeof t, clock_utc() - board_age(), 0);
-        status_linef(GREY, "Board updated at %s.", t);
+    if (!started) {
+        snprintf(buf, (size_t)n, "The Board thread did not start (couch.txt has the rc). SQUARE tries again.");
+        return RED;
     }
+    if (!board_fetches) {
+        snprintf(buf, (size_t)n, "Fetching the Board ...");
+        return GREY;
+    }
+    if (!board_last_ok && !net_has_ip()) {
+        snprintf(buf, (size_t)n, "No network: the console has no IP address.");
+        return YELLOW;
+    }
+    if (!board_last_ok && board_have) {
+        clock_words(t, sizeof t, clock_utc() - board_age(), 0);
+        snprintf(buf, (size_t)n, "The last fetch failed: %s. The Board shows the data of %s.", stale_words, t);
+        return YELLOW;
+    }
+    if (!board_last_ok) {
+        snprintf(buf, (size_t)n, "No Board data yet: %s.", board_last_words);
+        return YELLOW;
+    }
+    clock_words(t, sizeof t, clock_utc() - board_age(), 0);
+    snprintf(buf, (size_t)n, "Board updated at %s.", t);
+    return GREY;
+}
+
+void board_status(void)
+{
+    char line[300];
+    u32 c = board_status_words(line, sizeof line);
+    status_line(line, c);
 }
 
 void board_note(void)
@@ -472,16 +351,4 @@ void board_note(void)
     if (next[0]) text_r(SW - MG, Y_NOTE, F_SMALL, GREY, "%s", next);
     if (board_url_note[0]) text_fit(MG, Y_NOTE, F_SMALL, YELLOW, SW - 2 * MG - nw, "%s", board_url_note);
     else if (board_url_file) text_fit(MG, Y_NOTE, F_SMALL, GREY, SW - 2 * MG - nw, "Board URL from board_url.txt: %s", board_url);
-}
-
-void board_draw(const char *msg, u32 msg_color)
-{
-    float cy = page_begin(), gap = 32, w = (SW - 2 * MG - gap) / 2;
-    usd_card(MG, cy, w, BOTTOM - cy);
-    wx_card(MG + w + gap, cy, w, BOTTOM - cy);
-    if (msg) status_line(msg, msg_color);
-    else board_status();
-    footer("SQUARE refresh  L1/R1 pages  SELECT info  START exit");
-    board_note();
-    page_end();
 }
