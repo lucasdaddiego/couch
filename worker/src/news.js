@@ -1,5 +1,6 @@
 // The Board's news (index.js's news upstreams, one per feed of NEWS_FEEDS): an RSS 2.0 feed's
-// items as [{title, at}], with no XML library (Workers have no DOMParser): each <item>'s <title>
+// items as [{title, at}] (feedItems: also the id, the link and the summary, for /news and
+// /article since 2026-10-14), with no XML library (Workers have no DOMParser): each <item>'s <title>
 // and <pubDate>, the CDATA unwrapped, the tags stripped, the entities decoded, the publisher that
 // Google News appends removed, the title cut to TITLE_MAX code points at a word, then the newest
 // first. The Worker reads only the head of a feed's body (readFeedHead): a feed can be 1 MB, and
@@ -15,6 +16,10 @@ export const SORT_ITEMS = 100;         // items read of a feed that is not newes
 export const SORT_BYTES = 256 * 1024;  // bytes read of such a feed, at most
 export const FEEDS_MAX = 6;            // feeds of NEWS_FEEDS, at most
 export const WEIGHT_MAX = 8;           // a feed's weight, at most: NEWS_MAX's 8 lines
+export const FEED_ITEMS = 20;          // items kept per feed in the cache that /board and /news share
+export const FULL_MAX = 300;           // code points of a whole title (/article), at most
+export const SUMMARY_MAX = 280;        // code points of a summary (/news, /article's fallback), at most
+export const CATEGORY_RE = /^[a-z]{1,16}$/;   // a category of NEWS_FEEDS: economy, politics, world
 
 // The head of a feed's body (a ReadableStream of bytes, as UTF-8): the text up to the end of its
 // items-th </item>, else up to bytes bytes (an item cut there is not complete, and parseFeed
@@ -59,8 +64,9 @@ export async function readHead(body, { items = ITEMS_MAX, bytes = HEAD_BYTES, mo
 // when those items are newest first, else up to SORT_ITEMS items (at most SORT_BYTES), so that
 // parseFeed can sort them. Google News' search sorts by relevance, BBC's feeds are not in order:
 // for them the head of a feed in its own order does not hold its newest items.
-export function readFeedHead(body) {
-  return readHead(body, { more: (head) => (newestFirst(head) ? null : { items: SORT_ITEMS, bytes: SORT_BYTES }) });
+// keep: the items wanted (index.js reads FEED_ITEMS, the tests the Board's ITEMS_MAX).
+export function readFeedHead(body, keep = ITEMS_MAX) {
+  return readHead(body, { items: keep, more: (head) => (newestFirst(head) ? null : { items: SORT_ITEMS, bytes: SORT_BYTES }) });
 }
 
 // The named entities of the feeds read on 2026-10-13 (&bull;, &nbsp;) and of Spanish text.
@@ -118,19 +124,48 @@ export function dropPublisher(title, publisher) {
   return title;
 }
 
-// The items of a feed's text, in the feed's order, at most SORT_ITEMS: {title, at}, at the item's
-// pubDate (or dc:date) as Unix seconds, null when absent or before 2000 (a feed that writes
-// "30 Nov -0001"). The title is '' when the item has none.
+// An item's id: FNV-1a (32 bits) of the UTF-8 bytes of its link, as 8 lowercase hex digits; of
+// "title:" and its whole title when it has no link. Stable while the item is in its feed (the link
+// does not change), and /article takes only an id of a cached feed item, so a collision can never
+// fetch a page that no feed named.
+export function itemId(link, full) {
+  const bytes = new TextEncoder().encode(link ? String(link) : `title:${full}`);
+  let h = 0x811c9dc5;
+  for (const b of bytes) h = Math.imul(h ^ b, 0x01000193);
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+// A feed item's link: an http or https URL as the URL parser writes it, else ''.
+export function feedLink(s) {
+  try {
+    const u = new URL(String(s ?? '').trim());
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : '';
+  } catch {
+    return '';
+  }
+}
+
+// The items of a feed's text, in the feed's order, at most SORT_ITEMS: {id, title, full, at,
+// link, summary}, at the item's pubDate (or dc:date) as Unix seconds, null when absent or before
+// 2000 (a feed that writes "30 Nov -0001"). title is cut to TITLE_MAX code points, full to
+// FULL_MAX, the summary (the <description>, tags stripped: Clarin writes a <ul> of <li>) to
+// SUMMARY_MAX. The title is '' when the item has none, the link and the summary ''.
 function items(xml) {
   const out = [], re = /<item\b[^>]*>([\s\S]*?)<\/item>/g;
   let m;
   while (out.length < SORT_ITEMS && (m = re.exec(xml))) {
     const t = /<title\b[^>]*>([\s\S]*?)<\/title>/.exec(m[1]);
     const s = /<source\b[^>]*>([\s\S]*?)<\/source>/.exec(m[1]);
-    const title = t ? cutTitle(dropPublisher(elementText(t[1]), s ? elementText(s[1]) : '')) : '';
+    const full = t ? cutTitle(dropPublisher(elementText(t[1]), s ? elementText(s[1]) : ''), FULL_MAX) : '';
     const d = /<(pubDate|dc:date)\b[^>]*>([\s\S]*?)<\/\1>/.exec(m[1]);
     const ms = d ? Date.parse(elementText(d[2])) : NaN;
-    out.push({ title, at: Number.isFinite(ms) && ms >= Date.UTC(2000, 0, 1) ? Math.floor(ms / 1000) : null });
+    const l = /<link\b[^>]*>([\s\S]*?)<\/link>/.exec(m[1]);
+    const link = l ? feedLink(elementText(l[1])) : '';
+    const ds = /<description\b[^>]*>([\s\S]*?)<\/description>/.exec(m[1]);
+    out.push({
+      id: itemId(link, full), title: cutTitle(full), full, at: Number.isFinite(ms) && ms >= Date.UTC(2000, 0, 1) ? Math.floor(ms / 1000) : null,
+      link, summary: ds ? cutTitle(elementText(ds[1]), SUMMARY_MAX) : '',
+    });
   }
   return out;
 }
@@ -151,21 +186,33 @@ export function newestFirst(xml) {
 // the feed's order, items with no date come last. An item with an empty title is skipped. [] for
 // text that is no RSS.
 export function parseFeed(xml) {
-  return items(String(xml ?? '')).filter((x) => x.title)
-    .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, ITEMS_MAX);
+  return feedItems(xml, ITEMS_MAX).map(({ title, at }) => ({ title, at }));
 }
 
-// NEWS_FEEDS, "Label=https://url,Label*2=https://url" (not CASAS's ':', which a URL holds): at most
-// FEEDS_MAX feeds, each {label, url, weight} with an http or https URL. The weight ("*2" after
-// the label, 1 to WEIGHT_MAX) is the feed's share of the news lines; no "*": weight 1. A bad
-// entry is skipped. A URL with a comma cannot be written here.
+// A feed's items as the cache keeps them (index.js's readFeed, shared by /board and /news): the
+// newest first, at most max, each {id, title, full, at, link, summary} (items above). Sorted as
+// parseFeed's, so the first ITEMS_MAX are parseFeed's items.
+export function feedItems(xml, max = FEED_ITEMS) {
+  return items(String(xml ?? '')).filter((x) => x.title)
+    .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, max);
+}
+
+// NEWS_FEEDS, "Label=https://url,Label*2=https://url,Label*2@economy=https://url" (not CASAS's
+// ':', which a URL holds): at most FEEDS_MAX feeds, each {label, url, weight, category} with an
+// http or https URL. The weight ("*2" after the label, 1 to WEIGHT_MAX) is the feed's share of
+// the news lines; no "*": weight 1. The category ("@economy" after the weight, since 2026-10-14:
+// 1 to 16 letters a to z, case not counted, kept in lower case) names the feed's section on
+// /news; no "@": ''. The first "=" ends the label part (a URL holds "="). A bad entry is skipped
+// (also a bad category). A URL with a comma cannot be written here.
 export function parseFeeds(spec) {
   const out = [];
   for (const part of String(spec ?? '').split(',')) {
     const i = part.indexOf('=');
     if (i < 1) continue;
-    const m = /^(.*?)(?:\*\s*(\d+))?\s*$/.exec(part.slice(0, i));
+    const m = /^(.*?)(?:\*\s*(\d+))?(?:\s*@\s*([^@*]*?))?\s*$/.exec(part.slice(0, i));
     const label = clean(m[1]), weight = m[2] === undefined ? 1 : Number(m[2]), url = part.slice(i + 1).trim();
+    const category = m[3] === undefined ? '' : m[3].trim().toLowerCase();
+    if (m[3] !== undefined && !CATEGORY_RE.test(category)) continue;
     let u;
     try {
       u = new URL(url);
@@ -173,7 +220,7 @@ export function parseFeeds(spec) {
       continue;
     }
     if (label && weight >= 1 && weight <= WEIGHT_MAX && (u.protocol === 'https:' || u.protocol === 'http:') && out.length < FEEDS_MAX) {
-      out.push({ label, url: u.href, weight });
+      out.push({ label, url: u.href, weight, category });
     }
   }
   return out;

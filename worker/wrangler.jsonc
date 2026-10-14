@@ -12,7 +12,10 @@
 // newest first, else up to its 100th item, at most 256 KB, sorted by date. The mix (Lucas's
 // choice, 2026-10-13): 3 economy (Infobae 2, Ambito 1), 3 politics (Infobae 2, Clarin 1), 2 world
 // (Clarin 1, BBC 1), the label the publisher. Infobae through Google News' RSS search: Infobae's
-// own feed answers HTTP 403 to the Worker (Cloudflare's egress).
+// own feed answers HTTP 403 to the Worker (Cloudflare's egress). Since 2026-10-14 each feed
+// names its category ("Label*weight@category=URL"; the older forms stay valid) for the news
+// reader: GET /news gives NEWS_LIST (30) headlines of the same feeds and cache (each feed keeps
+// its 20 newest items), GET /article?id= an item's page text, cached ARTICLE_TTL seconds.
 //   wrangler deploy --env-file ~/.config/cloudflare/personal.env
 {
   "name": "couch-board",
@@ -33,11 +36,13 @@
     "SMN_TTL": "600",
     "PF_BANK": "Banco de la Nación Argentina",
     "PF_LABEL": "Plazo fijo BNA (TNA)",
-    "NEWS_FEEDS": "Ámbito*3=https://www.ambito.com/rss/pages/economia.xml,Clarín*3=https://www.clarin.com/rss/politica/,Clarín=https://www.clarin.com/rss/mundo/,BBC=https://feeds.bbci.co.uk/news/world/rss.xml",
+    "NEWS_FEEDS": "Ámbito*3@economy=https://www.ambito.com/rss/pages/economia.xml,Clarín*3@politics=https://www.clarin.com/rss/politica/,Clarín@world=https://www.clarin.com/rss/mundo/,BBC@world=https://feeds.bbci.co.uk/news/world/rss.xml",
     "NEWS_MAX": "8",
     "RP_TTL": "900",
     "IPC_TTL": "21600",
     "PF_TTL": "3600",
-    "NEWS_TTL": "600"
+    "NEWS_TTL": "600",
+    "NEWS_LIST": "30",
+    "ARTICLE_TTL": "3600"
   }
 }

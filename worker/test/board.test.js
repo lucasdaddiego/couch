@@ -695,11 +695,11 @@ test('news: the live feeds of 2026-10-13', () => {
 
 test('news: NEWS_FEEDS, the fair share per feed, the newest first, the states', () => {
   assert.deepEqual(parseFeeds('Clarín=https://www.clarin.com/rss/lo-ultimo/,Infobae=https://www.infobae.com/arc/outboundfeeds/rss/'), [
-    { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/', weight: 1 },
-    { label: 'Infobae', url: 'https://www.infobae.com/arc/outboundfeeds/rss/', weight: 1 },
+    { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/', weight: 1, category: '' },
+    { label: 'Infobae', url: 'https://www.infobae.com/arc/outboundfeeds/rss/', weight: 1, category: '' },
   ]);
   assert.deepEqual(parseFeeds(' X = https://a.example/f?x=1 ,=https://b.example/,Nolabel,Y=ftp://c.example/,Z=not a url'),
-    [{ label: 'X', url: 'https://a.example/f?x=1', weight: 1 }]);
+    [{ label: 'X', url: 'https://a.example/f?x=1', weight: 1, category: '' }]);
   assert.equal(parseFeeds(Array.from({ length: 8 }, (_, i) => `F${i}=https://f${i}.example/`).join(',')).length, FEEDS_MAX);
   assert.deepEqual(parseFeeds(''), []);
   const a = Array.from({ length: 10 }, (_, i) => ({ title: `A${i}`, at: 109 - i }));
@@ -772,20 +772,24 @@ test('get news: one cache entry per feed URL, the parsed items; a failed feed na
   const feed = { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/' };
   const d = deps({ answers: { 'www.clarin.com': { body: clarinXml } }, now: JUN_NOW });
   const r = await get(newsUpstream(feed), junEnv, JUN_NOW, d);
-  assert.deepEqual([r.state, r.data.length, r.data[3].at], ['ok', 8, 1791912009]);
+  // since 2026-10-14 the cache keeps FEED_ITEMS (20) per feed for /news: Clarin's 10, the newest first
+  assert.deepEqual([r.state, r.data.length, r.data[3].at], ['ok', 10, 1791912009]);
   await Promise.all(d.waits);
-  assert.deepEqual([...d.cache.m.keys()], ['https://couch.internal/news?u=https%3A%2F%2Fwww.clarin.com%2Frss%2Flo-ultimo%2F']);
+  assert.deepEqual([...d.cache.m.keys()], ['https://couch.internal/news2?u=https%3A%2F%2Fwww.clarin.com%2Frss%2Flo-ultimo%2F']);
   const again = await get(newsUpstream(feed), junEnv, JUN_NOW + 599, d);           // NEWS_TTL 600 s by default
   assert.deepEqual([again.state, again.age, d.calls.length], ['ok', 599, 1]);
   const f = await get(newsUpstream(feed), junEnv, JUN_NOW, deps({ answers: { 'www.clarin.com': { status: 403, body: 'no' } } }));
   assert.deepEqual([f.state, f.reason], ['none', 'clarin.com: HTTP 403']);
   const h = await get(newsUpstream(feed), junEnv, JUN_NOW, deps({ answers: { 'www.clarin.com': { body: '<html>busy</html>' } } }));
   assert.deepEqual([h.state, h.reason], ['none', 'clarin.com: no items']);
-  // Infobae through the Worker's fetch: 8 items from the head, the rest of the body cancelled.
+  // Infobae through the Worker's fetch: the head of 61440 bytes has 10 items, fewer than FEED_ITEMS,
+  // so it is read to its end (nothing to cancel); the 8th newest is the Board's last as before.
   const ib = { label: 'Infobae', url: 'https://www.infobae.com/arc/outboundfeeds/rss/' };
   const st = chunked(ibXml, 4096);
   const g = await get(newsUpstream(ib), junEnv, JUN_NOW, deps({ answers: { 'www.infobae.com': { response: new Response(st.body) } } }));
-  assert.deepEqual([g.state, g.data.length, g.data[0].at, g.data[7].at, st.cancelled], ['ok', 8, 1791927152, 1791927105, true]);
+  assert.deepEqual([g.state, g.data.length, g.data[0].at, g.data[7].at, g.data[9].at, st.cancelled], ['ok', 10, 1791927152, 1791927105, 1791927089, false]);
+  // readFeedHead's keep cuts a newest-first head at that item (index.js passes FEED_ITEMS): 4 here
+  assert.deepEqual(parseFeed(await readFeedHead(chunked(ibXml, 4096).body, 4)).map((x) => x.at), [1791927152, 1791927139, 1791927136, 1791927122]);
 });
 
 test('the 4 KB guard drops the news first, then the money and the sky, then the rate and day lines', () => {
@@ -848,9 +852,9 @@ test('news: the publisher that Google News appends goes; the weights of NEWS_FEE
   assert.deepEqual(parseFeed(gn).map((x) => x.title), ['Uno', `${'palabra '.repeat(13)}fin`, 'Dos - Infobae']);
   assert.equal(Array.from(`${'palabra '.repeat(13)}fin`).length, 107);
   assert.deepEqual(parseFeeds(`Infobae*2=https://a.example/rss?q=site:x.com/y+when:1d&hl=es-419, Ámbito * 3 =https://b.example/,C*0=https://c.example/,D*${WEIGHT_MAX + 1}=https://d.example/,E*x=https://e.example/`), [
-    { label: 'Infobae', url: 'https://a.example/rss?q=site:x.com/y+when:1d&hl=es-419', weight: 2 },
-    { label: 'Ámbito', url: 'https://b.example/', weight: 3 },
-    { label: 'E*x', url: 'https://e.example/', weight: 1 },                 // no number after "*": part of the label
+    { label: 'Infobae', url: 'https://a.example/rss?q=site:x.com/y+when:1d&hl=es-419', weight: 2, category: '' },
+    { label: 'Ámbito', url: 'https://b.example/', weight: 3, category: '' },
+    { label: 'E*x', url: 'https://e.example/', weight: 1, category: '' },   // no number after "*": part of the label
   ]);
   // the mix of the fixtures (MIX_FEEDS): 3 economy, 3 politics, 2 world, 8 lines in all
   const mixed = parseFeeds(MIX_FEEDS);

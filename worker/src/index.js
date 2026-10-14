@@ -4,15 +4,21 @@
 // NEWS_FEEDS), each upstream kept in the Cache API with its time, so that a failed upstream gives
 // the old values marked stale with their real age. Since 2026-10-13 also the keys of Couch 0.3.0:
 // the place, the weather's codes and hours (the same Open-Meteo fetch), the changes against the
-// previous closes and the Blue series (argentinadatos.com, no KV). Plain HTTP on purpose: the
+// previous closes and the Blue series (argentinadatos.com, no KV). Since 2026-10-14 the news
+// reader: GET /news (30 headlines of the same feeds, from the same cache) and GET /article?id=
+// (an item's text from the publisher's page, reader.js and article.js). Plain HTTP on purpose: the
 // PS3 has no TLS (the zone's per-host rule, design section 4).
 
 import { addDays, boardText, clean, fold, localDate, parseCasas } from './board.js';
 import { findRow, latin1, unzipFirst } from './smn.js';
-import { parseFeed, parseFeeds, readFeedHead } from './news.js';
+import { FEED_ITEMS, feedItems, parseFeeds, readFeedHead } from './news.js';
 import { readTail, tailEntries } from './series.js';
+import { articleText, capParas, NEWS_LIST, newsText } from './reader.js';
+import { extractPage } from './article.js';
 
 const TIMEOUT_MS = 4000;
+export const ARTICLE_TIMEOUT_MS = 8000;  // a publisher's page: Lucas waits for it, the Board does not
+export const ARTICLE_TTL = 3600;          // an article's paragraphs, cached 1 h
 
 // The negative cache: a failed upstream is remembered in its cache entry (fail: {at, reason}), and
 // while it is, a request answers at once with the old entry (stale) or none, with that reason.
@@ -27,8 +33,8 @@ const KEEP_S = 86400;                    // the Cache API keeps an entry (data o
 const fetchOpts = () => ({ signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'user-agent': 'couch-board' } });
 
 // A thrown fetch or body error in words (after the host).
-function errWords(e) {
-  return e && (e.name === 'TimeoutError' || e.name === 'AbortError') ? `no answer in ${TIMEOUT_MS / 1000} s`
+function errWords(e, ms = TIMEOUT_MS) {
+  return e && (e.name === 'TimeoutError' || e.name === 'AbortError') ? `no answer in ${ms / 1000} s`
     : String((e && e.message) || e).slice(0, 60);
 }
 
@@ -76,12 +82,13 @@ async function readBank(r, env) {
   return { data: row ? { entidad: clean(row.entidad), tna: row.tnaClientes } : null, bad: `no row for ${clean(env.PF_BANK)}` };
 }
 
-// A feed: {data: its items} (news.js), [] for text that is no RSS. Only the head of the body is
-// read, for every feed (news.js's readFeedHead): up to the end of its 8th item, at most 96 KB,
+// A feed: {data: its items} (news.js's feedItems: at most FEED_ITEMS, with the id, the link and
+// the summary that /news and /article use), [] for text that is no RSS. Only the head of the body
+// is read, for every feed (news.js's readFeedHead): up to the end of its 20th item, at most 96 KB,
 // when those items are newest first, else up to its 100th item, at most 256 KB, to sort them.
 // The rest is cancelled.
 async function readFeed(r) {
-  return { data: parseFeed(await readFeedHead(r.body)), bad: 'no items' };
+  return { data: feedItems(await readFeedHead(r.body, FEED_ITEMS), FEED_ITEMS), bad: 'no items' };
 }
 
 const dated = (d) => !!d && typeof d === 'object' && Number.isFinite(d.valor) && /^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha));
@@ -218,15 +225,41 @@ export const UPSTREAMS = {
   },
 };
 
-// One feed of NEWS_FEEDS as an upstream: its own cache entry under its URL, the parsed items.
+// One feed of NEWS_FEEDS as an upstream: its own cache entry under its URL, the parsed items,
+// shared by /board, /news and /article. "news2" since 2026-10-14: the items gained the id, the
+// link and the summary, so an entry of before (titles and dates only) is never read.
 export function newsUpstream(feed) {
   return {
     host: new URL(feed.url).hostname.replace(/^www\./, ''),
     url: () => feed.url,
-    key: () => `https://couch.internal/news?u=${encodeURIComponent(feed.url)}`,
+    key: () => `https://couch.internal/news2?u=${encodeURIComponent(feed.url)}`,
     ttl: (env) => Number(env.NEWS_TTL) || 600,
     read: readFeed,
     valid: (d) => Array.isArray(d) && d.length > 0,
+  };
+}
+
+// A feed item's article as an upstream (/article): its own cache entry under the item's link
+// for ARTICLE_TTL, {paras, cut} (reader.js's capParas of article.js's paragraphs). Only a link
+// of a cached feed item comes here (handle's /article), so the Worker is no open proxy. A failure
+// is remembered as any upstream's (the negative cache): /article then answers the summary at
+// once, and tries the page again after the reply at most once per RETRY_S.
+export function articleUpstream(item) {
+  return {
+    host: new URL(item.link).hostname.replace(/^www\./, ''),
+    timeout: ARTICLE_TIMEOUT_MS,
+    key: () => `https://couch.internal/article?u=${encodeURIComponent(item.link)}`,
+    ttl: (env) => Number(env.ARTICLE_TTL) || ARTICLE_TTL,
+    load: async (env, now, deps) => {
+      const r = await deps.fetch(item.link, { signal: AbortSignal.timeout(ARTICLE_TIMEOUT_MS), headers: { 'user-agent': 'couch-board' } });
+      if (!r.ok) {
+        if (r.body) r.body.cancel().catch(() => {});
+        return { data: null, bad: `HTTP ${r.status}` };
+      }
+      const page = await (deps.extract || extractPage)(r, r.url || item.link);
+      return { data: capParas(page.paras), bad: 'no paragraphs' };
+    },
+    valid: (d) => !!d && Array.isArray(d.paras) && d.paras.length > 0,
   };
 }
 
@@ -249,7 +282,7 @@ async function refresh(u, env, now, deps, key, entry, bg) {
     if (u.valid(data, env, now)) body = { at: now, data };
     else reason = `${u.host}: ${bad || 'bad JSON'}`;
   } catch (e) {
-    reason = `${u.host}: ${errWords(e)}`;
+    reason = `${u.host}: ${errWords(e, u.timeout)}`;
   }
   if (!body) body = { at: entry ? entry.at : null, data: entry ? entry.data : null, fail: { at: now, reason } };
   const put = Promise.resolve().then(() => deps.cache.put(key, new Response(JSON.stringify(body), {
@@ -292,10 +325,59 @@ export async function get(name, env, now, deps) {
   return r.ok ? { state: 'ok', age: 0, data: r.data } : old(r.reason);
 }
 
+const textReply = (text) => new Response(text, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+
+// GET /news: the list (reader.js's newsText) of every feed of NEWS_FEEDS, from the cache that
+// /board fills (or a fetch, as /board's). Always 200, the states in the body.
+async function newsReply(env, now, deps) {
+  const feeds = parseFeeds(env.NEWS_FEEDS);
+  try {
+    const rs = await Promise.all(feeds.map((f) => get(newsUpstream(f), env, now, deps)));
+    return newsText({ now, feeds: feeds.map((f, i) => ({ ...f, r: rs[i] })), max: Number(env.NEWS_LIST) || NEWS_LIST });
+  } catch (e) {
+    return [`couch-news 1`, `now=${now}`, 'news_age=0', `news_state=none|worker: ${clean((e && e.message) || e).slice(0, 60)}`, 'end', ''].join('\n');
+  }
+}
+
+// GET /article?id=: the item of that id in the cached feeds of NEWS_FEEDS (none: state none,
+// and no fetch, so only a link that a configured feed gave is ever fetched), then its page's
+// paragraphs (articleUpstream), else its summary. Always 200, the state in the body.
+async function articleReply(env, now, deps, id) {
+  const tz = env.TZ || 'UTC';
+  try {
+    if (!/^[0-9a-f]{8}$/.test(id)) return articleText({ now, tz, a: { state: 'none', reason: 'bad id' } });
+    const feeds = parseFeeds(env.NEWS_FEEDS);
+    const rs = await Promise.all(feeds.map((f) => get(newsUpstream(f), env, now, deps)));
+    let item = null, feed = null;
+    feeds.forEach((f, i) => {
+      const x = !item && Array.isArray(rs[i].data) ? rs[i].data.find((d) => d && d.id === id) : null;
+      if (x) [item, feed] = [x, f];
+    });
+    if (!item) return articleText({ now, tz, a: { state: 'none', reason: 'unknown id' } });
+    const summary = { state: 'summary', paras: item.summary ? [item.summary] : [] };
+    let link = null;
+    try {
+      const u = new URL(item.link);
+      if (u.protocol === 'https:' || u.protocol === 'http:') link = u.href;
+    } catch { /* no link */ }
+    if (!link) return articleText({ now, tz, item, feed, a: { ...summary, reason: 'no link' } });
+    const r = await get(articleUpstream({ ...item, link }), env, now, deps);
+    // An old entry (stale) still has the page's text: only no text gives the summary.
+    const a = r.data && Array.isArray(r.data.paras) && r.data.paras.length
+      ? { state: r.data.cut ? 'cut' : 'ok', paras: r.data.paras } : { ...summary, reason: r.reason };
+    return articleText({ now, tz, item, feed, a });
+  } catch (e) {
+    return articleText({ now, tz, a: { state: 'none', reason: `worker: ${clean((e && e.message) || e).slice(0, 60)}` } });
+  }
+}
+
 // The request with its dependencies, for the tests; the default export wires the runtime's.
 export async function handle(request, env, deps) {
   const url = new URL(request.url);
-  if (request.method !== 'GET' || url.pathname !== '/board') {
+  const route = request.method === 'GET' ? url.pathname : '';
+  if (route === '/news') return textReply(await newsReply(env, deps.now(), deps));
+  if (route === '/article') return textReply(await articleReply(env, deps.now(), deps, url.searchParams.get('id') || ''));
+  if (route !== '/board') {
     return new Response('not found\n', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   }
   const now = deps.now();
@@ -329,7 +411,7 @@ export async function handle(request, env, deps) {
         ...(feeds.length ? [`news_state=none|${reason}`] : []), 'end', ''].join('\n');
     }
   }
-  return new Response(text, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+  return textReply(text);
 }
 
 export default {
@@ -339,6 +421,7 @@ export default {
       cache: caches.default,
       waitUntil: (p) => ctx.waitUntil(p),
       now: () => Math.floor(Date.now() / 1000),
+      extract: extractPage,
     });
   },
 };
