@@ -29,14 +29,17 @@ let mf = null;
 
 before(async () => {
   if (!Miniflare) return;
-  const mod = (p) => ({ type: 'ESModule', path: join(root, p), contents: readFileSync(join(root, p), 'utf8') });
-  // Miniflare 5 (wrangler 4.149's) takes the Worker in a `workers` array.
+  // Miniflare 5 (wrangler 4.149's): each Worker is { config: { name, compatibilityDate, manifest } },
+  // the manifest's modules a record of paths under modulesRoot.
+  const files = ['test/extract.worker.js', 'src/article.js', 'src/news.js', 'src/board.js'];
+  const modules = Object.fromEntries(files.map((p) => [p, { type: 'esm', contents: readFileSync(join(root, p), 'utf8') }]));
   mf = new Miniflare({
     workers: [{
-      name: 'extract',
-      modules: [mod('test/extract.worker.js'), mod('src/article.js'), mod('src/news.js'), mod('src/board.js')],
-      modulesRoot: root,
-      compatibilityDate: '2026-09-01',
+      config: {
+        name: 'extract',
+        compatibilityDate: '2026-09-01',
+        manifest: { mainModule: 'test/extract.worker.js', modulesRoot: root, modules },
+      },
     }],
   });
 });
