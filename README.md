@@ -263,7 +263,7 @@ page (below) and stage 10's pages call the same API: `fx_draw_gradient`,
 `fx_draw_clouds` (the moon and the stars go between the two: `sky.c`), `fx_draw_rain`,
 `fx_draw_aurora`, `fx_glass` (a tile's frosted glass, or a solid panel),
 `fx_flash` (lightning), `fx_sc` (the scene's colours), `fx_reduced` (the
-frame budget's step 4).
+frame budget's step 5).
 
 - **The start** (design 6.3), in `board_enter` before the network start:
   the six textures (each pitch checked against `FX_*_PITCH`), then every
@@ -279,8 +279,13 @@ frame budget's step 4).
   Board starts the SPUs (as `net_start`).
 - **The frame** (design 3.14): `fx_tick` at the top of the loop, after the
   last `ui_flip`, swaps a picture's textures once its five reports came
-  (the check row read back from RSX memory on the first picture and on
-  every 30th), then sends the next: 30 pictures a second. The rain is
+  (the check row read back from RSX memory on the first picture and then
+  once a second: every 60th sky picture, every 30th aurora picture), then
+  sends the next: the sky 60 pictures a second, one each frame, since the
+  round of 2026-10-14 (stage 9's 30 held each picture two frames; the
+  console measured `FX_SKY` at 1.97 ms on the slowest SPU, so 60 a second
+  is about 12 % of each SPU), the aurora 30 (not measured on the console
+  yet). The rain is
   inside the frame: `gfx_block`, the control block, the mailbox word, the
   wait for thread 5's report, no gfx call in between. When it is dry the
   rain runs only while `fx_first` is open: 60 frames of 40 empty splash
@@ -288,6 +293,9 @@ frame budget's step 4).
 - **`fx_first`** closes when the first sky picture was drawn with its check
   row equal to the report's sum, and 60 frames of rain ran; `fx_aurora`
   when the first aurora picture was drawn and checked (once per journal).
+  Their `couch.txt` lines come a frame after the journal lines: each file
+  write waits for the drive (`fs_write_file`'s fsync), and two in one frame
+  may miss its vsync.
   The exit closes either one that is still open (ok, no freeze), after the
   start line of the join or the terminate.
 - **RSX only** for the rest of the session (design 6.5): a frozen entry, a
@@ -301,9 +309,10 @@ frame budget's step 4).
   The Info page's Effects row says why.
 - **The frame budget** (design 3.13), each 2 s: more than 3 display periods
   over 20 ms, or a picture whose reports came after the next was due, is a
-  step: 20 pictures a second, 15, the rain at half, no rays or twinkle or
-  hero motion (`fx_reduced`, for stage 9), RSX only. 60 s with no slow
-  period is a step back. The design's step 4 (the glass every 4th picture)
+  step: from 60 sky pictures a second to 30, 20, 15 (the aurora stays at 30
+  until the step to 20), the rain at half, no rays or twinkle or hero motion
+  (`fx_reduced`), RSX only. 60 s with no slow period is a step back. The
+  design's step 4 (the glass every 4th picture)
   is left out: `FX_SKY` writes the glass with every picture, so it would
   save no SPU time.
 - **The exit** (design 6.4, `leave`): `board_stop`, then `fx_stop` (the
@@ -321,11 +330,25 @@ frame budget's step 4).
   8's 2a3550 and 121a2c made an overcast night twice as bright as a clear
   one), the sky's light for the glass tint (`light`, 0 from -6 deg down to 1
   from 12 deg up). A reply with no `geo` (a Worker before 0.3.0) takes the
-  sun at 30 deg or -20 deg by `wx_now`'s day or night. The clouds drift with
-  the wind at 0.08 picture pixels a second per km/h (20 km/h: 6.4 screen
-  pixels a second, the screen's width in 5 min; stage 8's 0.15 was a first
-  guess, not judged in motion on the TV yet); the PPU adds the wind times
-  the frame's time to the offset each frame, so a wind change makes no jump.
+  sun at 30 deg or -20 deg by `wx_now`'s day or night.
+- **The clouds' motion** (since the round of 2026-10-14, where stage 9's
+  sky read as still): they drift where the wind blows to, as seen facing
+  the equator (north in the south: east is right, and away from the viewer
+  is down the screen, toward the horizon, at 0.4 of the speed; stage 9
+  moved a north wind's clouds down in the south). The speed grows with the
+  root of the wind: 6.4 picture pixels a second at 10 km/h (the screen's
+  width, 480 picture pixels, in 75 s: a light wind's calm crossing), 9.1
+  at 20 km/h (53 s), at least 2.5 (calm or no wind: from the west, the width
+  in about 3 min) and at most 14 (34 s). The PPU adds the wind times the
+  frame's time to the offset each frame, so a wind change makes no jump.
+  The offset goes into the noise as a float, so the picture moves by
+  fractions of its pixels (no 1-pixel steps in the 4x upscale), and at 60
+  pictures a second each frame shows a new place. The clouds also change
+  shape: the job's time, which moves the kernel's warp, runs at 3 times the
+  clock (`EVOLVE`, wrapped at 64,000 s, where the warp's offsets repeat), so
+  a warp cell passes in about 16 s; the SPU program is unchanged. Lightning
+  lights the clouds for 120 ms, fading (`fx_flash`; stage 9 lit one
+  picture).
 
 ## The Board page (0.3.0, stage 9 of the revamp)
 
@@ -349,10 +372,12 @@ the Info page are 0.2.0's until stage 10.
 - **The tiles**: frosted glass (`fx_glass`: the SPU's blurred sky under the
   tile's rect, then `GLASS_TINT` at 0x73 by night to 0x9c by day from the
   scene's `light`), a 1 px edge and a bottom line; in RSX-only mode a solid
-  panel. Colour tokens in `couch.h` (design 1.10).
+  panel. The rounded corners get a 1 px fringe in the tint (`aa_corners`).
+  Colour tokens in `couch.h` (design 1.10).
 - **The hero**: the weather's icon of the L set in layers that move (the sun
   turns once a minute; the cloud drifts 8 px on 6 s, a grey one behind on 9
-  s; 10 RSX streaks under a rain cloud; the lightning layer flashes with a
+  s, both by fractions of a pixel since the L set binds bilinear; 10
+  anti-aliased streaks under a rain cloud; the lightning layer flashes with a
   bolt and every 6.5 s on a storm; 6 flakes fall on snow; 3 bars slide on
   fog; the moon with two twinkling stars at night), the temperature in D_XL
   (D_L narrow; F_LARGE when `digits_init` failed), the words, "Feels like
@@ -384,16 +409,30 @@ the Info page are 0.2.0's until stage 10.
   the dollars show the change in %, riesgo pais in points.
 - **The changed tiles**: at each good reply the Board compares each rate's
   sell and each extra's value with the reply before (`board_prev`, by
-  label). A changed value counts from the old value in 800 ms (`num_mix`,
-  ease-out) and its tile gets a halo (`glow9` with `sky.c`'s halo texture,
-  UP or DOWN): two pulses in 3 s, then a fade by 6 s to a lower glow that
-  stays until the next reply, so "changed at the last refresh" still shows
-  minutes later (the design faded it out by 6 s).
+  label). A changed value counts from the old value in 400 ms (`num_mix`,
+  ease-out cubic) and its tile gets a halo (`glow9` with `sky.c`'s halo
+  texture, UP or DOWN): up in 200 ms, two pulses of 500 ms, then a fade in
+  400 ms to a lower glow that stays until the next reply, so "changed at the
+  last refresh" still shows minutes later (the design faded it out by 6 s).
+  Stage 9's 800 ms count and 3 s of pulses read as slow on the TV.
 - **The ticker**: a glass band over the screen's whole width, the headlines
-  moving at 90 px a second (a whole pixel each frame) apart by a dot, the
-  pill of the headline at its right end (Clarin red, Infobae orange, others
-  blue-grey) over a dark block from past the screen's left edge, so the text
-  goes under the pill.
+  moving 2 px each display period (119.9 px a second at 59.94 Hz; the
+  count of steps comes from the clock, so a late frame moves it 4 px and
+  the speed stays) apart by a dot, the pill of the headline at its right
+  end (Clarin red, Infobae orange, others blue-grey, its ends anti-aliased)
+  over a dark block from past the screen's left edge, so the text goes
+  under the pill. Stage 9's 90 px a second moved 1 and 2 px in turn.
+- **The lines** (since the round of 2026-10-14, "some lines are rough"):
+  ps3gfx's anti-aliased helpers (`fx.h`'s `aa_*`: every edge fades over 1
+  px, no pixel covered twice) draw the 12 h curve and its first point, the
+  sparkline and its last point, the sun arc (solid to the sun's exact
+  place, dashed after), the sun and the small moon on it, the wind dial's
+  ring, ticks (none at N, E, S and W, as before under the ring), shaft and
+  arrow head, the min/max bar's round ends and its marker, the hero's rain
+  streaks and night stars, the sun's disc in the sky, and the header's page
+  dots and internet dot. The rain columns are whole-pixel rects: exact
+  already. The moon's sphere was smooth already (a soft terminator over 3
+  texels, the rim over one).
 - **The "-" forms** (a Worker before 0.3.0, or before the first reply): no
   weather code, no hero icon (the temperature takes its place) and no day
   icons; no `wx_hours`, the curve's axis with "12 h: -"; no `wx_fx`, the
@@ -402,19 +441,23 @@ the Info page are 0.2.0's until stage 10.
   every value "-" in DIM. A stale or none weather shows its reason at the
   rain line's right in YELLOW, a stale dollar feed at Blue's range.
 - **The sky's objects** (`sky.c`, the same with or without the SPUs): the
-  stars (200, 7 brightness levels, twinkling, by night under a thin cover),
-  the moon's disc while it is up (`moon_pos`, under the clouds), the sun's
-  glow and its disc (the disc only through a thin cover) and 9 rays turning
-  1 deg a second (a cover under 60 %), lightning on a storm code (95 to 99:
-  a bolt at 6 s after the start and then every 6 to 20 s, 24 points by
-  midpoint displacement drawn 3 times over the clouds, 3 frames on, 2 off, 2
-  on; a white flash for 2 frames; `fx_flash` lights the next picture's
-  clouds), and the scrims behind the header and the bottom bar (strong to
-  canvas y 120 and from `SH` - 130, at any visible area: the design's 0x70
-  and 0x80 from the screen's edges were too light on a clear day). Every
-  motion reads `sky_time` (the system clock since the start), never a
-  reply's landing time, and `fx_reduced` stops the rays, the twinkle and
-  the hero's motion.
+  stars (200, by night under a thin cover, each with its own brightness each
+  frame, twinkling 35 % at 0.2 to 0.5 Hz: stage 9's 7 levels made a star
+  jump a level at a time), the moon's disc while it is up (`moon_pos`,
+  under the clouds), the sun's glow and its disc (the disc only through a
+  thin cover) and 9 rays turning 1 deg a second (a cover under 60 %),
+  lightning on a storm code (95 to 99: a bolt at 6 s after the start and
+  then every 6 to 20 s, 24 points by midpoint displacement drawn 3 times
+  over the clouds, on for 42 ms, off to 75 ms, on to 108 ms; a white flash
+  for 25 ms: the design's 3, 2 and 2 frames and its 2 frames at 60 Hz, as
+  times since 2026-10-14, each bound half a frame from the frames;
+  `fx_flash` lights the clouds for 120 ms), and the scrims behind the
+  header and the bottom bar (strong to canvas y 120 and from `SH` - 130, at
+  any visible area: the design's 0x70 and 0x80 from the screen's edges were
+  too light on a clear day). Every motion reads `sky_time` (the system
+  clock since the start), never a reply's landing time or a count of
+  frames, and `fx_reduced` stops the rays, the twinkle and the hero's
+  motion.
 - **The sky's colours** (`sky_colors`, `parse.c`): the cover's grey is the
   design's from 6 deg up; below, it is scaled down by the light, to the
   clear sky's luminance at most, so an overcast night is not brighter than
@@ -429,7 +472,7 @@ the Info page are 0.2.0's until stage 10.
 | `gfx_init.txt` | ps3gfx, only when the picture cannot start | the failed step |
 | `board_url.txt` | FTP only, for test rounds | one `http://` line, e.g. `http://192.168.0.3:8787/board`. Absent: `http://couch.daddiego.com.ar/board`. An `https://` URL or a bad line: the default, and the note line says why |
 | `auto.txt` | FTP, for unattended rounds; Couch writes `0` at once | the seconds of a round, 60 to 600 |
-| `couch.txt` | Couch, appended | one block per start: the version and the ps3gfx stamp, the UTC time, `text_utf8`'s rc, the URL, the network start (the rcs of `netInitialize`, the netctl module load and `netCtlInit`) and the address, a quit before the Board opened, the three settings with their rcs, the first 50 fetches (time, duration, the connect's time or "no connection", HTTP status, bytes, the result, the Worker's `now` and `offset`, the console's clock minus the Worker's, the headlines), the ambient mode's starts and ends, the shots, the exit (a line before and after the Board thread's join, with its time; a line before and after `net_end`'s calls), `ui_stats` and the exit's time. Emptied at start past 64 KB |
+| `couch.txt` | Couch, appended | one block per start: the version and the ps3gfx stamp, the UTC time, `text_utf8`'s rc, the URL, the network start (the rcs of `netInitialize`, the netctl module load and `netCtlInit`) and the address, a quit before the Board opened, the three settings with their rcs, the first 50 fetches (time, duration, the connect's time or "no connection", HTTP status, bytes, the result, the Worker's `now` and `offset`, the console's clock minus the Worker's, the headlines), the ambient mode's starts and ends, the shots, the exit (a line before and after the Board thread's join, with its time; a line before and after `net_end`'s calls), `ui_stats` (since 2026-10-14 with the most vertices and draws of a frame) and the three slowest frames of the loop (the main thread's busy time, the frame's number and time, and what it did besides its draw: a reply, a log line, a journal line, a check row, the moon's upload, a texture made, a page change, a shot; each log and journal line waits for the drive's fsync), and the exit's time. Emptied at start past 64 KB |
 | `board.ppm`, `info.ppm` | Couch, unattended only (`ui_shot`) | the two screens |
 
 An unattended round (Cell Bench's rule): `auto.txt` holds the seconds; Couch
@@ -469,6 +512,17 @@ ps3gfx's `PHOSPHOR.txt` (the icons' licence) beside `OFL.txt`. Out: `couch.gnpdr
 since stage 9, which links the display digits and the icons) and the unstripped `couch.elf`. Stage 9
 adds no syscall: still 48 numbers at 93 call sites.
 
+Since the round of 2026-10-14 Couch calls ps3gfx's anti-aliased helpers
+(`aa_line`, `aa_lines`, `aa_strip`, `aa_ring`, `aa_disc`, `aa_poly`,
+`aa_corners` in `fx.c`), which are in ps3gfx's working tree, not yet
+committed. Until the commit and the pin move, the build is
+`PS3GFX_DEV=1` against that tree installed in `~/ps3dev` (stamp
+`ae528b3...-dirty` in `couch.txt`), and the preview's build is
+`PS3GFX=~/code/ps3gfx zsh tools/preview/build.zsh`. The pkg is 372 KB
+(371,936 B); still 48 syscall numbers at 93 call sites, no compiler
+warning. Health's and Cell Bench's ELFs and link maps are byte-identical
+on that tree (no `fx.o` in either map).
+
 `art/make_icon.py <Inter variable TTF>` draws `pkgfiles/ICON0.PNG` (a sofa,
 "Couch" and "Board", in PS3 Health's icon style); the font is
 `fonts/InterVariable.ttf` in the ps3sdk archive.
@@ -477,14 +531,15 @@ adds no syscall: still 48 numbers at 93 call sites.
 
 ```zsh
 zsh tools/preview/build.zsh                 # ps3gfx's preview: build/pv, and build/pv_utf8_off (-DCOUCH_UTF8_OFF)
-zsh tools/preview/run.zsh                   # 40 scenarios at the default visible area (about 3.5 min: ambient runs 12 min of frames,
-                                            # and the SPU twin makes a sky picture every second frame, 22,000 in ambient)
+zsh tools/preview/run.zsh                   # 40 scenarios at the default visible area (about 5 min: ambient runs 12 min of frames,
+                                            # and the SPU twin makes a sky picture every frame since 2026-10-14, 36,000 in ambient)
 AREA=narrow zsh tools/preview/run.zsh       # the same at the narrowest area, 1600 x 900 (snapshots *_narrow; not tv)
 PASSES=2 zsh tools/preview/run.zsh          # twice, and the snapshots that differ
 ```
 
 The PNGs need Pillow: `PYTHON=~/.local/share/ps3dev/venv/bin/python3` (else the snapshots stay
-`.ppm`). `tools/preview/build/before/` keeps the 0.1.0 snapshots (2026-10-12) for the look's
+`.ppm`). `tools/preview/build/stage9/` keeps stage 9's snapshots (before the round of 2026-10-14) and
+`compare/` sheets of the lines before and after. `tools/preview/build/before/` keeps the 0.1.0 snapshots (2026-10-12) for the look's
 before and after.
 
 `tools/preview/pv_app.c` is the Board's HTTP peer: a connect to port 80 or
@@ -587,7 +642,8 @@ sign), `board_old` (the reply without the keys of 0.3.0: the "-" forms),
 the glow too). Every text
 fits at 1786 and at 1600 wide (at 1600 the News page shows 6 of the 8
 headlines, two of them in two lines). With `PASSES=2`, the snapshots repeat byte
-for byte, at both areas: 84 at the default area and 81 narrow (2026-10-13, stage 9). Before, an Info page after a
+for byte, at both areas: 84 at the default area and 81 narrow (2026-10-13, stage 9; again 2026-10-14 with the sky at 60
+pictures a second and the anti-aliased lines, about 20 min for both areas twice). Before, an Info page after a
 fetch could differ at times (`board_cut_info`, `board_stale301_info`,
 `tz_12h_info`, `tz_skip_info`): the Board thread runs in host time while the
 preview's clock moves per frame, so a fetch's duration reads 0.00 or 0.02 s.

@@ -202,6 +202,7 @@ void board_take(void)
 {
     if (!ready) return;
     __sync_synchronize();
+    frame_ev |= EV_REPLY;
     const http_result *r = &slot.r;
     int prc = -1;
     if (r->step == H_OK) {

@@ -5,6 +5,7 @@
 #include <sys/systime.h>
 #include <lv2/systime.h>
 #include <ps3gfx/ui.h>
+#include <ps3gfx/fx.h>
 #include "couch.h"
 #include "page.h"
 #include "board.h"
@@ -62,15 +63,15 @@ static float header_right(float y)
     float y1 = y + (float)base_dy(F_LARGE, F_MED), y2 = y + (float)line_h(F_LARGE) + 2;
     for (int i = 0; i < PAGE_N; i++) {
         float cx = r - dots + DOT_R + i * DOT_STEP, cy = y1 + (float)line_h(F_MED) / 2;
-        if (i == page) disc(cx, cy, DOT_R, BLUE);
-        else ring(cx, cy, DOT_R - 1, 2, DIM);
+        if (i == page) aa_disc(cx, cy, DOT_R, BLUE);
+        else aa_ring(cx, cy, DOT_R - 1, 2, DIM);
     }
     float w1 = (float)text_w(F_MED, page_name[page]) + 18 + dots;
     text_r(r - dots - 18, y1, F_MED, WHITE, "%s", page_name[page]);
     u32 c = net_words(net, sizeof net);
     text_r(r, y2, F_SMALL, GREY, "%s", net);
     float nw = (float)text_w(F_SMALL, net);
-    disc(r - nw - 16, y2 + (float)line_h(F_SMALL) / 2, 6, c);
+    aa_disc(r - nw - 16, y2 + (float)line_h(F_SMALL) / 2, 6, c);
     float w2 = nw + 28;
     if (board_have && board_cur.city[0]) {   /* at most 560 px: a long CITY ends in "..." and leaves the clock its room */
         float cw = (float)text_w(F_SMALL, board_cur.city);

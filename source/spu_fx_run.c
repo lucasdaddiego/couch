@@ -38,7 +38,8 @@
 #define RAIN_LATE_US 50000           /* later than this: RSX only */
 #define RAIN_POLLS 20000000L         /* the same bound for a clock that does not move inside a frame (the preview's) */
 #define FIRST_RAIN 60                /* fx_first: the frames of rain */
-#define CHECK_EVERY 30               /* after the first picture: one check row a second (at 30 pictures a second) */
+#define CHECK_SKY 60                 /* after the first picture: one check row a second (sky 60 pictures a second, */
+#define CHECK_AUR 30                 /* the aurora 30) */
 #define RAIN_CHECK_EVERY 600         /* the rain's word sum: every 600th job */
 #define WINDOW_US 2000000            /* the frame budget's window */
 #define CALM_US 60000000             /* a step back after 60 s with no slow period */
@@ -48,8 +49,14 @@
 #define SEED 0x0c0c4c11u             /* the look of the clouds and the rain: fixed, so the particles live on */
 #define PPU_RAIN 300                 /* RSX only: the PPU's drops (design 3.5) */
 #define TB_HZ 79800000.0             /* the timebase (the decrementer's ticks) */
-#define CLOUD_SPEED 0.08f            /* the clouds' drift: picture pixels a second per km/h (20 km/h: 6.4 screen px/s, the
-                                        screen's width in 5 min; stage 8's 0.15 was a first guess) */
+#define CLOUD_PX 6.4f                /* the clouds' drift at 10 km/h, picture px a second: the screen's width (480) in */
+                                     /* 75 s, a light wind's calm crossing (round of 2026-10-14: stage 9's 0.8 px/s read as still) */
+#define CLOUD_MIN 2.5f               /* calm or no wind: still a drift, the width in about 3 min */
+#define CLOUD_MAX 14.0f              /* a gale: the width in 34 s at the most */
+#define CLOUD_UP 0.4f                /* toward or away from the viewer: the clouds pass the zenith and the horizon slower */
+#define EVOLVE 3.0f                  /* the clouds' change: the kernel's time (its warp) at 3 times the clock */
+#define EVOLVE_WRAP 64000.0f         /* the kernel's warp offsets (0.021 and 0.013 cells a second, 64 cells) repeat after 64,000 s */
+#define FLASH_S 0.12f                /* lightning lights the clouds of the next pictures, fading over 120 ms */
 #define DRIFT_WRAP (FX_NOISE_N * FX_CLOUD_CELL)   /* the noise's period: off_x and off_y stay small */
 #define LOG_LATE 10                  /* late rain frames named in couch.txt */
 
@@ -89,7 +96,7 @@ static struct {
     int done[PICS];
     int have_sky, have_aur;          /* a picture of each is shown */
     u32 first_frame, aur_frame;      /* the frame whose fx_tick swapped in the first checked picture of each */
-    float off_x, off_y, flash;
+    float off_x, off_y, flash, evo;   /* the drift; the lightning's light; the kernel's time (EVOLVE) */
     float spr[4];                    /* RSX only: the sprites' drift, screen pixels */
     s64 last_us;                     /* the last fx_tick */
     u32 sky_n, aur_n, checks;        /* pictures shown, check rows read back */
@@ -117,10 +124,15 @@ static double tick_ms(u32 t) { return t / TB_HZ * 1000.0; }
 
 /* A journaled call: jgo before (0: it froze this console before, do not
  * make it), jend after (1 when it succeeded); the first failure is logged. */
-static int jgo(const char *name) { return journal_start(name); }
+static int jgo(const char *name)
+{
+    frame_ev |= EV_JOURNAL;
+    return journal_start(name);
+}
 
 static int jend(const char *name, s32 rc)
 {
+    frame_ev |= EV_JOURNAL;
     journal_done(name, rc, rc == 0);
     if (rc) couch_log("effects: %s rc 0x%08x", name, (unsigned)rc);
     return rc == 0;
@@ -130,6 +142,7 @@ static int jend(const char *name, s32 rc)
  * (also at the exit), 0 with a reason's code when the effects stop. */
 static void entries_close(int ok, s32 rc)
 {
+    if (first_open || aur_open) frame_ev |= EV_JOURNAL;
     if (first_open) journal_done("fx_first", ok ? 0 : rc, ok);
     if (aur_open) journal_done("fx_aurora", ok ? 0 : rc, ok);
     first_open = aur_open = 0;
@@ -344,6 +357,7 @@ static int make_tex(gfx_tex *t, u16 w, u16 h, float (*fn)(float, float))
     static const u32 bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     u8 *p = gfx_tex_new(t, w, h, GFX_TEX_A8R8G8B8, 1);
     if (!p) return 0;
+    frame_ev |= EV_TEX;
     for (u32 y = 0; y < h; y++) {
         volatile u32 *row = (volatile u32 *)(p + y * t->pitch);
         for (u32 x = 0; x < w; x++) {
@@ -512,10 +526,16 @@ static void scene(long utc)
     s.sky[3] = mix_rgb(s.horizon, s.top, 0.25f);
     s.cover = cover < 0 ? 0.3f : (float)cover / 100.0f;
     float kmh = fx && b->fx_speed > 0 ? (float)b->fx_speed : 0, from = fx && b->fx_dir >= 0 ? (float)b->fx_dir : 0;
-    float r = from * 0.017453292f;
     s.rain_wind = fx_rain_wind(kmh, from);
-    s.wind_x = -sinf(r) * kmh * CLOUD_SPEED;  /* where the wind blows to: east is right */
-    s.wind_y = cosf(r) * kmh * CLOUD_SPEED * 0.3f;
+    /* The clouds go where the wind blows to, as seen facing the equator
+     * (north in the south): right is east there, and away from the viewer
+     * is down the screen, toward the horizon (stage 9 moved a north wind's
+     * clouds down in the south). Calm or no wind: from the west. The speed
+     * grows with the root of the wind, so a gale stays readable. */
+    float face = geo && b->lat >= 0 ? 180.0f : 0.0f, to = (kmh >= 1 && fx && b->fx_dir >= 0 ? from : 270.0f) + 180.0f - face;
+    float v = clampf(CLOUD_PX * sqrtf(kmh / 10.0f), CLOUD_MIN, CLOUD_MAX), r = to * 0.017453292f;
+    s.wind_x = sinf(r) * v;
+    s.wind_y = cosf(r) * v * CLOUD_UP;
     int kind = WP_DROPS;
     s.precip = fx ? wx_precip(code, b->fx_mm, &kind) : 0;
     s.kind = kind == WP_FLAKES ? FX_FLAKES : FX_DROPS;
@@ -563,7 +583,13 @@ static u32 row_sum(const void *base, u32 pitch, u32 y, u32 words)
     return s;
 }
 
-static u32 period(void) { return fx_step == 0 ? 2 : fx_step == 1 ? 3 : 4; }   /* frames per picture: 30, 20, 15 a second */
+/* Frames per picture: the sky 60, 30, 20, then 15 a second by the frame
+ * budget's step; the aurora (not measured on the console yet) 30 at most. */
+static u32 period(int mode)
+{
+    u32 p = fx_step == 0 ? 1 : fx_step == 1 ? 2 : fx_step == 2 ? 3 : 4;
+    return mode == FXM_AURORA && p < 2 ? 2 : p;
+}
 
 static void pics_send(int mode)
 {
@@ -581,7 +607,7 @@ static void pics_send(int mode)
         memset(c, 0, sizeof *c);
         c->serial = ++serial[i];
         c->check_row = P.check;
-        c->time = t;
+        c->time = sky ? P.evo : t;
         c->seed = SEED;
         if (sky) {
             c->mode = FX_SKY;
@@ -610,7 +636,6 @@ static void pics_send(int mode)
             c->p.aurora.bottom = 0x0a1222;
         }
     }
-    P.flash = 0;
     __sync_synchronize();
     memset(P.done, 0, sizeof P.done);
     P.sent = now();
@@ -654,14 +679,15 @@ static void pics_poll(void)
         if (r->ticks > slowest) slowest = r->ticks;
         if (r->check_row == P.check) ck = i;
     }
-    if (P.frame - P.sent_frame > period()) B.late++;   /* the reports came after the next picture was due */
+    if (P.frame - P.sent_frame > period(P.mode)) B.late++;   /* the reports came after the next picture was due */
     int first = sky ? first_open && !P.first_frame : aur_open && !P.aur_frame;
-    if (first || (sky ? P.sky_n : P.aur_n) % CHECK_EVERY == 0) {   /* the check row, read back from RSX memory */
+    if (first || (sky ? P.sky_n % CHECK_SKY : P.aur_n % CHECK_AUR) == 0) {   /* the check row, read back from RSX memory */
         const volatile fx_rec *r = &recs[ck < 0 ? 0 : ck];
         u32 s1 = ck < 0 ? 0 : row_sum(sky ? tex_pair_written(&cloud) : tex_pair_written(&aur), sky ? FX_SKY_PITCH : FX_AURORA_PITCH, P.check,
                                       sky ? FX_SKY_W : FX_AURORA_W);
         u32 s2 = ck < 0 || !sky ? 0 : row_sum(tex_pair_written(&glass), FX_GLASS_PITCH, P.check / 2, FX_GLASS_W);
         P.checks++;
+        frame_ev |= EV_CHECK;
         if (ck < 0 || s1 != r->sum || (sky && s2 != r->sum2)) {
             rsx_only(2, "picture %u's check row %u: %s", (unsigned)P.job, (unsigned)P.check,
                      ck < 0 ? "no SPU reported it" : "the bytes in RSX memory differ from the SPU's sum");
@@ -691,25 +717,32 @@ static void pics_poll(void)
 }
 
 /* fx_first closes once its picture was drawn (a frame after its swap) and
- * 60 frames of rain ran; fx_aurora once its picture was drawn. */
+ * 60 frames of rain ran; fx_aurora once its picture was drawn. The journal
+ * line now, its couch.txt line in the next frame: each write waits for the
+ * drive (fs_write_file's fsync), and two in one frame may miss its vsync. */
+static const char *log_later;
+
 static void entries_check(void)
 {
     if (first_open && P.first_frame && P.frame > P.first_frame && R.frames >= FIRST_RAIN) {
         journal_done("fx_first", 0, 1);
+        frame_ev |= EV_JOURNAL;
         first_open = 0;
-        couch_log("effects: fx_first closed: the first sky picture drawn and checked, %d frames of rain", FIRST_RAIN);
+        log_later = "effects: fx_first closed: the first sky picture drawn and checked, 60 frames of rain";
     }
     if (aur_open && P.aur_frame && P.frame > P.aur_frame) {
         journal_done("fx_aurora", 0, 1);
+        frame_ev |= EV_JOURNAL;
         aur_open = 0;
-        couch_log("effects: fx_aurora closed: the first aurora picture drawn and checked");
+        log_later = "effects: fx_aurora closed: the first aurora picture drawn and checked";
     }
 }
 
 /* The frame budget (design 3.13): each 2 s, more than 3 periods over 20 ms
- * or a late picture is a step down; 60 s with none, a step back up. */
-static const char *const step_words[6] = {"30 pictures a second", "20 pictures a second", "15 pictures a second", "the rain at half",
-                                          "no rays, no twinkle, no hero motion", "RSX only"};
+ * or a late picture is a step down; 60 s with none, a step back up. Since
+ * the round of 2026-10-14 the sky starts at 60 pictures a second. */
+static const char *const step_words[7] = {"60 pictures a second", "30 pictures a second", "20 pictures a second", "15 pictures a second",
+                                          "the rain at half", "no rays, no twinkle, no hero motion", "RSX only"};
 
 static void budget(void)
 {
@@ -724,7 +757,7 @@ static void budget(void)
     if (B.slow > 3 || B.late) {
         fx_step++;
         couch_log("effects: step %d (%s): %d slow periods and %d late pictures in 2 s", fx_step, step_words[fx_step], B.slow, B.late);
-        if (fx_step >= 5) rsx_only(4, "the frame budget's last step (the frames were slow)");
+        if (fx_step >= 6) rsx_only(4, "the frame budget's last step (the frames were slow)");
         B.calm_since = t;
     } else if (fx_step > 0 && t - B.calm_since >= CALM_US) {
         fx_step--;
@@ -744,6 +777,10 @@ void fx_tick(int mode)
     float dt = clampf((float)((double)(t - P.last_us) / 1e6), 0, 0.1f);
     P.last_us = t;
     P.frame++;
+    if (log_later) {                         /* entries_check's line, a frame after its journal line */
+        couch_log("%s", log_later);
+        log_later = NULL;
+    }
     if (utc / 60 != minute || board_fetches != fetches) {   /* the scene each minute and at each reply */
         minute = utc / 60;
         fetches = board_fetches;
@@ -751,6 +788,8 @@ void fx_tick(int mode)
     }
     P.off_x = fmodf(P.off_x + fx_sc.wind_x * dt, DRIFT_WRAP);   /* Group B's rule: the drift by dt, so a wind change makes no jump */
     P.off_y = fmodf(P.off_y + fx_sc.wind_y * dt, DRIFT_WRAP);
+    P.evo = fmodf(P.evo + EVOLVE * dt, EVOLVE_WRAP);   /* the clouds' change, by dt too */
+    P.flash = P.flash > dt / FLASH_S ? P.flash - dt / FLASH_S : 0;
     for (int i = 0; i < 4; i++) P.spr[i] = fmodf(P.spr[i] + fx_sc.wind_x * 4 * (0.6f + 0.2f * (float)i) * dt, 1920 + 512 * sprite_at[i][2]);
     if (fx_state != FXS_SPU) return;
     entries_check();
@@ -759,7 +798,7 @@ void fx_tick(int mode)
     if (P.busy) pics_poll();
     if (fx_state != FXS_SPU || P.busy) return;
     entries_check();
-    if (P.frame - P.sent_frame >= period() || !P.job) pics_send(mode);
+    if (P.frame - P.sent_frame >= period(mode) || !P.job) pics_send(mode);
 }
 
 /* ---- the draws ---------------------------------------------------------------------- */
@@ -823,6 +862,8 @@ int fx_draw_aurora(void)
 
 const gfx_tex *fx_glass_tex(void) { return fx_state == FXS_SPU && P.have_sky ? tex_pair_shown(&glass) : NULL; }
 
+/* The rounded corners get aa_corners' fringe in the tint (round of
+ * 2026-10-14: the corners were stair-stepped). */
 void fx_glass(float x, float y, float w, float h, float r, u32 tint)
 {
     const gfx_tex *g = fx_glass_tex();
@@ -833,8 +874,10 @@ void fx_glass(float x, float y, float w, float h, float r, u32 tint)
         round_rect(x, y, w, h, r, tint);
     } else {
         u32 a = (tint & 255) + 0x30;
-        round_rect(x, y, w, h, r, (tint & ~0xffu) | (a > 255 ? 255 : a));
+        tint = (tint & ~0xffu) | (a > 255 ? 255 : a);
+        round_rect(x, y, w, h, r, tint);
     }
+    aa_corners(x, y, w, h, r, tint);
 }
 
 void fx_flash(float level) { P.flash = clampf(level, 0, 1); }
@@ -921,7 +964,7 @@ void fx_draw_rain(float alpha)
     float dt = clampf((float)((double)(t - R.last_us) / 1e6), 0, 0.1f);
     R.last_us = t;
     if (alpha < 1 && count > PPU_RAIN) count = PPU_RAIN;     /* over the aurora: dimmer, 300 drops */
-    if (spu && fx_step >= 3 && kind == FX_DROPS) count /= 2;
+    if (spu && fx_step >= 4 && kind == FX_DROPS) count /= 2;
     if (!spu && count > PPU_RAIN) count = PPU_RAIN;
     int probe = spu && first_open && R.frames < FIRST_RAIN;   /* fx_first: 60 frames of the DMA path, also when dry (40 empty splashes) */
     if (!count && !probe) return;
@@ -965,6 +1008,8 @@ static int idle(int i) { return came(i); }
 
 void fx_stop(void)
 {
+    if (log_later) couch_log("%s", log_later);
+    log_later = NULL;
     if (stuck) couch_log("effects: the group is stuck since the terminate failed: it goes with the process");
     else if (grp == GROUP_RUNNING) {
         couch_log("effects: the exit stops the SPUs%s", P.busy ? ", a picture is out" : "");   /* the mark of a hang below */
@@ -1008,7 +1053,7 @@ void fx_stop(void)
 
 /* ---- the words -------------------------------------------------------------------- */
 
-int fx_reduced(void) { return fx_step >= 4; }
+int fx_reduced(void) { return fx_step >= 5; }
 
 void fx_words(char *buf, int n)
 {

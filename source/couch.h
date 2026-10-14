@@ -32,4 +32,11 @@ extern s64 t_start;                  /* sysGetSystemTime at the start */
  * is not writable. The main thread only. */
 void couch_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+/* What a frame did besides its draw, for the slowest frames in couch.txt
+ * (main.c reads and clears the bits once a frame): a reply taken, a line
+ * of couch.txt, a journal line, a check row read back from RSX memory, the
+ * moon's picture uploaded, a texture made, a page change, a shot. */
+enum { EV_REPLY = 1, EV_LOG = 2, EV_JOURNAL = 4, EV_CHECK = 8, EV_MOON = 16, EV_TEX = 32, EV_PAGE = 64, EV_SHOT = 128 };
+extern unsigned frame_ev;
+
 #endif

@@ -47,12 +47,14 @@ int utf8_rc = -1;
 int digits_rc = -1, icons_rc = -1;
 int unattended = -1;
 s64 t_start;
+unsigned frame_ev;
 
 void couch_log(const char *fmt, ...)
 {
     char line[400];
     va_list ap;
     if (!fs_ok) return;
+    frame_ev |= EV_LOG;
     va_start(ap, fmt);
     int n = vsnprintf(line, sizeof line - 1, fmt, ap);
     va_end(ap);
@@ -60,6 +62,64 @@ void couch_log(const char *fmt, ...)
     if (n > (int)sizeof line - 2) n = (int)sizeof line - 2;
     line[n++] = '\n';
     fs_write_file(LOG, line, (u64)n, 1);
+}
+
+/* The three slowest frames of the Board's loop (the main thread's busy time,
+ * ui_stats), with what each did besides its draw (frame_ev), for couch.txt
+ * at the exit: a frame near 16.7 ms says which work to move. */
+#define SLOW_N 3
+static struct {
+    u32 us, frame;
+    double t;
+    unsigned ev;
+} slow[SLOW_N];
+static u32 loop_n;
+
+/* After each draw: the frame that its ui_flip ended (a shot after it counts
+ * in the next frame, as its events do). */
+static void slow_note(void)
+{
+    ui_stat s;
+    unsigned ev = frame_ev;
+    frame_ev = 0;
+    loop_n++;
+    ui_stats(&s, 0);
+    int k = SLOW_N;
+    while (k > 0 && s.busy_us > slow[k - 1].us) k--;
+    if (k >= SLOW_N) return;
+    memmove(&slow[k + 1], &slow[k], (SLOW_N - 1 - (size_t)k) * sizeof slow[0]);
+    slow[k].us = s.busy_us;
+    slow[k].frame = loop_n;
+    slow[k].t = (double)(sysGetSystemTime() - t_start) / 1e6;
+    slow[k].ev = ev;
+}
+
+/* Appends to w (n bytes) at k: the new end, at most n - 1 (a cut line, never past w). */
+static int cat(char *w, int n, int k, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+static int cat(char *w, int n, int k, const char *fmt, ...)
+{
+    va_list ap;
+    if (k >= n - 1) return k;
+    va_start(ap, fmt);
+    int r = vsnprintf(w + k, (size_t)(n - k), fmt, ap);
+    va_end(ap);
+    return r < 0 ? k : k + r >= n ? n - 1 : k + r;
+}
+
+static void slow_log(void)
+{
+    static const char *const ev_words[] = {"a reply", "a log line", "a journal line", "a check row", "the moon's upload", "a texture made",
+                                           "a page change", "a shot"};
+    char w[360];
+    int k = 0;
+    for (int i = 0; i < SLOW_N && slow[i].us; i++) {
+        k = cat(w, sizeof w, k, "%s%.2f ms (frame %u at %.1f s:", i ? "; " : "", slow[i].us / 1000.0, (unsigned)slow[i].frame, slow[i].t);
+        int any = 0;
+        for (int b = 0; b < 8; b++)
+            if (slow[i].ev & (1u << b)) k = cat(w, sizeof w, k, "%s %s", any++ ? "," : "", ev_words[b]);
+        k = cat(w, sizeof w, k, "%s)", any ? "" : " the draw only");
+    }
+    if (k) couch_log("slowest frames: %s", w);
 }
 
 /* Every exit path: START, Quit Game from the PS button menu, and exit().
@@ -80,9 +140,12 @@ static void leave(void)
         ui_stat s;
         ui_stats(&s, 0);
         double sec = (double)(s.busy_sum_us + s.wait_sum_us) / 1e6, n = s.frames ? (double)s.frames : 1;
-        couch_log("ui_stats: %u frames in %.1f s, %.2f fps; busy %.3f ms mean, %.3f max; wait %.3f ms mean; period %.3f ms max; %u over 25 ms",
+        couch_log("ui_stats: %u frames in %.1f s, %.2f fps; busy %.3f ms mean, %.3f max; wait %.3f ms mean; period %.3f ms max; %u over 25 ms; "
+                  "%u vertices and %u draws max",
                   (unsigned)s.frames, sec, sec > 0 ? s.frames / sec : 0.0, (double)s.busy_sum_us / n / 1000, s.busy_max_us / 1000.0,
-                  (double)s.wait_sum_us / n / 1000, s.period_max_us / 1000.0, (unsigned)s.slow);
+                  (double)s.wait_sum_us / n / 1000, s.period_max_us / 1000.0, (unsigned)s.slow, (unsigned)s.vertices_max,
+                  (unsigned)s.draws_max);
+        slow_log();
         couch_log("exit at %.1f s\n", (double)(sysGetSystemTime() - t_start) / 1e6);
     }
     ui_end();
@@ -168,6 +231,7 @@ static int square(void)
 
 static void shot(const char *path)
 {
+    frame_ev |= EV_SHOT;
     s32 rc = ui_shot(path);
     couch_log("shot %s: rc 0x%08x", path, (unsigned)rc);
 }
@@ -215,6 +279,7 @@ int main(void)
     int step = 0;
     page = PAGE_BOARD;
     while (!quit) {
+        int was = page;
         read_pad();
         ambient_input();                     /* a press that wakes the screen is cleared: START then does not exit */
         int lv = ui_leave();
@@ -244,9 +309,11 @@ int main(void)
         ambient_tick();
         fx_tick(ambient ? FXM_AURORA : FXM_SKY);   /* after the last ui_flip: a picture's swap, the next picture */
         sky_tick();                          /* the moon's sphere (into the texture no frame shows), the bolts */
+        if (page != was) frame_ev |= EV_PAGE;
         if (page == PAGE_INFO) info_draw();
         else if (page == PAGE_NEWS) news_draw();
         else board_draw(NULL, 0);
+        slow_note();                         /* the frame that this draw's ui_flip ended, and what it did */
         if (unattended > 0 && (step == T_SHOT_BOARD || step == T_SHOT_INFO) && t >= t_sec[step] * 1000000LL) {
             shot(step == T_SHOT_BOARD ? APP_DIR "/board.ppm" : APP_DIR "/info.ppm");   /* between ui_flip and the next begin_frame */
             step++;

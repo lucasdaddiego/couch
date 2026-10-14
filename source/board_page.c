@@ -13,10 +13,14 @@
  * Every value has its "-" form when the reply lacks its key (a Worker
  * before 0.3.0) or before the first reply; every tile is a solid panel in
  * RSX-only mode (fx_glass). A value that changed at the last good reply
- * counts from its old value in 800 ms and its tile gets a halo: two pulses
- * in 3 s, then a fade to a lower glow by 6 s that stays until the next reply. Every motion reads
- * sky_time and is a whole pixel before a text, digits or S/M icon call
- * (design 1.12). The main thread only. */
+ * counts from its old value in 400 ms and its tile gets a halo: up in 200
+ * ms, two pulses of 500 ms, then a fade in 400 ms to a lower glow that
+ * stays until the next reply. Every motion reads sky_time (real time, not
+ * a count of frames) and is a whole pixel before a text, digits or S/M
+ * icon call (design 1.12); the L icons (bilinear) and the anti-aliased
+ * lines move by fractions. The lines, the rings, the discs and the arrow
+ * are anti-aliased (fx.h's aa_*: the round of 2026-10-14 found them
+ * rough). The main thread only. */
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -37,8 +41,12 @@
 #define RG 12                        /* the gap between rows of tiles */
 #define TR 20                        /* a tile's corner radius */
 #define HALO 24                      /* the glow outside a changed tile */
-#define COUNT_S 0.8                  /* the counting's time */
-#define TICK_PX 90                   /* the ticker's speed, px a second */
+#define COUNT_S 0.4                  /* the counting's time (stage 9: 0.8 s read as slow) */
+#define HALO_UP 0.2f                 /* a changed tile's halo: up in 200 ms, */
+#define HALO_PULSE 0.5f              /* two pulses of 500 ms, */
+#define HALO_FADE 0.4f               /* a fade to the resting glow in 400 ms (stage 9: 3 s of pulses, a fade to 6 s) */
+#define TICK_STEP 2                  /* the ticker: 2 px each display period, 119.9 px a second at 59.94 Hz (stage 9: */
+#define TICK_HZ 59.94                /* 90 px a second moved 1 and 2 px in turn); the steps follow the clock */
 #define PI_F 3.14159265f
 
 static int wide;                     /* SH >= 980 */
@@ -164,17 +172,23 @@ static const char *shown(const char *label, const char *value, char *buf, int n)
     return buf;
 }
 
-/* The halo of a changed tile: two pulses in 3 s, a fade by 6 s to a lower
- * glow that stays until the next reply ("changed at the last refresh"). */
+/* The halo of a changed tile: up in HALO_UP (ease-out), two pulses of
+ * HALO_PULSE, a fade in HALO_FADE (ease-out) to a lower glow that stays
+ * until the next reply ("changed at the last refresh"). */
 static void halo(float x, float y, float w, float h, const char *label)
 {
     const change *c = change_of(label);
     const gfx_tex *t = sky_halo_tex();
     if (!c || !t) return;
-    float s = (float)(T - chg_t0), a;
-    if (s < 3) a = 0xd0 * (0.6f + 0.4f * cosf(2 * PI_F * s / 1.5f));
-    else if (s < 6) a = 0xd0 + (0x90 - 0xd0) * (s - 3) / 3;
-    else a = 0x90;
+    float s = (float)(T - chg_t0), a, e, p = HALO_UP + 2 * HALO_PULSE;
+    if (s < HALO_UP) {
+        e = s / HALO_UP;
+        a = 0xd0 * (1 - (1 - e) * (1 - e));
+    } else if (s < p) a = 0xd0 * (0.6f + 0.4f * cosf(2 * PI_F * (s - HALO_UP) / HALO_PULSE));
+    else if (s < p + HALO_FADE) {
+        e = (s - p) / HALO_FADE;
+        a = 0xd0 + (0x90 - 0xd0) * (1 - (1 - e) * (1 - e));
+    } else a = 0x90;
     glow9(t, x, y, w, h, HALO, ((c->dir == CHG_UP ? UP : DOWN) & ~0xffu) | (u32)a);
 }
 
@@ -237,7 +251,8 @@ static void hero_icon(int k, int day, float cx, float cy, float box)
 {
     float s = box / 168, t = (float)T;
     int still = fx_reduced();
-    float drift = still ? 0 : rnd(8 * s * sinf(2 * PI_F * t / 6)), drift2 = still ? 0 : rnd(6 * s * sinf(2 * PI_F * t / 9));
+    /* the L layers bind bilinear (icon_rot): the drift by fractions, smooth (stage 9 rounded it: 1 px steps) */
+    float drift = still ? 0 : 8 * s * sinf(2 * PI_F * t / 6), drift2 = still ? 0 : 6 * s * sinf(2 * PI_F * t / 9);
     if (k == WK_NONE) return;
     if (k == WK_CLEAR) {
         if (day) {
@@ -249,7 +264,7 @@ static void hero_icon(int k, int day, float cx, float cy, float box)
             icon_rot(IC_L_MOON_LINE, cx - 4 * s, cy, 0, s * 0.86f, MOON_LIT);
             for (int i = 0; i < 2; i++) {                    /* two small stars that twinkle */
                 float tw = still ? 1 : 0.55f + 0.45f * sinf(t * (1.7f + (float)i) + (float)i * 2);
-                disc(rnd(cx + (i ? 64 : 52) * s), rnd(cy + (i ? 18 : -48) * s), i ? 3 : 5, (WHITE & ~0xffu) | (u32)(0xff * tw));
+                aa_disc(rnd(cx + (i ? 64 : 52) * s), rnd(cy + (i ? 18 : -48) * s), i ? 3 : 5, (WHITE & ~0xffu) | (u32)(0xff * tw));
             }
         }
         return;
@@ -273,7 +288,7 @@ static void hero_icon(int k, int day, float cx, float cy, float box)
         for (int i = 0; i < 10; i++) {
             float ph = still ? 0.3f : (float)fmod(T / 0.9 + i * 0.37, 1.0);
             float x = ccx - 52 * s + (float)i * 11.5f * s, y = ccy + 36 * s + ph * 40 * s;
-            line(x, y, x - 4 * s, y + 20 * s, 3, (BLUE & ~0xffu) | (u32)(0xd0 * (1 - ph)));
+            aa_line(x, y, x - 4 * s, y + 20 * s, 3, (BLUE & ~0xffu) | (u32)(0xd0 * (1 - ph)));
         }
     }
     if (k == WK_SNOW)                                        /* 6 flakes that fall and sway */
@@ -306,13 +321,19 @@ static void dial(float cx, float cy, float R, const board_data *b)
     if (board_have && b->has_fx && b->fx_speed >= 0) snprintf(sp, sizeof sp, "%d", b->fx_speed);
     else if (board_have && b->has_wx && temp_num(b->wind, &v)) snprintf(sp, sizeof sp, "%d", v);   /* wx_now's "10 km/h" */
     else snprintf(sp, sizeof sp, "-");
-    ring(cx, cy, R, 3, 0xffffff40);
-    batch_begin(0xffffff60);
-    for (int k = 0; k < 24; k++) {
-        float a = (float)k * PI_F / 12, r1 = k % 6 ? R - 6 : R - 2;
-        batch_line(cx + sinf(a) * r1, cy - cosf(a) * r1, cx + sinf(a) * R, cy - cosf(a) * R, 2);
+    float tk[20 * 4];
+    int nt = 0;
+    aa_ring(cx, cy, R, 3, 0xffffff40);
+    for (int k = 0; k < 24; k++) {                           /* the ticks inside the ring, to its inner edge (no overlap); */
+        if (k % 6 == 0) continue;                            /* N, E, S and W have their letters (stage 9's 2 px there hid under the ring) */
+        float a = (float)k * PI_F / 12, r0 = R - 6, r1 = R - 1.5f;
+        tk[4 * nt] = cx + sinf(a) * r0;
+        tk[4 * nt + 1] = cy - cosf(a) * r0;
+        tk[4 * nt + 2] = cx + sinf(a) * r1;
+        tk[4 * nt + 3] = cy - cosf(a) * r1;
+        nt++;
     }
-    batch_end();
+    aa_lines(tk, nt, 2, 0xffffff60);
     const char *nesw = wide ? "NESW" : "N";
     for (int k = 0; nesw[k]; k++) {
         float a = (float)k * PI_F / 2;
@@ -322,9 +343,11 @@ static void dial(float cx, float cy, float R, const board_data *b)
         float wob = fx_reduced() ? 0 : 2 * sinf((float)T * 0.5f);
         float to = ((float)dir + 180 + wob) * PI_F / 180, L = R - 4;
         float ax = cx + sinf(to) * L, ay = cy - cosf(to) * L;
-        line(cx - sinf(to) * L, cy + cosf(to) * L, ax, ay, 4, (BLUE & ~0xffu) | 0x50);
         float pa = to + 150 * PI_F / 180, pl = to - 150 * PI_F / 180;
-        tri(ax, ay, ax + sinf(pa) * 22, ay - cosf(pa) * 22, ax + sinf(pl) * 22, ay - cosf(pl) * 22, BLUE);
+        float hd[6] = {ax, ay, ax + sinf(pa) * 22, ay - cosf(pa) * 22, ax + sinf(pl) * 22, ay - cosf(pl) * 22};
+        float bx = (hd[2] + hd[4]) / 2, by = (hd[3] + hd[5]) / 2;   /* the shaft to the head's base: the two do not overlap */
+        aa_line(cx - sinf(to) * L, cy + cosf(to) * L, bx, by, 4, (BLUE & ~0xffu) | 0x50);
+        aa_poly(hd, 3, BLUE);
     }
     text_c(cx, rnd(cy - 26), F_MED | TNUM, WHITE, "%s", sp);
     text_c(cx, rnd(cy + 8), F_SMALL, GREY, "km/h");
@@ -384,8 +407,8 @@ static void curve(float x0, float x1, float ytop, float ybase, const board_data 
     }
     if (np < 2) return;
     area(pts, np, ybase, 0xffd36b40, 0xffd36b00);
-    strip(pts, np, 3, SUN);
-    disc(pts[0], pts[1], 6, SUN);
+    aa_strip(pts, np, 3, SUN);
+    aa_disc(pts[0], pts[1], 6, SUN);
 }
 
 static void hero(float x, float y, float w, float h, const board_data *b)
@@ -423,6 +446,8 @@ static void hero(float x, float y, float w, float h, const board_data *b)
     if (bw > 260) bw = 260;
     if (bw > 40) {
         float my = by + (float)line_h(F_BODY) / 2;
+        aa_disc(b0, my, 4, TEMP_COLD);                      /* round ends, under the steps (the steps cover their inner half) */
+        aa_disc(b0 + bw, my, 4, TEMP_HOT);
         for (int i = 0; i < 8; i++) {
             float f = (float)i / 7;
             u32 c = 0xff;
@@ -430,12 +455,13 @@ static void hero(float x, float y, float w, float h, const board_data *b)
                 float c0 = (float)(TEMP_COLD >> sh & 0xff), c1 = (float)(TEMP_HOT >> sh & 0xff);
                 c |= (u32)(c0 + (c1 - c0) * f + 0.5f) << sh;
             }
-            rect(rnd(b0 + bw * (float)i / 8), my - 4, rnd(bw / 8) + 1, 8, c);
+            float sx0 = rnd(b0 + bw * (float)i / 8), sx1 = i == 7 ? b0 + bw : rnd(b0 + bw * (float)(i + 1) / 8);
+            rect(sx0, my - 4, sx1 - sx0, 8, c);
         }
         if (has && temp_num(smin, &vmin) && temp_num(smax, &vmax) && temp_num(b->temp, &vnow) && vmax > vmin) {
             float mx = rnd(b0 + bw * clampf((float)(vnow - vmin) / (float)(vmax - vmin), 0, 1));
-            disc(mx, my, 9, 0x050a14ff);
-            disc(mx, my, 7, WHITE);
+            aa_disc(mx, my, 9, 0x050a14ff);
+            aa_disc(mx, my, 7, WHITE);
         }
         text(b0 + bw + 14, by, F_BODY | TNUM, miss(hi) ? DIM : WHITE, "%s", hi);
     }
@@ -483,20 +509,24 @@ static void sky_tile(float x, float y, float w, float h, const board_data *b)
         py[k] = acy - sinf(an) * ah;
     }
     rect(ax0 - 20, acy, aw + 40, 1, 0xffffff30);
-    batch_begin(DIM);
-    for (int k = 0; k < 48; k++)
-        if (k % 2 == 0 && !(st == 1 && (float)k / 48 < frac)) batch_line(px[k], py[k], px[k + 1], py[k + 1], 2);
-    batch_end();
+    float ds[24 * 4], sp[2 * 50];
+    int nd = 0, ns = 0;
+    for (int k = 0; k < 48; k += 2)                          /* the dashes after the sun (all of them by night) */
+        if (!(st == 1 && (float)k / 48 < frac)) {
+            ds[4 * nd] = px[k], ds[4 * nd + 1] = py[k], ds[4 * nd + 2] = px[k + 1], ds[4 * nd + 3] = py[k + 1];
+            nd++;
+        }
+    aa_lines(ds, nd, 2, DIM);
     if (st >= 0) {
         float an = PI_F * (float)frac, sx = acx - cosf(an) * aw / 2, sy = acy - sinf(an) * ah;
-        if (st == 1) {
-            batch_begin(SUN);
-            for (int k = 0; k < 48 && (float)k / 48 < frac; k++) batch_line(px[k], py[k], px[k + 1], py[k + 1], 3);
-            batch_end();
+        if (st == 1) {                                       /* solid from sunrise to the sun's place */
+            for (int k = 0; k < 48 && (float)k / 48 < frac; k++) sp[2 * ns] = px[k], sp[2 * ns + 1] = py[k], ns++;
+            if (!ns || fabsf(sx - sp[2 * ns - 2]) + fabsf(sy - sp[2 * ns - 1]) > 0.5f) sp[2 * ns] = sx, sp[2 * ns + 1] = sy, ns++;
+            aa_strip(sp, ns, 3, SUN);
             const gfx_tex *g = sky_glow_tex();
             if (g) tex_sub(g, sx - 50, sy - 50, 100, 100, 0, 0, 1, 1, 0xffd36b70);
-            disc(sx, sy, 10, SUN);
-        } else disc(sx, sy, 7, 0xe9edf5c0);                 /* night: a small moon at the night's fraction */
+            aa_disc(sx, sy, 10, SUN);
+        } else aa_disc(sx, sy, 7, 0xe9edf5c0);              /* night: a small moon at the night's fraction */
     }
     text_c(ax0 - 10, acy + 4, F_SMALL | TNUM, rise < 0 ? DIM : GREY, "%s", rise < 0 ? "-" : b->sunrise);
     text_c(ax1 + 10, acy + 4, F_SMALL | TNUM, set < 0 ? DIM : GREY, "%s", set < 0 ? "-" : b->sunset);
@@ -594,9 +624,9 @@ static void blue(float x, float y, float w, float h, const board_data *b)
     }
     if (np >= 2) {
         area(pts, np, sy1, 0x4fd98240, 0x4fd98200);
-        strip(pts, np, 2, GREEN);
+        aa_strip(pts, np, 2, GREEN);
     }
-    disc(pts[2 * np - 2], pts[2 * np - 1], 5, WHITE);
+    aa_disc(pts[2 * np - 2], pts[2 * np - 1], 5, WHITE);
 }
 
 /* A small tile's words: the label (and in narrow form its first word),
@@ -698,9 +728,22 @@ static u32 source_colour(const char *s)
     return 0x3a5a8cff;
 }
 
+/* The ticker's offset, whole and even pixels: TICK_STEP each display
+ * period, the count of steps from the clock (a late frame moves it more, a
+ * stall makes no jump back), so the text moves the same each frame. */
+static double tick_px;
+
+static float tick_offset(void)
+{
+    double d = T * TICK_HZ * TICK_STEP - tick_px;
+    long n = (long)floor(d / TICK_STEP + 0.5);
+    if (n > 0) tick_px += (double)(n * TICK_STEP);
+    return (float)tick_px;
+}
+
 /* The ticker (design 1.8): a glass band over the screen's width, the
- * headlines moving right to left at 90 px a second apart by a dot, the
- * source's pill fixed at the canvas's left over them. */
+ * headlines moving right to left at 2 px a frame (119.9 px a second) apart
+ * by a dot, the source's pill fixed at the canvas's left over them. */
 static void ticker(float y, float h, const board_data *b)
 {
     const float sep = 56;
@@ -714,7 +757,7 @@ static void ticker(float y, float h, const board_data *b)
         wsum += ws[i] = (float)text_w(F_BODY, t) + sep;
     }
     float pill = (float)text_w(F_SMALL, "Infobae") + 28;     /* one width for every source */
-    float start = MG + pill + 20, off = (float)fmod(floor(T * TICK_PX), wsum);
+    float start = MG + pill + 20, off = (float)fmod((double)tick_offset(), (double)wsum);
     float ty = rnd(y + (h - (float)line_h(F_BODY)) / 2), x = start - off;
     while (x > ox) x -= wsum;                                /* from the screen's left edge */
     const char *under = b->news[0].source;
@@ -728,7 +771,9 @@ static void ticker(float y, float h, const board_data *b)
     }
     /* the text goes under the pill: a dark block from past the screen's left edge to the pill's right */
     round_rect(ox - 40, y + 6, MG + pill + 12 - (ox - 40), h - 12, (h - 12) / 2, GLASS_TINT | 0xff);
+    aa_corners(ox - 40, y + 6, MG + pill + 12 - (ox - 40), h - 12, (h - 12) / 2, GLASS_TINT | 0xff);
     round_rect(MG, y + 10, pill, h - 20, (h - 20) / 2, source_colour(under));
+    aa_corners(MG, y + 10, pill, h - 20, (h - 20) / 2, source_colour(under));
     text_fit(MG + 14, rnd(y + (h - (float)line_h(F_SMALL)) / 2), F_SMALL, WHITE, pill - 20, "%s", under);
 }
 

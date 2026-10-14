@@ -1,10 +1,11 @@
 /* The effects (design 2026-10-13, sections 3 and 6): ps3gfx's SPU program
  * spu_fx (<ps3gfx/spu_fx.h>) on a group of six SPU threads, and the RSX-only
  * fallback of each effect. Threads 0 to 4 make the pictures, a band each:
- * the clouds and the frosted glass (FX_SKY) or the aurora (FX_AURORA), 30 a
- * second into two textures that take turns; thread 5 makes the rain or the
- * snow (FX_RAIN) every frame, into the frame's vertex area. The name is not
- * fx.c: an app object with an archive member's base name hides the member.
+ * the clouds and the frosted glass (FX_SKY, 60 a second) or the aurora
+ * (FX_AURORA, 30 a second) into two textures that take turns; thread 5
+ * makes the rain or the snow (FX_RAIN) every frame, into the frame's vertex
+ * area. The name is not fx.c: an app object with an archive member's base
+ * name hides the member.
  *
  * Every LV2 SPU call is journaled by the main thread (jgo before, jend
  * after): fx_init, fx_import, fx_group (the create and the six threads; a
@@ -102,14 +103,16 @@ int fx_draw_aurora(void);
 void fx_glass(float x, float y, float w, float h, float r, u32 tint);
 const gfx_tex *fx_glass_tex(void);
 
-/* Lightning (design 3.11): the next picture's clouds lit by level (0 to 1). */
+/* Lightning (design 3.11): the next pictures' clouds lit by level (0 to
+ * 1), fading to 0 over 120 ms. */
 void fx_flash(float level);
 
-/* The frame budget's step (design 3.13), 0 to 5: 0 at 30 pictures a second;
- * 1 at 20; 2 at 15; 3 the rain at half its drops; 4 no rays, no twinkle,
- * no hero motion (the pages read fx_reduced); 5 RSX only. */
+/* The frame budget's step (design 3.13), 0 to 6: 0 the sky at 60 pictures
+ * a second (since the round of 2026-10-14; the aurora at 30); 1 at 30; 2
+ * at 20; 3 at 15; 4 the rain at half its drops; 5 no rays, no twinkle, no
+ * hero motion (the pages read fx_reduced); 6 RSX only. */
 extern int fx_step;
-int fx_reduced(void);                /* 1 from step 4 */
+int fx_reduced(void);                /* 1 from step 5 */
 
 /* The Info page's line, and the fetch line's suffix in couch.txt (the last
  * job serials and the late frames: a freeze hours in leaves a trace). */

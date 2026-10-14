@@ -59,6 +59,7 @@ static int make_tex(gfx_tex *t, u16 w, u16 h, float (*fn)(float, float))
 {
     u8 *p = gfx_tex_new(t, w, h, GFX_TEX_A8R8G8B8, 1);
     if (!p) return 0;
+    frame_ev |= EV_TEX;
     for (u32 y = 0; y < h; y++) {
         volatile u32 *row = (volatile u32 *)(p + y * t->pitch);
         for (u32 x = 0; x < w; x++) row[x] = texel(fn(((float)x + 0.5f) / w, ((float)y + 0.5f) / h), 0xffffff, x, y);
@@ -167,6 +168,7 @@ static void moon_tick(long utc)
     if (moon_row < MOON_PX) return;
     tex_upload(tex_pair_wtex(&moon_tp), tex_pair_written(&moon_tp), moon_buf, MOON_PX);   /* after ui_flip: no frame draws it */
     tex_pair_swap(&moon_tp);
+    frame_ev |= EV_MOON;
     moon_have = 1;
     moon_done = moon_doing;
     moon_row = -1;
@@ -174,12 +176,12 @@ static void moon_tick(long utc)
 
 /* ---- the tick ------------------------------------------------------------------------ */
 
-static u32 frames;
 static long minute = -1;
 static double moon_elev = -90, moon_azim;
 static int storm;
 static double bolt_next = 6;         /* the bolts' times from the start: 6 s, then gaps of 6 to 20 s */
-static u32 bolt_k, bolt_f0 = 0xffffffffu;
+static double bolt_t0 = -1;          /* sky_time of the bolt that shows, -1: none */
+static u32 bolt_k;
 static float bolt[BOLT_N * 2];
 
 /* The bolt's points (screen pixels from the screen's top left): from a top
@@ -205,20 +207,25 @@ static void bolt_make(u32 k)
     bolt_split(0, BOLT_N - 1, k + 1);
 }
 
-/* The bolt's frames after its start (design 3.11): on 3, off 2, on 2; the
- * flash in the first 2. */
-static int bolt_phase(void) { return bolt_f0 == 0xffffffffu ? -1 : (int)(frames - bolt_f0); }
+/* The bolt's times after its start (design 3.11: 3 frames on, 2 off, 2 on,
+ * the flash 2 frames at 60 Hz; since the round of 2026-10-14 as times, so
+ * a slow frame does not stretch them, each bound half a frame from the
+ * frames): on to 42 ms, off to 75 ms, on to 108 ms; the flash to 25 ms. */
+#define BOLT_ON1 0.042
+#define BOLT_ON2 0.075
+#define BOLT_END 0.108
+#define BOLT_FLASH 0.025
+static double bolt_age(void) { return bolt_t0 < 0 ? -1 : sky_time() - bolt_t0; }
 int sky_bolt_on(void)
 {
-    int p = bolt_phase();
-    return p >= 0 && (p < 3 || p == 5 || p == 6);
+    double p = bolt_age();
+    return p >= 0 && (p < BOLT_ON1 || (p >= BOLT_ON2 && p < BOLT_END));
 }
 
 void sky_tick(void)
 {
     long utc = clock_utc();
     double t = sky_time();
-    frames++;
     if (fx_state == FXS_NONE) return;
     moon_tick(utc);
     if (utc / 60 != minute) {
@@ -230,13 +237,13 @@ void sky_tick(void)
     while (t >= bolt_next) {
         if (storm && t - bolt_next < 0.5) {                 /* a bolt now: a time long past (a pause) makes none */
             bolt_make(bolt_k);
-            bolt_f0 = frames;
-            fx_flash(1);                                     /* the next picture's clouds lit */
+            bolt_t0 = t;
+            fx_flash(1);                                     /* the next pictures' clouds lit, fading */
         }
         bolt_k++;
         bolt_next += 6 + hash(bolt_k) % 15;
     }
-    if (bolt_phase() > 6) bolt_f0 = 0xffffffffu;
+    if (bolt_age() >= BOLT_END) bolt_t0 = -1;
 }
 
 /* ---- the draws ----------------------------------------------------------------------- */
@@ -253,24 +260,30 @@ static void sky_xy(double elev, double azim, float *x, float *y)
     *y = 864.0f - (float)elev / 60.0f * 864.0f;
 }
 
+/* The stars: each its own brightness in every frame, so the twinkle is
+ * smooth (stage 9 drew 7 levels, and a star jumped a level at a time);
+ * one quad each, 64 to a primitive, all one draw. */
 static void stars(float ox, float oy)
 {
     float vis = clampf((float)(-fx_sc.elev - 4) / 8.0f, 0, 1) * (1.0f - 0.95f * fx_sc.cover);
     if (vis < 0.02f) return;
     float t = (float)sky_time();
     int still = fx_reduced();
-    for (int lv = 1; lv < 8; lv++) {                         /* 7 brightness levels, one batch each */
-        batch_begin(0xebf0ff00u | (u32)(lv * 0xe0 / 7 * vis));
-        for (u32 i = 0; i < STARS; i++) {
+    gfx_texture(NULL);
+    for (u32 i0 = 0; i0 < STARS; i0 += 64) {
+        u32 n = STARS - i0 < 64 ? STARS - i0 : 64;
+        gfx_vtx *q = gfx_prim(GFX_QUADS, (int)(4 * n));
+        for (u32 i = i0; i < i0 + n; i++) {
             u32 h = hash(i + 0x5a17);
             float b = 0.3f + 0.7f * hashf(h);
-            if (!still) b *= 0.72f + 0.28f * sinf(t * (1.1f + (float)(h % 7) * 0.35f) + (float)(h >> 8 & 63));
-            int l = (int)(b * 7.0f + 0.5f);
-            if (l != lv) continue;
-            float s = (h >> 20 & 15) < 2 ? 3 : 2;
-            batch_rect(ox + (float)(h % 1920), oy + (float)((h >> 11) % 864), s, s);
+            if (!still) b *= 0.65f + 0.35f * sinf(t * (1.1f + (float)(h % 7) * 0.35f) + (float)(h >> 8 & 63));
+            u32 c = 0xebf0ff00u | (u32)(b * 0xe0 * vis + 0.5f);
+            float s = (h >> 20 & 15) < 2 ? 3 : 2, x = ox + (float)(h % 1920), y = oy + (float)((h >> 11) % 864);
+            q = gfx_put(q, x, y, c, 0, 0);
+            q = gfx_put(q, x + s, y, c, 0, 0);
+            q = gfx_put(q, x + s, y + s, c, 0, 0);
+            q = gfx_put(q, x, y + s, c, 0, 0);
         }
-        batch_end();
     }
 }
 
@@ -281,7 +294,7 @@ static void sun(float ox, float oy)
     if (fx_sc.elev < -2 || gain <= 0.01f) return;
     float x = ox + fx_sc.sun_x * 4, y = oy + fx_sc.sun_y * 4;
     if (g) tex_sub(g, x - 260, y - 260, 520, 520, 0, 0, 1, 1, 0xffd36b00u | (u32)(0x70 * gain));
-    disc(x, y, 30, 0xffe9a800u | (u32)(0xff * gain * (1 - fx_sc.cover)));   /* the disc only through a thin cover */
+    aa_disc(x, y, 30, 0xffe9a800u | (u32)(0xff * gain * (1 - fx_sc.cover)));   /* the disc only through a thin cover */
     if (fx_sc.cover >= 0.6f || fx_sc.elev <= 0 || fx_reduced()) return;
     /* the rays: 9 thin triangles from the sun, 0x20 at the sun to 0 at the end, turning 1 deg a second */
     float turn = (float)sky_time() * PI_F / 180.0f;
@@ -315,7 +328,7 @@ void sky_behind(void)
 void sky_front(void)
 {
     float ox, oy;
-    int p = bolt_phase();
+    double p = bolt_age();
     screen_origin(&ox, &oy);
     if (sky_bolt_on()) {                                     /* over the clouds: a storm's deck would hide it */
         static const float wd[3] = {8, 4, 2};
@@ -327,7 +340,7 @@ void sky_front(void)
             batch_end();
         }
     }
-    if (p >= 0 && p <= 1) rect(ox, oy, 1920, 1080, 0xffffff50);
+    if (p >= 0 && p < BOLT_FLASH) rect(ox, oy, 1920, 1080, 0xffffff50);
 }
 
 void sky_scrims(void)
