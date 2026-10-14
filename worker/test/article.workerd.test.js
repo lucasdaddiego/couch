@@ -30,10 +30,14 @@ let mf = null;
 before(async () => {
   if (!Miniflare) return;
   const mod = (p) => ({ type: 'ESModule', path: join(root, p), contents: readFileSync(join(root, p), 'utf8') });
+  // Miniflare 5 (wrangler 4.149's) takes the Worker in a `workers` array.
   mf = new Miniflare({
-    modules: [mod('test/extract.worker.js'), mod('src/article.js'), mod('src/news.js'), mod('src/board.js')],
-    modulesRoot: root,
-    compatibilityDate: '2026-09-01',
+    workers: [{
+      name: 'extract',
+      modules: [mod('test/extract.worker.js'), mod('src/article.js'), mod('src/news.js'), mod('src/board.js')],
+      modulesRoot: root,
+      compatibilityDate: '2026-09-01',
+    }],
   });
 });
 after(async () => {
