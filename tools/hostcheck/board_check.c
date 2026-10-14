@@ -754,6 +754,22 @@ static void sky(void)
     group("wmo_kind, wmo_wet and wx_icon: the design's table for every code", f0);
 
     f0 = fails;
+    int kind = -1;
+    CHECK(wx_precip(3, 0, &kind) == 0 && kind == WP_DROPS);            /* the Worker test's sky: overcast, dry */
+    CHECK(wx_precip(3, -1, &kind) == 0 && wx_precip(-1, -1, &kind) == 0 && wx_precip(0, 0.0, &kind) == 0);
+    CHECK(wx_precip(51, 0, &kind) == 300 && wx_precip(57, -1, &kind) == 300);
+    CHECK(wx_precip(61, 0, &kind) == 700 && wx_precip(66, 0, &kind) == 700 && wx_precip(80, 0, &kind) == 700);
+    CHECK(wx_precip(63, 0, &kind) == 1100 && wx_precip(81, 0, &kind) == 1100);
+    CHECK(wx_precip(65, 0, &kind) == 1500 && wx_precip(67, 0, &kind) == 1500 && wx_precip(82, 0, &kind) == 1500);
+    CHECK(wx_precip(95, 0, &kind) == 1500 && wx_precip(99, -1, &kind) == 1500 && kind == WP_DROPS);
+    CHECK(wx_precip(3, 0.1, &kind) == 300 && wx_precip(3, 0.5, &kind) == 700 && wx_precip(3, 2.49, &kind) == 700 &&
+          wx_precip(3, 2.5, &kind) == 1100 && wx_precip(3, 7.6, &kind) == 1500 && wx_precip(3, 1000, &kind) == 1500);
+    CHECK(wx_precip(61, 8.0, &kind) == 1500 && wx_precip(65, 0.2, &kind) == 1500);   /* the larger of the two */
+    for (int c = 71; c <= 77; c++) CHECK(wx_precip(c, 5.0, &kind) == 300 && kind == WP_FLAKES);
+    CHECK(wx_precip(85, 0, &kind) == 300 && kind == WP_FLAKES && wx_precip(86, -1, &kind) == 300 && kind == WP_FLAKES);
+    group("wx_precip: the drops by the code and the hour's mm, the flakes", f0);
+
+    f0 = fails;
     static const struct { int d; const char *w; } cp[] = {{0, "N"},  {22, "N"},   {23, "NE"}, {67, "NE"}, {68, "E"},  {135, "SE"},
                                                          {180, "S"}, {225, "SW"}, {270, "W"}, {315, "NW"}, {337, "NW"}, {338, "N"},
                                                          {359, "N"}, {720, "N"},  {-1, ""}};

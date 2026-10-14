@@ -17,6 +17,7 @@
 #include "http.h"
 #include "page.h"
 #include "parse.h"
+#include "spu_fx_run.h"
 
 #define KEY_W 250                    /* the key column */
 #define ROW 40
@@ -128,6 +129,8 @@ void info_draw(void)
     else if (net_state == NET_FAILED) y = row(x, y, w, "Address", YELLOW, "none: netInitialize rc 0x%08x", (unsigned)net_rc);
     else y = row(x, y, w, "Address", DIM, "none: the network is not started");
     y = row(x, y, w, "Journal", WHITE, "net_start %s, tz_params %s", jword("net_start"), jword("tz_params"));
+    fx_words(a, sizeof a);
+    y = row(x, y, w, "Effects", fx_state == FXS_SPU ? WHITE : fx_state == FXS_RSX ? YELLOW : DIM, "%s", a);
     if (utf8_rc == 0) y = row(x, y, w, "UTF-8 text", WHITE, "on: text_utf8 rc 0");
     else y = row(x, y, w, "UTF-8 text", YELLOW, "off: text_utf8 rc %d, so the Board's accents are folded to ASCII", utf8_rc);
     if (!fs_ok)

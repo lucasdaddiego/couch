@@ -11,6 +11,7 @@
 #include "clock.h"
 #include "http.h"
 #include "parse.h"
+#include "spu_fx_run.h"
 
 #define DIM_LAYER 0x000000a8         /* black at 66 %: the picture at a third of its light */
 #define DOT_R 7
@@ -96,6 +97,12 @@ float page_begin(void)
         shifted = 1;
     }
     begin_frame();
+    /* the background (design 3): the sky and its clouds, or the aurora in
+     * the ambient mode, then the rain (dimmer over the aurora). Stage 9's
+     * glass tiles go over it; 0.2.0's cards still hide most of it. */
+    int aurora = ambient && fx_draw_aurora();
+    if (!aurora) fx_draw_sky();
+    fx_draw_rain(aurora ? 0.5f : 1.0f);
     header();
     return CONTENT_Y;
 }

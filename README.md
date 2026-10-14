@@ -160,8 +160,9 @@ is a deploy, not a console round); no headline opens (titles only).
   (`ambient_input`: a press that wakes the screen is cleared before the
   exit reads it), the exit, `board_take` (a new reply from the thread), the
   input (L1 and R1, the Info page's keys, SELECT, SQUARE), the ambient
-  mode's step (`ambient_tick`), the draw of the page on the TV. Each page
-  draws through `page_begin` (the ambient shift, `begin_frame`, the header)
+  mode's step (`ambient_tick`), the effects' step (`fx_tick`), the draw of
+  the page on the TV. Each page draws through `page_begin` (the ambient
+  shift, `begin_frame`, the background of the effects, the header)
   and `page_end` (the dim layer, `ui_flip`, the shift taken back). Only the
   main thread calls `journal_*` and writes files.
 - **The network start** (`http.c`): PS3 Health's `net_start` (`mod_net.c` at
@@ -181,7 +182,8 @@ is a deploy, not a console round); no headline opens (titles only).
   frames (each frame reads the events). `couch.txt` says which.
 - **The exit** (`leave`, from `exit()` once main returned): `board_stop`
   sets `board_on` to 0, shuts the open socket down (`netShutdown`,
-  `SHUT_RDWR`) and joins the thread with no time limit. Then `net_end`:
+  `SHUT_RDWR`) and joins the thread with no time limit. Then `fx_stop`
+  (the SPU group down, below). Then `net_end`:
   `netCtlTerm`, `netDeinitialize` (PSL1GHT's: `netFinalizeNetwork`, its
   128 KB pool, the net module), then the netctl module's unload, each only
   where its start succeeded (PSL1GHT's samples: httptest ends the libraries,
@@ -242,11 +244,85 @@ is a deploy, not a console round); no headline opens (titles only).
   temperature has one: the design said `?`, which read "11?"), a no-break
   space becomes a space, any other code point becomes `?`.
 
+## The effects (0.3.0, stage 8 of the revamp)
+
+`source/spu_fx_run.c` drives ps3gfx's effects program (`spu_fx`,
+`<ps3gfx/spu_fx.h>`; design `~/.claude/plans/2026-10-13-couch-revamp-design.md`,
+sections 3 and 6): one group of six SPU threads, modelled on PS3 Health's
+`spu_run.c` and Cell Bench's `run.c`. Threads 0 to 4 make the pictures, a
+band each: the clouds and the frosted glass (`FX_SKY`, 480 x 270 and
+240 x 135) or the aurora (`FX_AURORA`, 640 x 360), into two textures of
+each that take turns. Thread 5 makes the rain or the snow (`FX_RAIN`) in
+every frame, into the frame's vertex area (`gfx_block`). Stage 8 draws
+only the background behind 0.2.0's cards: the gradient, the clouds, the
+rain (and the aurora under the ambient mode's dim layer). The pages of
+stages 9 and 10 call the same API: `fx_draw_gradient`, `fx_draw_clouds`
+(the moon and the stars go between the two), `fx_draw_rain`,
+`fx_draw_aurora`, `fx_glass` (a tile's frosted glass, or a solid panel),
+`fx_flash` (lightning), `fx_sc` (the scene's colours), `fx_reduced` (the
+frame budget's step 4).
+
+- **The start** (design 6.3), in `board_enter` before the network start:
+  the six textures (each pitch checked against `FX_*_PITCH`), then every
+  LV2 call journaled by the main thread, each behind `run_job("Starting the
+  effects")`: `fx_init` (`sysSpuInitialize`, once per process), `fx_import`,
+  `fx_group` (the create and the six threads; a failed thread destroys the
+  group inside the entry), `fx_start`. `fx_first` opens before the start's
+  done line. Then the six start reports (2 s), and the known-answer test
+  in each (`kat == FX_KAT`) before the first job.
+- **No prompt** (Lucas's choice): an `fx_*` entry that froze before, no
+  writable folder, or a quit before the start: no SPU call at all. SQUARE
+  twice on the Info page clears the journal, and the next opening of the
+  Board starts the SPUs (as `net_start`).
+- **The frame** (design 3.14): `fx_tick` at the top of the loop, after the
+  last `ui_flip`, swaps a picture's textures once its five reports came
+  (the check row read back from RSX memory on the first picture and on
+  every 30th), then sends the next: 30 pictures a second. The rain is
+  inside the frame: `gfx_block`, the control block, the mailbox word, the
+  wait for thread 5's report, no gfx call in between. When it is dry the
+  rain runs only while `fx_first` is open: 60 frames of 40 empty splash
+  quads, so the DMA into the vertex area is proven on every start.
+- **`fx_first`** closes when the first sky picture was drawn with its check
+  row equal to the report's sum, and 60 frames of rain ran; `fx_aurora`
+  when the first aurora picture was drawn and checked (once per journal).
+  The exit closes either one that is still open (ok, no freeze), after the
+  start line of the join or the terminate.
+- **RSX only** for the rest of the session (design 6.5): a frozen entry, a
+  failed call, a rain report later than 50 ms, a picture later than 2 s, a
+  check that differs, a refused job, the frame budget's last step. The
+  group is stopped (`fx_terminate`, `fx_join`, `fx_exit_status`,
+  `fx_destroy`, `fx_close`); the background is the gradient, four cloud
+  sprites (a 256 x 128 texture the PPU makes once) and the PPU's rain (300
+  drops: the same `fx_rain_job` with an output that writes the block in
+  32-bit stores, never `memcpy`); the glass is a solid panel; no aurora.
+  The Info page's Effects row says why.
+- **The frame budget** (design 3.13), each 2 s: more than 3 display periods
+  over 20 ms, or a picture whose reports came after the next was due, is a
+  step: 20 pictures a second, 15, the rain at half, no rays or twinkle or
+  hero motion (`fx_reduced`, for stage 9), RSX only. 60 s with no slow
+  period is a step back. The design's step 4 (the glass every 4th picture)
+  is left out: `FX_SKY` writes the glass with every picture, so it would
+  save no SPU time.
+- **The exit** (design 6.4, `leave`): `board_stop`, then `fx_stop` (the
+  exit flag in the six blocks, a mailbox word to each thread whose last
+  report came, up to 1 s for the six exit reports, then `fx_join` and
+  `fx_exit_status`; else `fx_terminate` (a failed one whose job counts still
+  move: stuck, no join, no destroy), then `fx_join`; then `fx_destroy` and
+  `fx_close`), then `net_end`, then `ui_end`. `couch.txt` gets each step,
+  the exit statuses (0x700 to 0x705), and the busy times of the jobs.
+- **The scene** (`fx_tick`, each minute and at each reply): the sun from
+  `geo` (`sun_pos`), the gradient from `sky_colors`, the cover, the wind
+  and the rain from `wx_fx` (`wx_precip`: 300 to 1,500 drops by the code
+  and the hour's mm, 300 flakes), the cloud colours from the sky's. The
+  clouds drift with the wind at 0.15 picture pixels a second per km/h (20
+  km/h: 12 screen pixels a second); the PPU adds the wind times the frame's
+  time to the offset each frame, so a wind change makes no jump.
+
 ## Files in /dev_hdd0/tmp/couch
 
 | File | Written by | Content |
 |---|---|---|
-| `starts.txt`, `journal.txt` | ps3gfx | `start` per start; the journal's `start`, `done`, `froze` and `skip` lines (`net_start`, `tz_params`) |
+| `starts.txt`, `journal.txt` | ps3gfx | `start` per start; the journal's `start`, `done`, `froze` and `skip` lines (`net_start`, `tz_params`; since 0.3.0 the effects' `fx_init`, `fx_import`, `fx_group`, `fx_start`, `fx_first`, `fx_aurora`, `fx_terminate`, `fx_join`, `fx_exit_status`, `fx_destroy`, `fx_close`: 13 names) |
 | `safe_area.txt` | ps3gfx | the visible area, measured at the first start |
 | `gfx_init.txt` | ps3gfx, only when the picture cannot start | the failed step |
 | `board_url.txt` | FTP only, for test rounds | one `http://` line, e.g. `http://192.168.0.3:8787/board`. Absent: `http://couch.daddiego.com.ar/board`. An `https://` URL or a bad line: the default, and the note line says why |
@@ -278,12 +354,16 @@ Couch needs `text_utf8`, `fs_read_line` and `ui_shot`, ps3gfx 6b94bbd or
 later), copies ps3gfx's `OFL.txt` into the pkg, runs `make pkg`, then
 Health's `tools/syscalls.py --allow tools/syscalls.allow` and
 `verify_self.py` (0.2.0 on 2026-10-13: 39 syscalls at 78 call sites, all
-allowed; the EBOOT matches the ELF; no compiler warning). The allowlist has
+allowed; the EBOOT matches the ELF; no compiler warning). The allowlist had
 39 numbers, every `sc` resolved: PS3
 Health's runtime set without its drive, temperature and fan calls (libnet,
 libnetctl, `sysModuleLoad` and `sysUtilGetSystemParamInt` are SPRX
 imports; the exit's `netShutdown`, `netDeinitialize`, `netCtlTerm` and
-`sysModuleUnload` add no number). Out: `couch.gnpdrm.pkg` (about
+`sysModuleUnload` add no number). The effects (stage 8, on ps3gfx 4a9f4d4)
+add the nine SPU numbers of Health and Cell Bench: 165, 169, 170, 171, 172,
+173, 177, 178 and 190 (the image's import and close are SPRX imports): 48
+numbers at 93 call sites, every `sc` resolved. `build.sh` also copies
+ps3gfx's `PHOSPHOR.txt` (the icons' licence) beside `OFL.txt`. Out: `couch.gnpdrm.pkg` (about
 245 KB) and the unstripped `couch.elf`.
 
 `art/make_icon.py <Inter variable TTF>` draws `pkgfiles/ICON0.PNG` (a sofa,
@@ -294,7 +374,8 @@ imports; the exit's `netShutdown`, `netDeinitialize`, `netCtlTerm` and
 
 ```zsh
 zsh tools/preview/build.zsh                 # ps3gfx's preview: build/pv, and build/pv_utf8_off (-DCOUCH_UTF8_OFF)
-zsh tools/preview/run.zsh                   # 32 scenarios at the default visible area (about 90 s: ambient runs 12 min of frames)
+zsh tools/preview/run.zsh                   # 40 scenarios at the default visible area (about 3.5 min: ambient runs 12 min of frames,
+                                            # and the SPU twin makes a sky picture every second frame, 22,000 in ambient)
 AREA=narrow zsh tools/preview/run.zsh       # the same at the narrowest area, 1600 x 900 (snapshots *_narrow; not tv)
 PASSES=2 zsh tools/preview/run.zsh          # twice, and the snapshots that differ
 ```
@@ -335,6 +416,18 @@ a format change in the Worker shows here too.
 `text_utf8` cannot fail at run time in the preview, so `build.zsh` makes a
 second binary with `-DCOUCH_UTF8_OFF` for `utf8_off`.
 
+`tools/preview/pv_fx.c` is the SPU twin of the effects (with
+`stub/sys/spu.h` and `stub/lv2/spu.h`, Cell Bench's): it answers the SPU
+syscalls for one group and runs ps3gfx's own job drivers
+(`<ps3gfx/spu_fx_kern.h>`) inside the mailbox call, so a job's picture or
+quads are there when the word returns and the preview stays deterministic;
+the busy ticks are fixed (sky 1.2 ms, aurora 0.8, rain 0.09). Each SPU call
+but the mailbox words goes to `spu.log` in the sandbox. `PV_SPU_FAIL=<n>`
+fails syscall n, `PV_FX_LATE=sky|aurora|rain` stops the reports of that
+kind from the thread's `PV_FX_LATE_AT`-th job (`start`: thread 2 has no
+start report), `PV_FX_KAT=bad` gives SPU 4 a wrong known-answer word. The
+build adds `-ffp-contract=off`, as ps3gfx's host test of the kernels.
+
 Scenarios: `board_ok` (the clock, both cards, the Info page, back; the
 request line), `board_stale` (the dollar card's foot in YELLOW),
 `board_none` (both upstreams without data), `pages` (R1 to the News and the
@@ -364,13 +457,27 @@ netctl only), `netctl_fail` (the Board runs, the address is not read, no
 ends the recv, the join, `net_end`), `quit_net` (Quit Game during the
 network start: no Board thread, no fetch, `net_end`), `noip`, `nofolder`
 (the app folder is a file: no journal, no counter, no prompt), `auto` (`auto.txt` 60: the shots at 30 and 45 s, the
-exit at 60 s, `couch.txt`), `tv` (Lucas's area, `0 2 1920 1078`). Every text
+exit at 60 s, `couch.txt`), `tv` (Lucas's area, `0 2 1920 1078`); the
+effects: `fx_rain` (WMO 61, 88 %, 20 km/h from the south-east: the slanted
+rain behind the cards; the Info page's Effects row; the exit's reports, the
+join, the statuses), `fx_snow`, `fx_frozen` (`start fx_first` in the
+journal: no SPU call, the sprites and the PPU's rain; SQUARE twice, CIRCLE:
+the SPUs start), `fx_late` (SPU 5 never reports its 30th rain job: the 50
+ms deadline, the terminate, the join, `fx_first` failed, RSX only),
+`fx_late_sky` (the 10th picture never comes: RSX only 2 s later), `fx_kat`,
+`fx_fail` (the group's start fails: the destroy, the close), `fx_exit`
+(START at 0.5 s during a fetch: the Board thread, then the SPUs with
+`fx_first` closed, then `net_end`). Each prints its `effects` lines, the
+journal's `fx_` lines and the SPU calls. Every text
 fits at 1786 and at 1600 wide (at 1600 the News page shows 6 of the 8
-headlines, two of them in two lines). With `PASSES=2`, the 62 snapshots repeat byte
-for byte except, at times, an Info page after a fetch (`board_cut_info` on
-2026-10-13; before, also `board_stale301_info`, `tz_12h_info`,
-`tz_skip_info`): the Board thread runs in host time while the preview's
-clock moves per frame, so a fetch's duration reads 0.00 or 0.02 s.
+headlines, two of them in two lines). With `PASSES=2`, the 73 snapshots repeat byte
+for byte, at both areas (2026-10-13, stage 8). Before, an Info page after a
+fetch could differ at times (`board_cut_info`, `board_stale301_info`,
+`tz_12h_info`, `tz_skip_info`): the Board thread runs in host time while the
+preview's clock moves per frame, so a fetch's duration reads 0.00 or 0.02 s.
+The effects' start does not sleep when the six start reports are in (the
+twin puts them in the start call): a sleep of real time inside a job screen
+draws a varying count of frames, and 22 snapshots differed.
 
 ## The host checks
 
@@ -399,7 +506,8 @@ range); the ages, the error words, `auto.txt`, the end line; the keys of
 dry, `wx_sun` with both times, `wx_moon`; the news lines, at most 8, no
 title skipped, the age or -1, the state, a long title cut whole);
 `net_quality` (slow from 3 s) and the ambient mode's shift (each place of
-the 3 x 3 grid once, 6 px a step) and page; and, in the sanitizer build,
+the 3 x 3 grid once, 6 px a step) and page; `wx_precip` (the effects'
+drops by the code and the hour's mm, the flakes); and, in the sanitizer build,
 20,000 mutated replies with every field inside its buffer. Last,
 `old_check.c` builds Couch 0.1.0's `parse.c` (commit bcf4243, read with
 `git show`) and parses the same reply: within 4 KB, `BP_OK`, every old field.
@@ -487,7 +595,8 @@ Round 3, 0.2.0 (the pkg goes up as `Couch-0.2.0-rcN.pkg`):
 `source/` (`main.c`: the start, the loop, the pages' keys, the unattended
 round, `couch.txt`; `board.c`: the thread, the handoff, the internet's
 state, the Board page; `page.c`: the header, the ambient mode, the News
-page; `http.c`: the network start and the HTTP client; `clock.c`: the
+page, the background; `spu_fx_run.c`: the effects' SPU group and their
+RSX-only fallbacks; `http.c`: the network start and the HTTP client; `clock.c`: the
 settings, the offset, the clock; `info.c`: the Info page; `parse.c`: the
 pure functions, also built by the host check), `tools/preview/`,
 `tools/hostcheck/` (with `old_check.c`, 0.1.0's parser), `tools/syscalls.allow`,

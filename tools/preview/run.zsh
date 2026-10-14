@@ -8,7 +8,8 @@
 #                                             first's: the Board thread runs in host time)
 # Snapshots go to build/out/*.ppm, and *.png when $PYTHON (or python3) has
 # Pillow. The sandbox of each scenario stays in build/sbx/<name>: couch.txt,
-# journal.txt, peer.log (the requests the peer got), the shots of auto.
+# journal.txt, peer.log (the requests the peer got), spu.log (the SPU calls
+# the twin got, pv_fx.c), the shots of auto.
 # The reply files are written here at run time: the sources stay ASCII,
 # the degree sign is the bytes $'\xc2\xb0'.
 P=${0:A:h}
@@ -88,6 +89,10 @@ extras_line() {
     (*) print -r -- "$1";;
     esac
 }
+body_rain() { each rain_line; }   # the design's rainy day: WMO 61, 88 % cover, 1.2 mm, wind 20 km/h from the south-east
+rain_line() { case $1 in wx_fx=*) print -r -- "wx_fx=61|88|1.2|135|20|30";; *) print -r -- "$1";; esac; }
+body_snow() { each snow_line; }   # moderate snow, 90 % cover, wind 10 km/h from the west
+snow_line() { case $1 in wx_fx=*) print -r -- "wx_fx=73|90|0.4|270|10|15";; *) print -r -- "$1";; esac; }
 body_v1() {    # a Worker of 0.1.0's time (the reply of 2026-10-10): no money, no sky, no news
     print -rn -- "couch-board 1
 now=1791614218
@@ -126,6 +131,16 @@ scn() {   # name script [VAR=value ...]; JOURNAL, BODY, URL, AUTO, BIN, SAFE fro
     body_${BODY:-ok} > $sbx/body.txt
     env PV_ROOT=$sbx PV_OUT=$OUT PV_BOARD=$sbx/body.txt PV_SCRIPT="${(j: :)s}" "$@" $P/build/${BIN:-pv} 2>&1 | command grep -v '^snap' | head -5
     print -- "$name: exit ${pipestatus[1]}"
+}
+
+fxends() {   # name: the effects' lines in couch.txt, the fx_ lines of the journal, the SPU calls the twin got
+    local d=$P/build/sbx/$1$SFX
+    local lines=$(command grep -h -e '^effects' -e '^board thread' -e '^net_end' $d/$DIR/couch.txt 2>/dev/null)
+    local j=$(command grep -h ' fx_' $d/$DIR/journal.txt 2>/dev/null)
+    local calls=$(command grep -h '^spu: ' $d/spu.log 2>/dev/null | cut -c6-)
+    print -r -- "  couch.txt: ${(j:; :)${(f)lines}}"
+    print -r -- "  journal: ${(j:; :)${(f)j}}"
+    print -r -- "  spu calls: ${${calls:+${(j:; :)${(f)calls}}}:-none}"
 }
 
 ends() {   # name: the start's and the exit's lines in couch.txt, and the netctl and exit calls the peer saw (its "pv: " lines)
@@ -208,6 +223,33 @@ nofolder|all)      # the app folder cannot be written: no journal (no counter, n
 auto|all)          # auto.txt 60: no prompt (the round is the consent), the shots at 30 and 45 s, the exit at 60 s
     JOURNAL= AUTO=60 scn auto "1810:SNAP=auto_board 2710:SNAP=auto_info 3300:SNAP=auto_back 4000:EXIT"
     print -r -- "  the sandbox: $(cd $P/build/sbx/auto$SFX/$DIR && print -r -- *(N)); auto.txt now: $(< $P/build/sbx/auto$SFX/$DIR/auto.txt)" ;|
+fx_rain|all)       # the effects on a rainy day: the sky, the clouds and the slanted rain behind the cards; the Info page's
+                   # Effects row; the exit: the six exit reports, the join, the exit statuses, the destroy, the close
+    BODY=rain scn fx_rain "120:SNAP=fx_rain 122:SELECT 126:SNAP=fx_rain_info 127:EXIT"
+    fxends fx_rain ;|
+fx_snow|all)       # snow: 300 flakes with the round texture
+    BODY=snow scn fx_snow "120:SNAP=fx_snow 121:EXIT" ;|
+fx_frozen|all)     # fx_first froze the console before: no SPU call at all, RSX only (four cloud sprites, the PPU's 300 drops);
+                   # SELECT, SQUARE twice, CIRCLE: the journal is clear, the Board's opening starts the SPUs
+    JOURNAL=$'start fx_first\n'$TZ_DONE BODY=rain scn fx_frozen "120:SNAP=fx_frozen 122:SELECT 126:SNAP=fx_frozen_info 128:SQUARE 130:SQUARE 134:SNAP=fx_frozen_cleared 136:CIRCLE 300:SNAP=fx_frozen_after 301:EXIT"
+    fxends fx_frozen ;|
+fx_late|all)       # SPU 5 never reports its 30th rain job (inside fx_first): the 50 ms deadline, the terminate and the join,
+                   # fx_first closed as failed, RSX only for the session
+    BODY=rain scn fx_late "120:SNAP=fx_late 122:SELECT 126:SNAP=fx_late_info 127:EXIT" PV_FX_LATE=rain PV_FX_LATE_AT=30
+    fxends fx_late ;|
+fx_late_sky|all)   # the sky's 10th picture never comes: RSX only 2 s after it was sent
+    scn fx_late_sky "200:SNAP=fx_late_sky 201:EXIT" PV_FX_LATE=sky PV_FX_LATE_AT=10
+    fxends fx_late_sky ;|
+fx_kat|all)        # SPU 4's known-answer test is wrong: the group stops before its first job
+    scn fx_kat "120:SNAP=fx_kat 121:EXIT" PV_FX_KAT=bad
+    fxends fx_kat ;|
+fx_fail|all)       # sysSpuThreadGroupStart fails: the destroy, the close, RSX only
+    scn fx_fail "120:EXIT" PV_SPU_FAIL=173
+    fxends fx_fail ;|
+fx_exit|all)       # START in the first half second, the SPUs up and the fetch in recv: the Board thread ends first, then the
+                   # SPUs (fx_first closed at the exit), then the network
+    BODY=rain scn fx_exit "30:START 400:EXIT" PV_BOARD_FAIL=hang
+    fxends fx_exit ;|
 tv|all)            # Lucas's visible area, 0 2 1920 1078 (not in the narrow pass: it sets its own area)
     [[ $AREA != narrow ]] && SAFE='0 2 1920 1078' scn tv "120:SNAP=tv_board 122:SELECT 126:SNAP=tv_info 127:EXIT" ;|
 esac

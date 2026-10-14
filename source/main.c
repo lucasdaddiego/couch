@@ -28,6 +28,7 @@
 #include "info.h"
 #include "page.h"
 #include "parse.h"
+#include "spu_fx_run.h"
 
 #ifndef PS3GFX_COMMIT
 #define PS3GFX_COMMIT "unknown"      /* the preview: the Makefile defines it on the console */
@@ -59,12 +60,17 @@ void couch_log(const char *fmt, ...)
 
 /* Every exit path: START, Quit Game from the PS button menu, and exit().
  * exit() runs this once (atexit), after main returned. The Board thread
- * ends first (its socket shut down, then the join), then the network
- * (net_end), then the picture (ui_end). A Board thread that did not end
- * keeps the network as it is: no net_end under a network call. */
+ * ends first (its socket shut down, then the join), then the SPU group
+ * (fx_stop: the exit reports and the join, or the terminate and the join;
+ * its threads write into textures and the vertex area, so it is down
+ * before ui_end), then the network (net_end), then the picture (ui_end). A
+ * Board thread that did not end keeps the network as it is: no net_end
+ * under a network call. */
 static void leave(void)
 {
-    if (board_stop() == 0) net_end();
+    int board = board_stop();
+    fx_stop();
+    if (board == 0) net_end();
     else couch_log("net_end: not run, the Board thread did not end");
     if (fs_ok) {
         ui_stat s;
@@ -100,8 +106,10 @@ static void log_start(void)
     couch_log("board: %s (%s)%s%s", board_url, board_url_file ? "board_url.txt" : "the default", board_url_note[0] ? ". " : "", board_url_note);
 }
 
-/* The Board opens, at start and after the Info screen: the network start
- * (also after a clear of the journal), the clock's settings, the thread.
+/* The Board opens, at start and after the Info screen: the effects' start
+ * (design 6.3: once, and again after a clear of the journal), the network
+ * start (also after a clear of the journal), the clock's settings, the
+ * thread.
  * -1 for a quit (Quit Game from the PS button menu) and for START at the
  * clock's prompt. The quit is read before the network start and again
  * after it, since the start's job screen draws frames, and each frame reads
@@ -113,6 +121,7 @@ static int board_enter(void)
         couch_log("quit before the Board opened: %s", net_state == NET_UP ? "the network was up" : "no network start");
         return -1;
     }
+    fx_start();                              /* the SPUs behind their job screen, or RSX only */
     if (net_state != NET_UP) {
         int before = net_state;
         net_start(fs_ok);
@@ -227,6 +236,7 @@ int main(void)
             }
         }
         ambient_tick();
+        fx_tick(ambient ? FXM_AURORA : FXM_SKY);   /* after the last ui_flip: a picture's swap, the next picture */
         if (page == PAGE_INFO) info_draw();
         else if (page == PAGE_NEWS) news_draw();
         else board_draw(NULL, 0);

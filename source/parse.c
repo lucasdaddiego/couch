@@ -849,6 +849,22 @@ int wmo_wet(int code)
     return k == WK_RAIN || k == WK_STORM;
 }
 
+int wx_precip(int code, double mm, int *kind)
+{
+    int k = wmo_kind(code), n = 0;
+    *kind = WP_DROPS;
+    if (k == WK_SNOW) {
+        *kind = WP_FLAKES;
+        return 300;
+    }
+    if (code >= 51 && code <= 57) n = 300;
+    else if (code == 61 || code == 66 || code == 80) n = 700;
+    else if (code == 63 || code == 81) n = 1100;
+    else if (code == 65 || code == 67 || code == 82 || k == WK_STORM) n = 1500;
+    int m = !(mm > 0) ? 0 : mm < 0.5 ? 300 : mm < 2.5 ? 700 : mm < 7.6 ? 1100 : 1500;
+    return m > n ? m : n;
+}
+
 int wx_icon(int kind, int is_day)
 {
     switch (kind) {

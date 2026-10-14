@@ -21,6 +21,7 @@ rev=$(sed -n 's/^PS3GFX_REV=\([0-9a-f]*\).*/\1/p' $H/sdk_setup.sh); stamp=$(cat 
   || { print -u2 "ps3gfx in $PS3DEV is ${stamp:-unstamped}, Health's sdk_setup.sh pins $rev: run it, or PS3GFX_DEV=1 to build against the installed one"; exit 1 }
 mkdir -p pkgfiles/USRDIR
 cp $PS3DEV/portlibs/ppu/share/ps3gfx/OFL.txt pkgfiles/USRDIR/OFL.txt   # every pkg on ps3gfx ships the fonts' license
+cp $PS3DEV/portlibs/ppu/share/ps3gfx/PHOSPHOR.txt pkgfiles/USRDIR/PHOSPHOR.txt   # and the icons' (Phosphor, MIT), beside it
 rm -f couch.pkg couch.gnpdrm.pkg
 make pkg
 ${PYTHON:-python3} -I $H/tools/syscalls.py --allow tools/syscalls.allow build/couch.elf

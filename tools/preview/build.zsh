@@ -1,8 +1,11 @@
 #!/bin/zsh
 # Build the host preview through ps3gfx's preview, as Cell Bench's build.zsh:
-# the library's tools/preview/build.zsh compiles this app's source/ and
-# tools/preview/pv_app.c (the Board's HTTP peer, the clock settings) with the
-# library's own sources, against its stub headers. Two binaries:
+# the library's tools/preview/build.zsh compiles this app's source/,
+# tools/preview/pv_app.c (the Board's HTTP peer, the clock settings) and
+# tools/preview/pv_fx.c (the SPU twin of the effects) with the library's own
+# sources, against its stub headers plus this folder's stub/ (sys/spu.h and
+# lv2/spu.h, Cell Bench's), with -ffp-contract=off as ps3gfx's host test of
+# the kernels (a fused multiply-add changes the host's bits). Two binaries:
 #   build/pv           the app
 #   build/pv_utf8_off  the app built with -DCOUCH_UTF8_OFF: text_utf8 is not
 #                      called, as on a console where it failed (the
@@ -22,7 +25,7 @@ head=$(git -C $L rev-parse HEAD 2>/dev/null); head=${head:-unknown}
 set -e
 A=${0:A:h:h:h}
 O=${0:A:h}/build
-INC="-include ${0:A:h}/stub/pv_couch.h"
+INC="-include ${0:A:h}/stub/pv_couch.h -I${0:A:h}/stub -ffp-contract=off"
 PV_CFLAGS="$INC -DCOUCH_UTF8_OFF ${PV_CFLAGS:-}" zsh $L/tools/preview/build.zsh APP=$A > /dev/null
 mv $O/pv $O/pv_utf8_off
 print "built $O/pv_utf8_off"

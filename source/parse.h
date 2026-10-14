@@ -190,6 +190,15 @@ enum { WK_NONE = -1, WK_CLEAR, WK_PARTLY, WK_CLOUD, WK_FOG, WK_RAIN, WK_SNOW, WK
 int wmo_kind(int code);
 /* 1 for rain or a storm (the sky darkens, the hero shows streaks). */
 int wmo_wet(int code);
+/* The rain or the snow of the effects (design 3.5) from the WMO code now and
+ * the precipitation of the last hour (mm, -1 missing): the count of drops
+ * (*kind WP_DROPS) or flakes (WP_FLAKES), 0 when dry. A snow code gives 300
+ * flakes. Drops: the larger of the code's count (drizzle 51 to 57: 300;
+ * slight rain 61, 66, 80: 700; moderate 63, 81: 1,100; heavy 65, 67, 82
+ * and a storm 95 to 99: 1,500) and the hour's (under 0.5 mm: 300, from 0.5:
+ * 700, from 2.5: 1,100, from 7.6: 1,500; 0 or missing: 0). */
+enum { WP_DROPS, WP_FLAKES };
+int wx_precip(int code, double mm, int *kind);
 /* The icon of a kind by day or night, as Couch's own ids (the drawing maps
  * them to ps3gfx's IC_ ids): WI_NONE for WK_NONE. */
 enum { WI_NONE = -1, WI_SUN, WI_MOON_STARS, WI_CLOUD_SUN, WI_CLOUD_MOON, WI_CLOUD, WI_CLOUD_FOG, WI_CLOUD_RAIN, WI_CLOUD_SNOW,

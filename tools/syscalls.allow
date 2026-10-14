@@ -15,13 +15,29 @@
 # fix of 2026-10-11 (board_stop shuts the socket down and joins with no wait
 # loop, so nap() went; net_end) keeps these 39 numbers at 78 call sites,
 # every sc resolved: netShutdown, netCtlTerm, netDeinitialize and
-# sysModuleUnload add no number. Never 602, 604 or 870: the script refuses
-# them whatever this file says.
+# sysModuleUnload add no number. On 2026-10-13 (Couch 0.3.0, stage 8 of
+# the revamp design: the effects' SPU group, source/spu_fx_run.c) the nine
+# SPU numbers of PS3 Health and Cell Bench came in, each looked at in the
+# audit's list: 165 (a thread's exit status), 169 (sysSpuInitialize), 170
+# (the group's create), 171 (its destroy), 172 (a thread's initialize), 173
+# (the group's start), 177 (its terminate), 178 (its join) and 190 (a
+# mailbox word): 48 numbers at 93 call sites, every sc resolved. The
+# image's import and close are SPRX imports (no number). Never 602, 604 or
+# 870: the script refuses them whatever this file says.
 44
 141
 142
 145
 146
+165
+169
+170
+171
+172
+173
+177
+178
+190
 330
 331
 337

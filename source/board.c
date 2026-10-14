@@ -17,6 +17,7 @@
 #include "clock.h"
 #include "http.h"
 #include "page.h"
+#include "spu_fx_run.h"
 
 #define PERIOD_US 300000000LL        /* a fetch every 5 min */
 #define RETRY_US 60000000LL          /* 60 s after a failure */
@@ -238,15 +239,16 @@ void board_take(void)
         logged++;
         char t[24];
         clock_words(t, sizeof t, board_last_utc, 1);
-        char cn[24] = "no connection";
+        char cn[24] = "no connection", fx[96];
         if (r->connect_us >= 0) snprintf(cn, sizeof cn, "connect %.2f s", (double)r->connect_us / 1e6);
+        fx_log_words(fx, sizeof fx);         /* the last job serials: a freeze hours in leaves a trace (design 8.2, risk 6) */
         if (board_last_ok)
-            couch_log("fetch %d at %s (%.1f s): %.2f s (%s), HTTP %d, %d bytes: ok, now %ld, offset %d, console - Worker %+ld s, %d news",
+            couch_log("fetch %d at %s (%.1f s): %.2f s (%s), HTTP %d, %d bytes: ok, now %ld, offset %d, console - Worker %+ld s, %d news%s",
                       board_fetches, t, (double)(slot.at - t_start) / 1e6, (double)slot.us / 1e6, cn, r->http, r->len, tmp.now, tmp.offset,
-                      board_skew, tmp.n_news);
+                      board_skew, tmp.n_news, fx);
         else
-            couch_log("fetch %d at %s (%.1f s): %.2f s (%s), HTTP %d, %d bytes: %s", board_fetches, t, (double)(slot.at - t_start) / 1e6,
-                      (double)slot.us / 1e6, cn, r->http, r->len, board_last_words);
+            couch_log("fetch %d at %s (%.1f s): %.2f s (%s), HTTP %d, %d bytes: %s%s", board_fetches, t, (double)(slot.at - t_start) / 1e6,
+                      (double)slot.us / 1e6, cn, r->http, r->len, board_last_words, fx);
     }
     __sync_synchronize();
     ready = 0;
