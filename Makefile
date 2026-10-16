@@ -29,6 +29,10 @@ CFLAGS		+=	-DPS3GFX_COMMIT=\"$(shell sed 's/^\([0-9a-f]\{12\}\)[0-9a-f]*/\1/;q' 
 CXXFLAGS	=	$(CFLAGS)
 LDFLAGS		=	$(MACHDEP) -Wl,-Map,$(notdir $@).map
 
+# qrcodegen's asserts would put this folder's path into the ELF (__FILE__;
+# gcc 7.2 has no -fmacro-prefix-map): its object is built without them
+qrcodegen.o: CFLAGS += -DNDEBUG
+
 # ps3gfx first: GNU ld resolves left to right
 LIBS	:=	-lps3gfx -lgcm_sys -lio -lm -lsysutil -lnet -lnetctl -lsysmodule
 LIBDIRS	:=	$(PSL1GHT)/portlibs/ppu
