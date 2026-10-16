@@ -1252,7 +1252,7 @@ test('handle: the vars of wrangler.jsonc on a cold cache: 19 fetches, 47 of the 
   const answers = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData }, 'ssl.smn.gob.ar': { body: zipBytes },
     ...dayRoutes('2026-10-13'), ...seriesRoutes, 'www.ambito.com': { body: mix.ambito }, 'www.clarin.com/rss/politica/': { body: mix.clarinPol },
     'www.clarin.com/rss/mundo/': { body: mix.clarinMundo }, 'feeds.bbci.co.uk': { body: mix.bbc },
-    'api.argentinadatos.com/v1/feriados/2026': { body: [{ fecha: '2026-11-23', tipo: 'trasladable', nombre: 'Soberan\u00eda nacional' }] } };
+    [`${HOL}/holidays-2026-es.json`]: { body: hol26 } };
   const d = deps({ answers, now: MIX_NOW });
   const body = await (await handle(new Request('http://couch.test/board'), e, d)).text();
   await Promise.all(d.waits);
@@ -1270,33 +1270,42 @@ test('handle: the vars of wrangler.jsonc on a cold cache: 19 fetches, 47 of the 
   assert.deepEqual([w.calls.length, w.cache.ops - 28], [0, 14]);
 });
 
-// The holidays (2026-10-16): the next one from the list, the next year's list after the last one
-const HOL = 'api.argentinadatos.com/v1/feriados';
-const hol26 = [{ fecha: '2026-10-12', tipo: 'trasladable', nombre: 'Diversidad cultural' },
-  { fecha: '2026-11-23', tipo: 'trasladable', nombre: 'Soberanía nacional' },
-  { fecha: '2026-12-08', tipo: 'inamovible', nombre: 'Inmaculada Concepción' },
-  { fecha: '2026-12-25', tipo: 'inamovible', nombre: 'Navidad' }, { fecha: 'x', nombre: 'bad' }];
-const hol27 = [{ fecha: '2027-01-01', tipo: 'inamovible', nombre: 'Año nuevo' }];
+// The holidays (2026-10-16): the next one from the official list, the next year's after the last one
+const HOL = 'www.argentina.gob.ar/sites/default/files';
+const gob = (rows) => ({ mainEntity: { itemListElement: rows.map(([d, n, t], i) => ({
+  item: { name: n, additionalProperty: { name: 'tipo', value: t }, '@type': 'Event', startDate: d }, '@type': 'ListItem', position: i + 1 })) } });
+const hol26 = gob([['2026-12-25', 'Navidad', 'inamovible'], ['2026-10-12', 'Día de la  Raza', 'trasladable'],
+  ['2026-11-09', 'Visita de Su Santidad el Papa León XIV', 'inamovible'],
+  ['2026-11-10', 'Visita (<a href="/normativa">feriado en Córdoba</a>)', 'especial'], ['2026-11-01', 'Una fe', 'no_laborable'],
+  ['2026-11-23', 'Día de la Soberanía Nacional', 'trasladable'], ['2026-12-07', 'Día no laborable con fines turísticos', 'turistico'], ['x', 'bad', 'inamovible']]);
+const hol27 = gob([['2027-01-01', 'Año Nuevo', 'inamovible']]);
 
 test('holidayLine: the next holiday and its days; today is 0; none after the list ends', () => {
-  const l = { data: hol26.slice(0, 4) };
-  assert.equal(holidayLine(l, JUN_NOW, 'America/Argentina/Buenos_Aires'), 'holiday=2026-11-23|Soberanía nacional|41');
+  const l = { data: [{ fecha: '2026-11-09', nombre: 'Visita' }, { fecha: '2026-11-23', nombre: 'Soberanía' }] };
+  assert.equal(holidayLine(l, JUN_NOW, 'America/Argentina/Buenos_Aires'), 'holiday=2026-11-09|Visita|27');
   assert.equal(holidayLine({ data: [{ fecha: '2026-10-13', nombre: 'Hoy | test' }] }, JUN_NOW, 'America/Argentina/Buenos_Aires'), 'holiday=2026-10-13|Hoy test|0');
   assert.equal(holidayLine({ data: [{ fecha: '2026-10-12', nombre: 'Ayer' }] }, JUN_NOW, 'America/Argentina/Buenos_Aires'), null);
   assert.equal(holidayLine({ state: 'none', data: null }, JUN_NOW, 'America/Argentina/Buenos_Aires'), null);
 });
 
-test('get hol: one fetch of the year, sorted and valid entries; the next year only after the last holiday', async () => {
-  const d = deps({ answers: { [`${HOL}/2026`]: { body: hol26 }, [`${HOL}/2027`]: { body: hol27 } }, now: JUN_NOW });
+test('get hol: the official list of the year, national types only, sorted, no tags; the next year after the last holiday', async () => {
+  const d = deps({ answers: { [`${HOL}/holidays-2026-es.json`]: { body: hol26 }, [`${HOL}/holidays-2027-es.json`]: { body: hol27 } }, now: JUN_NOW });
   const r = await get('hol', junEnv, JUN_NOW, d);
   assert.equal(r.state, 'ok');
-  assert.deepEqual(d.calls.map((u) => new URL(u).pathname), ['/v1/feriados/2026']);
-  assert.deepEqual(r.data.map((x) => x.fecha), ['2026-10-12', '2026-11-23', '2026-12-08', '2026-12-25']);
+  assert.deepEqual(d.calls, ['https://www.argentina.gob.ar/sites/default/files/holidays-2026-es.json']);
+  assert.deepEqual(r.data, [{ fecha: '2026-10-12', nombre: 'Día de la Raza' }, { fecha: '2026-11-09', nombre: 'Visita de Su Santidad el Papa León XIV' },
+    { fecha: '2026-11-23', nombre: 'Día de la Soberanía Nacional' }, { fecha: '2026-12-07', nombre: 'Día no laborable con fines turísticos' },
+    { fecha: '2026-12-25', nombre: 'Navidad' }]);
+  assert.equal(holidayLine(r, JUN_NOW, 'America/Argentina/Buenos_Aires'), 'holiday=2026-11-09|Visita de Su Santidad el Papa León XIV|27');
   const late = 1798416000;   // 2026-12-27 12:00 UTC: no 2026 holiday left
-  const d2 = deps({ answers: { [`${HOL}/2026`]: { body: hol26 }, [`${HOL}/2027`]: { body: hol27 } }, now: late });
+  const d2 = deps({ answers: { [`${HOL}/holidays-2026-es.json`]: { body: hol26 }, [`${HOL}/holidays-2027-es.json`]: { body: hol27 } }, now: late });
   const r2 = await get('hol', junEnv, late, d2);
   assert.equal(d2.calls.length, 2);
-  assert.equal(holidayLine(r2, late, 'America/Argentina/Buenos_Aires'), 'holiday=2027-01-01|Año nuevo|5');
-  const bad = await get('hol', junEnv, JUN_NOW, deps({ answers: { [`${HOL}/2026`]: { status: 500, body: 'x' } }, now: JUN_NOW }));
-  assert.deepEqual([bad.state, bad.reason], ['none', 'argentinadatos.com: HTTP 500']);
+  assert.equal(holidayLine(r2, late, 'America/Argentina/Buenos_Aires'), 'holiday=2027-01-01|Año Nuevo|5');
+  // next year's list not published: this year's list, no line
+  const d3 = deps({ answers: { [`${HOL}/holidays-2026-es.json`]: { body: hol26 }, [`${HOL}/holidays-2027-es.json`]: { status: 404, body: 'x' } }, now: late });
+  const r3 = await get('hol', junEnv, late, d3);
+  assert.deepEqual([r3.state, holidayLine(r3, late, 'America/Argentina/Buenos_Aires')], ['ok', null]);
+  const bad = await get('hol', junEnv, JUN_NOW, deps({ answers: { [`${HOL}/holidays-2026-es.json`]: { status: 500, body: 'x' } }, now: JUN_NOW }));
+  assert.deepEqual([bad.state, bad.reason], ['none', 'argentina.gob.ar: HTTP 500']);
 });

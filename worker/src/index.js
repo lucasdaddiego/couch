@@ -137,26 +137,34 @@ async function loadCloses(env, now, deps) {
   return { data: { day: addDays(stamp, -1), rates, missing }, bad: (got.find((g) => g.bad) || {}).bad || 'no rate in CASAS' };
 }
 
-// The national holidays (since 2026-10-16): argentinadatos.com's list of the local year (2 KB,
-// {fecha, tipo, nombre}), and the next year's too when none of this year is left (from the last
-// one, 25 December, to the year's end), cached as one entry under the year: {data: [{fecha,
-// nombre}]} sorted, the valid entries only.
+// The national holidays (since 2026-10-16): the official list of argentina.gob.ar/feriados, the
+// JSON its page loads (22 KB, schema.org: mainEntity.itemListElement[].item {name, startDate,
+// additionalProperty {name: tipo, value}}), of the local year, and the next year's too when none
+// of this year is left (a 404 until the government publishes it). Kept: the national types
+// (inamovible, trasladable, turistico); left out: no_laborable (for some faiths only) and
+// especial (one province or city). Cached as one entry under the year: {data: [{fecha, nombre}]}
+// sorted, the name without tags.
 export const HOL_TTL = 86400;
-const ADH = 'https://api.argentinadatos.com/v1/feriados';
+export const HOL_TYPES = ['inamovible', 'trasladable', 'turistico'];
+const GOBH = (y) => `https://www.argentina.gob.ar/sites/default/files/holidays-${y}-es.json`;
 async function loadHolidays(env, now, deps) {
   const today = localDate(now, env.TZ || 'UTC'), year = Number(today.slice(0, 4));
   const list = [];
   for (const y of [year, year + 1]) {
-    const r = await deps.fetch(`${ADH}/${y}`, fetchOpts());
+    const r = await deps.fetch(GOBH(y), fetchOpts());
     if (!r.ok) {
       if (r.body) r.body.cancel().catch(() => {});
+      if (y > year && r.status === 404) break;            // next year's list not out yet
       return { data: null, bad: `HTTP ${r.status}` };
     }
     const { data } = await readJson(r);
-    if (!Array.isArray(data)) return { data: null, bad: 'bad JSON' };
-    for (const x of data) {
-      if (x && typeof x === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String(x.fecha)) && clean(x.nombre)) {
-        list.push({ fecha: String(x.fecha), nombre: clean(x.nombre).slice(0, 80) });
+    const items = data && data.mainEntity && data.mainEntity.itemListElement;
+    if (!Array.isArray(items)) return { data: null, bad: 'bad JSON' };
+    for (const { item: x } of items.filter((e) => e && typeof e === 'object')) {
+      const tipo = x && x.additionalProperty && x.additionalProperty.value;
+      const name = x && clean(String(x.name ?? '').replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ');
+      if (x && HOL_TYPES.includes(tipo) && /^\d{4}-\d{2}-\d{2}$/.test(String(x.startDate)) && name) {
+        list.push({ fecha: String(x.startDate), nombre: name.slice(0, 80) });
       }
     }
     if (list.some((h) => h.fecha >= today)) break;
@@ -242,8 +250,8 @@ export const UPSTREAMS = {
     valid: series(25, 3),
   },
   hol: {
-    host: 'argentinadatos.com',
-    key: (env, now) => `https://couch.internal/hol?y=${localDate(now, env.TZ || 'UTC').slice(0, 4)}`,
+    host: 'argentina.gob.ar',
+    key: (env, now) => `https://couch.internal/hol2?y=${localDate(now, env.TZ || 'UTC').slice(0, 4)}`,
     ttl: () => HOL_TTL,
     load: loadHolidays,
     valid: (d) => Array.isArray(d) && d.length > 0,

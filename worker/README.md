@@ -176,10 +176,13 @@ text with a sign.
   (before 21:00 ART), the entry dated today holds today's close in the evening: that evening's
   chips show flat. Blue takes its close from the same fetch (one fetch more than the design: the
   series is cached 6 h and can lack today's entry).
-- `holiday=2026-11-23|Soberanía nacional|38` (since 2026-10-16): the next national holiday on or
-  after the local date, its name and the days to it (0: today). The list is argentinadatos.com's
-  `/v1/feriados/<year>` (2 KB), cached a day under the year (`https://couch.internal/hol?y=`),
-  with the next year's list too once none of this year is left; none with 6 feeds (below).
+- `holiday=2026-11-09|Visita de Su Santidad el Papa León XIV|25` (since 2026-10-16): the next
+  national holiday on or after the local date, its name and the days to it (0: today). The list
+  is the official one of argentina.gob.ar/feriados, the JSON its page loads
+  (`/sites/default/files/holidays-<year>-es.json`, 22 KB): the types inamovible, trasladable and
+  turistico (no_laborable is for some faiths only, especial for one province or city), cached a
+  day under the year (`https://couch.internal/hol2?y=`), with the next year's list too once none
+  of this year is left (a 404 until it is published: no line then); none with 6 feeds (below).
 - `money_chg=Riesgo país|flat|0,0%|0|9 Oct`: riesgo pais against the entry of its list before the
   current value's date (the list has no weekend or holiday entries: a Monday compares with
   Friday), whole points. The list is `/v1/finanzas/indices/riesgo-pais` (413 KB, 7,721 entries),
