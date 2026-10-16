@@ -289,8 +289,12 @@ int net_quality(int answered, long long total_us);
  * of AMBIENT_SHIFTS offsets (at most AMBIENT_PX pixels from its place) and
  * the page changes between the Board and the News. step counts the steps
  * since the mode began (0 at its start). */
+#ifndef AMBIENT_SEC                  /* the preview's build sets 60 and 120 (tools/preview/build.zsh) */
 #define AMBIENT_SEC 600
+#endif
+#ifndef AMBIENT_READ_SEC
 #define AMBIENT_READ_SEC 1200        /* 0.3.1: while an article is open (reader.h), 20 min */
+#endif
 #define AMBIENT_STEP_SEC 60
 #define AMBIENT_PX 6
 #define AMBIENT_SHIFTS 9

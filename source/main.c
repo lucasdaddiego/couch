@@ -3,7 +3,8 @@
  * weather with the rain, the sun and the moon, and the news, from the Worker
  * at couch.daddiego.com.ar (design: ~/.claude/plans/2026-10-10-couch-design.md,
  * cut to the Board on 2026-10-10). Three pages: the Board, the News, the
- * Info screen; L1 and R1 move between them, SELECT opens the Info page.
+ * Info screen; L1 and R1 move between the Board and the News, SELECT opens
+ * the Info page and CIRCLE closes it.
  * The News page is a reader since 0.3.1 (reader.h): the list of 30
  * headlines, an article and its QR code. After 10 min with no button (20
  * with an article open) the ambient mode shows the aurora (page.c).
@@ -386,9 +387,9 @@ int main(void)
             start_end(SS_FETCH);
             start_log_late();
         }
-        if (pressed & (BTN_L1 | BTN_R1)) {
+        if ((pressed & (BTN_L1 | BTN_R1)) && page < PAGE_CYCLE) {
             int r = pressed & BTN_R1 ? 1 : -1;
-            if (go((page + (r > 0 ? 1 : PAGE_N - 1)) % PAGE_N, r) < 0) break;
+            if (go((page + (r > 0 ? 1 : PAGE_CYCLE - 1)) % PAGE_CYCLE, r) < 0) break;
         } else if (page == PAGE_INFO) {
             if (lv == 0) {                   /* CIRCLE: back to the Board */
                 if (go(PAGE_BOARD, -1) < 0) break;

@@ -3,6 +3,8 @@
 #   zsh tools/preview/run.zsh [scenario]     (default: all; names in the case below)
 #   AREA=narrow zsh tools/preview/run.zsh    (every scenario at the narrowest visible area, 1600 x 900,
 #                                             snapshots named *_narrow)
+#   NJOBS=4 zsh tools/preview/run.zsh        (all: each scenario in its own process, NJOBS at a time,
+#                                             by default the cores; the outputs in the case's order)
 #   PASSES=2 zsh tools/preview/run.zsh       (twice, the second into an emptied build/out2, and the
 #                                             snapshots of the second pass that differ from the
 #                                             first's: the Board thread runs in host time)
@@ -39,7 +41,7 @@ URL_LAN=http://192.168.0.3:8787/board                 # a dotted address: the fa
 # others derived from it line by line, so this file stays ASCII.
 REPLY=$P/build/worker_reply.txt
 mkdir -p $P/build
-${PYTHON:-python3} -I - ${P:h:h}/worker/test/board.test.js $REPLY <<'PY' || { print -u2 "the Worker test's reply: not found"; exit 1 }
+[[ -n $PV_CHILD ]] || ${PYTHON:-python3} -I - ${P:h:h}/worker/test/board.test.js $REPLY <<'PY' || { print -u2 "the Worker test's reply: not found"; exit 1 }
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 m = re.search(r"assert\.equal\(t, \[(.*?)\]\.join\('\\n'\)\);", src, re.S)
@@ -50,7 +52,7 @@ open(sys.argv[2], 'w', encoding='utf-8', newline='').write('\n'.join(items))
 PY
 FIX=$P/build/fixtures
 mkdir -p $FIX/articles
-${PYTHON:-python3} -I - $P/fixtures $FIX <<'PY' || { print -u2 "the reader's fixtures: not decoded"; exit 1 }
+[[ -n $PV_CHILD ]] || ${PYTHON:-python3} -I - $P/fixtures $FIX <<'PY' || { print -u2 "the reader's fixtures: not decoded"; exit 1 }
 import codecs, glob, os, sys
 src, out = sys.argv[1], sys.argv[2]
 for p in sorted(glob.glob(os.path.join(src, '*.esc'))):
@@ -260,6 +262,17 @@ ends() {   # name: the start's and the exit's lines in couch.txt, and the netctl
     print -r -- "  net calls: ${(j:; :)${(f)calls}}"
 }
 
+# all: one process per scenario (PV_CHILD: the replies and fixtures above are the parent's), NJOBS at a time
+if [[ ${1:-all} == all && -z $PV_CHILD ]]; then
+    names=(${(f)"$(command grep -oE '^[a-z0-9_]+[|]all[)]' $0 | cut -d'|' -f1)"})
+    order=($names) names=(${(M)names:#*ambient*} ${names:#*ambient*})   # the long ones (8,000 to 11,000 frames) first: the wall time is the longest
+    logs=$P/build/logs$SFX
+    rm -rf $logs && mkdir -p $logs
+    print -l -- $names | xargs -P ${NJOBS:-$(sysctl -n hw.ncpu)} -I{} \
+        env PV_CHILD=1 OUT=$OUT zsh -c 'zsh "$0" "$1" > "$2/$1.log" 2>&1' ${0:A} {} $logs
+    for n in $order; do cat $logs/$n.log; done
+    set -- none                              # the case below: no branch
+fi
 case ${1:-all} in
 board_ok|all)      # the reply of the Worker test: the clock, both cards; the Info screen; back
     scn board_ok "120:SNAP=board_ok 122:SELECT 150:SNAP=info 152:CIRCLE 180:SNAP=board_back 181:EXIT"
@@ -269,8 +282,9 @@ board_stale|all)   # the dollar upstream failed, the Worker kept its old rates: 
     BODY=stale scn board_stale "120:SNAP=board_stale 121:EXIT" ;|
 board_none|all)    # both upstreams failed with no old data
     BODY=none scn board_none "120:SNAP=board_none 121:EXIT" ;|
-pages|all)         # L1 and R1: the Board, the News, the Info page, R1 wraps to the Board, L1 back to the Info page
-    scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_info 182:R1 210:SNAP=pages_back 212:L1 240:SNAP=pages_l1 241:EXIT" ;|
+pages|all)         # L1 and R1 cycle the Board and the News (0.3.1): R1 to the News, R1 wraps to the Board, L1 to the News;
+                   # SELECT opens the Info page, R1 there does nothing, CIRCLE goes back to the Board
+    scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_back 182:L1 210:SNAP=pages_l1 212:SELECT 240:SNAP=pages_info 242:R1 270:SNAP=pages_info_r1 272:CIRCLE 300:SNAP=pages_circle 301:EXIT" ;|
 board_extras|all)  # the money extras none and stale, a dry forecast, the feeds failed: the News page says why
     NEWS=none BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 150:SNAP=news_none 151:EXIT" ;|
 board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines, no /news (the new Couch draws what came)
@@ -279,10 +293,10 @@ net_slow|all)      # the answer takes 4 s: the header says the internet is slow
     scn net_slow "400:SNAP=net_slow 402:SELECT 430:SNAP=net_slow_info 431:EXIT" PV_BOARD_FAIL=slow ;|
 net_down|all)      # a good reply, then SQUARE after 10 s and a refused connect: no internet since 09:00
     scn net_down "120:SNAP=net_down_first 700:SQUARE 820:SNAP=net_down 822:SELECT 850:SNAP=net_down_info 851:EXIT" PV_BOARD_FAIL=ok,refused ;|
-ambient|all)       # 10 min with no button: the aurora with the clock, the date and the weather's line (0.3.0); a
+ambient|all)       # 10 min with no button (1 min in the preview's build): the aurora with the clock, the date and the weather's line (0.3.0); a
                    # minute on, the block glided to its next place with Blue's price; then the newest headline;
-                   # START wakes the screen (the Board) and does not exit; the fetches go on every 5 min
-    scn ambient "120:SNAP=ambient_before 36120:SNAP=ambient 39720:SNAP=ambient_news 43320:SNAP=ambient_board2 43340:START 43360:SNAP=ambient_awake 43370:EXIT" PV_MAXFRAMES=44000
+                   # START wakes the screen (the Board) and does not exit; the fetches go on (every 5 min: 3 min of frames, one)
+    scn ambient "120:SNAP=ambient_before 3720:SNAP=ambient 7320:SNAP=ambient_news 10920:SNAP=ambient_board2 10940:START 10960:SNAP=ambient_awake 10970:EXIT" PV_MAXFRAMES=11000
     print -r -- "  requests: $(command grep -c '^GET' $P/build/sbx/ambient$SFX/peer.log); couch.txt: $(command grep -h '^ambient' $P/build/sbx/ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 board_smn|all)     # Junin, the now line from SMN: the weather card's foot names both sources; the same folded to ASCII
     BODY=smn scn board_smn "120:SNAP=board_smn 121:EXIT"
@@ -379,9 +393,9 @@ board_old|all)     # a Worker of 0.2.0's time (no geo, wx_fx, wx_hours, days_fx,
 board_fxoff|all)   # the effects off (fx_first froze before: RSX only): solid panels, the sprites, the PPU's rain; the glow too
     JOURNAL=$'start fx_first\n'$TZ_DONE BODY=dayrain_before BODY2=dayrain scn board_fxoff "120:SNAP=board_fxoff_first 700:SQUARE 1150:SNAP=board_fxoff 1151:EXIT" ;|
 tv|all)            # Lucas's visible area, 0 2 1920 1078 (not in the narrow pass: it sets its own area)
-    [[ $AREA != narrow ]] && SAFE='0 2 1920 1078' scn tv "120:SNAP=tv_board 122:R1 150:SNAP=tv_news 152:R1 180:SNAP=tv_info 181:EXIT" ;|
+    [[ $AREA != narrow ]] && SAFE='0 2 1920 1078' scn tv "120:SNAP=tv_board 122:R1 150:SNAP=tv_news 152:SELECT 180:SNAP=tv_info 181:EXIT" ;|
 ambient_rsx|all)   # the ambient mode in RSX-only mode (fx_first froze before): 0.2.0's dimmed page, 6 px moves, the page each minute
-    JOURNAL=$'start fx_first\n'$TZ_DONE scn ambient_rsx "36120:SNAP=ambient_rsx 39720:SNAP=ambient_rsx_news 39730:EXIT" PV_MAXFRAMES=40000 ;|
+    JOURNAL=$'start fx_first\n'$TZ_DONE scn ambient_rsx "3720:SNAP=ambient_rsx 7320:SNAP=ambient_rsx_news 7330:EXIT" PV_MAXFRAMES=8000 ;|
 start|all)         # the start (0.3.0): the loading screen from the first frame after ui_init (frame 3: the icons'
                    # step), during the effects' job (its counter), the start animation half way, then the Board;
                    # couch.txt's start times and boot.txt's marks
@@ -408,11 +422,12 @@ reader_states|all) # the article's other forms, each one line: the feed's summar
 reader_first|all)  # the list's first 4 s (a slow /news): the Board's 8 headlines fill the page; CROSS says they open once the list is in;
                    # then the list
     scn reader_first "120:R1 160:SNAP=news_first 162:CROSS 170:SNAP=news_first_cross 440:SNAP=news_first_full 441:EXIT" PV_NEWS_FAIL=slow ;|
-reader_ambient|all) # an open article holds the ambient mode off for 20 min (10 without one): at 11 min still the article, at 21 min the
-                   # aurora; no list request while the article is open (not in the narrow pass: 76,000 frames, 6 min)
-    [[ $AREA != narrow ]] && scn reader_ambient "120:R1 160:DOWN 166:CROSS 39720:SNAP=reader_noambient 75720:SNAP=reader_ambient 75721:EXIT" PV_MAXFRAMES=76000
+reader_ambient|all) # an open article holds the ambient mode off for 20 min (10 without one; the preview's build: 2 and 1): at 92 s
+                   # still the article, at 182 s the aurora; no list request while the article is open (not in the narrow pass)
+    [[ $AREA != narrow ]] && scn reader_ambient "120:R1 160:DOWN 166:CROSS 5520:SNAP=reader_noambient 10920:SNAP=reader_ambient 10921:EXIT" PV_MAXFRAMES=11000
     [[ $AREA != narrow ]] && print -r -- "  requests: $(command grep -c '^GET /news' $P/build/sbx/reader_ambient$SFX/peer.log) of /news, $(command grep -c '^GET /board' $P/build/sbx/reader_ambient$SFX/peer.log) of /board; couch.txt: $(command grep -h '^ambient' $P/build/sbx/reader_ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 esac
+[[ -n $PV_CHILD ]] && exit 0                 # the PNGs: the parent's, once
 py=${PYTHON:-python3}
 $py -I - $OUT <<'PY' 2>/dev/null || print "no Pillow: the snapshots stay .ppm"
 import glob, os, sys

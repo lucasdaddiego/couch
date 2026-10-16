@@ -15,6 +15,7 @@
 #include <ppu-types.h>
 
 enum { PAGE_BOARD, PAGE_NEWS, PAGE_INFO, PAGE_N };
+#define PAGE_CYCLE 2                 /* L1/R1 cycle the Board and the News; SELECT opens the Info page */
 extern int page;                     /* the page on the TV (during a slide: the page that comes in) */
 extern const char *const page_name[PAGE_N];
 

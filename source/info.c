@@ -210,7 +210,7 @@ void info_body(void)
 
 void info_bar(float y)
 {
-    const char *hints = fs_ok ? "SQUARE twice clear journal  L1/R1 pages  CIRCLE back  START exit" : "L1/R1 pages  CIRCLE back  START exit";
+    const char *hints = fs_ok ? "SQUARE twice clear journal  CIRCLE back  START exit" : "CIRCLE back  START exit";
     if (armed == BTN_SQUARE) bar_draw(y, "Press SQUARE again to clear the freeze journal. Any other button cancels.", YELLOW, NULL, hints);
     else if (msg[0]) bar_draw(y, msg, msg_color, NULL, hints);
     else bar_draw(y, fs_ok ? "Each start appends to couch.txt in " APP_DIR "." : "The app cannot write " APP_DIR ": no journal and no couch.txt.",

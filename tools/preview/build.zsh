@@ -25,7 +25,9 @@ head=$(git -C $L rev-parse HEAD 2>/dev/null); head=${head:-unknown}
 set -e
 A=${0:A:h:h:h}
 O=${0:A:h}/build
-INC="-include ${0:A:h}/stub/pv_couch.h -I${0:A:h}/stub -ffp-contract=off"
+# The ambient mode after 60 s (120 with an article open), not 600 (1200): its scenarios run 11,000
+# frames, not 76,000 (the SPU twin makes a sky picture every frame).
+INC="-include ${0:A:h}/stub/pv_couch.h -I${0:A:h}/stub -ffp-contract=off -DAMBIENT_SEC=60 -DAMBIENT_READ_SEC=120"
 PV_CFLAGS="$INC -DCOUCH_UTF8_OFF ${PV_CFLAGS:-}" zsh $L/tools/preview/build.zsh APP=$A > /dev/null
 mv $O/pv $O/pv_utf8_off
 print "built $O/pv_utf8_off"

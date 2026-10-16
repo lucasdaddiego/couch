@@ -1,5 +1,5 @@
 /* Couch's pages (page.h): the frame every page shares, the header with the
- * flip clock, the slides, the ambient mode, the bottom bar. The News page
+ * clock, the slides, the ambient mode, the bottom bar. The News page
  * is reader.c's since 0.3.1. Every motion is a whole pixel before a text,
  * digits or S/M icon call (design 1.12), except the icons that move
  * (icon_rot binds them bilinear), the ticker's text (marquee.c) and the
@@ -31,7 +31,6 @@
 #define DOT_R 7
 #define DOT_STEP 24
 #define SLIDE_S 0.28                 /* a page's slide (design 3.8) */
-#define FLIP_S 0.30                  /* a digit's flip (design 3.10) */
 #define PI_F 3.14159265f
 
 int page = PAGE_BOARD;
@@ -156,7 +155,7 @@ void bar_draw(float y, const char *left, u32 color, const char *note, const char
     if (note && note[0] && room - (xe - MG) > 200) text_fit(xe + 16, y + 8, F_SMALL, YELLOW, room - (xe - MG) - 16, "%s", note);
 }
 
-/* ---- the header: the flip clock ---------------------------------------------------- */
+/* ---- the header: the clock ---------------------------------------------------- */
 
 /* The internet's dot colour and words, from the Board thread's last fetches. */
 static u32 net_words(char *buf, int n)
@@ -186,9 +185,9 @@ static u32 net_words(char *buf, int n)
 static float header_right(float y)
 {
     char net[64];
-    float r = SW - MG, dots = PAGE_N * DOT_STEP - (DOT_STEP - 2 * DOT_R);
+    float r = SW - MG, dots = PAGE_CYCLE * DOT_STEP - (DOT_STEP - 2 * DOT_R);
     float y1 = y, y2 = y + (float)line_h(F_MED) + 8;
-    for (int i = 0; i < PAGE_N; i++) {
+    for (int i = 0; i < PAGE_CYCLE; i++) {   /* the Info page: no dot lit */
         float cx = r - dots + DOT_R + i * DOT_STEP, cy = y1 + (float)line_h(F_MED) / 2;
         if (i == page) aa_disc(cx, cy, DOT_R, BLUE);
         else aa_ring(cx, cy, DOT_R - 1, 2, DIM);
@@ -213,82 +212,21 @@ static float header_right(float y)
     return r - (w1 > w2 ? w1 : w2);
 }
 
-/* The flip clock (design 3.10): each digit of HH:MM on a small glass card;
- * a digit that changes flips in FLIP_S: the old top half folds down to the
- * middle line (shaded as it falls), then the new bottom half unfolds from
- * it. The start animation shows 00:00 and flips each digit to the time, a
- * little apart. */
-#define CLOCK_N 8
-static char fl_shown[CLOCK_N + 1], fl_from[CLOCK_N + 1];
-static double fl_t0[CLOCK_N];
-static int fl_init;
-
-static void flip_digit(float x, float y, float cw, float card_y, float card_h, int i, char ch, double now)
-{
-    float mid = y + (float)digits_mid(D_L), px = x + (cw - (float)digits_w(D_L, "0")) / 2;
-    u32 flap = (glass_tint() & ~0xffu) | 0xe0;
-    fx_glass(x, card_y, cw, card_h, 10, glass_tint());
-    round_frame(x, card_y, cw, card_h, 10, 1, GLASS_EDGE);
-    double p = fl_t0[i] > 0 ? (now - fl_t0[i]) / FLIP_S : 1;
-    if (p >= 1 || fl_from[i] == ch) {
-        digits_half(px, y, D_L, ch, 0, 1, WHITE);
-        digits_half(px, y, D_L, ch, 1, 1, WHITE);
-    } else {
-        if (p < 0) p = 0;
-        digits_half(px, y, D_L, ch, 0, 1, WHITE);                 /* the new top half, behind the falling flap */
-        digits_half(px, y, D_L, fl_from[i], 1, 1, WHITE);         /* the old bottom half, until the flap lands */
-        if (p < 0.5) {                                            /* the old top half folds down */
-            float s = cosf((float)p * PI_F), fh = (mid - card_y) * s;
-            rect(x + 1, mid - fh, cw - 2, fh, flap);
-            digits_half(px, y, D_L, fl_from[i], 0, s, WHITE);
-            rect(x + 1, mid - fh, cw - 2, fh, (u32)(0x60 * (1 - s)));
-        } else {                                                  /* the new bottom half unfolds */
-            float s = sinf(((float)p - 0.5f) * PI_F), fh = (card_y + card_h - mid) * s;
-            rect(x + 1, mid, cw - 2, fh, flap);
-            digits_half(px, y, D_L, ch, 1, s, WHITE);
-            rect(x + 1, mid, cw - 2, fh, (u32)(0x60 * (1 - s)));
-        }
-    }
-    rect(x, mid - 1, cw, 2, 0x000000a0);                        /* the card's middle line */
-}
-
-static float flip_clock(float x, float y, float right)
+/* The clock: HH:MM in the display digits, whole (the loading screen's and
+ * the ambient mode's font), no seconds (Lucas, 2026-10-15: the flip cards
+ * looked cut in half). At the start it fades in with the header. */
+static float big_clock(float x, float y, float right)
 {
     int off, src = clock_offset(&off);
     civil_time c;
     const char *ampm;
     char hm[16], line[200];
-    double now = sky_time();
     civil_from_unix(clock_utc() + off, &c);
     clock_hm(hm, sizeof hm, c.hour, c.min, clock_h24(), &ampm);
-    int n = (int)strlen(hm);
-    if (n > CLOCK_N) n = CLOCK_N;
-    double at = start_anim_on() ? start_k(SA_CLOCK) : -1;        /* the start: 00:00, then each digit flips */
-    if (!fl_init) {
-        for (int i = 0; i < CLOCK_N; i++) fl_shown[i] = fl_from[i] = hm[i] >= '0' && hm[i] <= '9' ? (at >= 0 ? '0' : hm[i]) : hm[i];
-        fl_init = 1;
-    }
-    float cw = (float)digits_w(D_L, "0") + 22, mid = (float)digits_mid(D_L);
-    float card_y = y + mid - 54, card_h = 108, xx = x;
-    for (int i = 0, k = 0; i < n; i++) {
-        char ch = hm[i];
-        if (ch < '0' || ch > '9') {                                /* the colon, plain */
-            xx = digits(xx + 4, y, D_L, WHITE, ":") + 4;
-            continue;
-        }
-        int may = at < 0 || at >= 0.3 + 0.07 * k;
-        if (fl_shown[i] != ch && may) {                            /* a new digit: its flip starts */
-            fl_from[i] = fl_shown[i];
-            fl_shown[i] = ch;
-            fl_t0[i] = now;
-        }
-        flip_digit(xx, y, cw, card_y, card_h, i, fl_shown[i], now);
-        xx += cw + 8;
-        k++;
-    }
+    float mid = (float)digits_mid(D_L);
+    float xe = digits(x, y, D_L, WHITE, hm);
     float base = y + asc_of(digits_h(D_L)), dy = base - asc_of(line_h(F_MED));
-    float xe = text(xx + 4, rnd(dy), F_MED | TNUM, GREY, ":%02d", c.sec);
-    if (ampm) xe = text(xe + 10, rnd(dy), F_MED, GREY, "%s", ampm);
+    if (ampm) xe = text(xe + 12, rnd(dy), F_MED, GREY, "%s", ampm);
     float dx = xe + 36, dw = right - 40 - dx, ty = y + mid - (float)line_h(F_MED) + 2;
     char date[64];
     snprintf(date, sizeof date, "%s %d %s", weekday_name[c.wday], c.day, month_name[c.month - 1]);
@@ -304,7 +242,7 @@ static void header(void)
     int dy = (int)rnd(-SA_DROP * (1 - start_k(SA_HEADER)));
     shift_push(0, dy);
     float right = header_right(page_wide() ? 22 : 16);
-    if (!digits_rc) flip_clock(MG, page_wide() ? 4 : 0, right);
+    if (!digits_rc) big_clock(MG, page_wide() ? 4 : 0, right);
     else clock_draw(MG, 20, right - 40 - MG);                     /* no display digits: 0.2.0's clock */
     shift_pop();
 }

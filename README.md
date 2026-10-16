@@ -30,9 +30,9 @@ there (else Open-Meteo), the three days from Open-Meteo.
 0.2.0 has not run on the console yet, and its Worker is not deployed (the
 rounds to come are below).
 
-Couch opens on the Board. L1 and R1 move between the three pages (R1 from
-the Info page wraps to the Board). SQUARE refreshes the Board, SELECT opens
-the Info page, START or Quit Game exits. On the Info page, SQUARE twice
+Couch opens on the Board. L1 and R1 move between the Board and the News
+(since 0.3.1 the Info page is not in the cycle). SQUARE refreshes the Board,
+SELECT opens the Info page, START or Quit Game exits. On the Info page, SQUARE twice
 clears the freeze journal and CIRCLE goes back to the Board. In the ambient
 mode, the first button only wakes the screen. Since 0.3.1 the News page is
 a reader: UP, DOWN, LEFT and RIGHT move the selection over the headlines,
@@ -145,7 +145,8 @@ is 0.2.0's, kept for the words and the rules that stay.)
   `offset` with the console's clock minus the Worker's; the clock's source
   and the three settings with their rcs; the console's address, the journal
   states of `net_start` and `tz_params`, the `text_utf8` rc; the folder's rcs
-  when it is not writable. Leaving it (CIRCLE, L1 or R1) opens the Board as
+  when it is not writable. Leaving it (CIRCLE; since 0.3.1 L1 and R1 do
+  nothing there) opens the Board as
   CIRCLE did in 0.1.0: after a clear of the journal the network start runs.
 - **The ambient mode** (`page.c`; `AMBIENT_SEC` 600, `AMBIENT_STEP_SEC` 60,
   `AMBIENT_PX` 6 in `parse.h`): after 10 min with no pressed button, a black
@@ -515,12 +516,11 @@ screen").
   s, the header comes down 24 px, the left column, the right column and the
   bottom rise 30 px into place a little apart (the design's tiles one by
   one, and their fade, are simplified to the columns and the screen's
-  fade), and the clock's digits flip from 00:00 to the time.
-- **The header** (design 1.3): the clock as a flip clock, each digit of
-  HH:MM in the display digits (D_L) on a small glass card with a dark
-  middle line; a digit that changes flips in 300 ms (the old top half folds
-  down to the middle line, shaded, then the new bottom half unfolds); the
-  seconds in F_MED GREY; the date (without the weekday when the row is too
+  fade).
+- **The header** (design 1.3): the clock, HH:MM in the display digits (D_L),
+  whole, as the loading screen's (0.3.0's flip cards, with their middle line
+  and the seconds, are gone since 0.3.1: Lucas, 2026-10-15, "looks cut in
+  half"); AM/PM in F_MED GREY on a 12-hour console; the date (without the weekday when the row is too
   short) and the clock's source line. Right: the page's name and its dots;
   under them the city, the wifi icon (wifi-high, or wifi-slash with no
   internet) and the internet's words with their dot. No display digits
@@ -806,8 +806,10 @@ encoder (MIT, the notice in the file's head; Health's NOTICE lists it).
 
 ```zsh
 zsh tools/preview/build.zsh                 # ps3gfx's preview: build/pv, and build/pv_utf8_off (-DCOUCH_UTF8_OFF)
-zsh tools/preview/run.zsh                   # 40 scenarios at the default visible area (about 5 min: ambient runs 12 min of frames,
-                                            # and the SPU twin makes a sky picture every frame since 2026-10-14, 36,000 in ambient)
+zsh tools/preview/run.zsh                   # every scenario at the default visible area, one process each, NJOBS at a time (default:
+                                            # the cores), the long ambient ones first; the wall time is reader_ambient's (76,000
+                                            # frames: the SPU twin makes a sky picture every frame since 2026-10-14)
+zsh tools/preview/run.zsh pages             # one scenario: the fast path while a change is made
 AREA=narrow zsh tools/preview/run.zsh       # the same at the narrowest area, 1600 x 900 (snapshots *_narrow; not tv)
 PASSES=2 zsh tools/preview/run.zsh          # twice, and the snapshots that differ
 ```
@@ -880,8 +882,9 @@ build adds `-ffp-contract=off`, as ps3gfx's host test of the kernels.
 
 Scenarios: `board_ok` (the clock, both cards, the Info page, back; the
 request line), `board_stale` (the dollar card's foot in YELLOW),
-`board_none` (both upstreams without data), `pages` (R1 to the News and the
-Info page, R1 wraps to the Board, L1 back to the Info page),
+`board_none` (both upstreams without data), `pages` (R1 to the News, R1 wraps to
+the Board, L1 to the News; SELECT opens the Info page, R1 there does
+nothing, CIRCLE back to the Board),
 `board_extras` (riesgo pais none, the fixed-term rate stale, a dry
 forecast, the feeds failed: the News page's reason), `board_v1` (a reply of
 0.1.0's time: no extras, no sky, "sends no news"), `net_slow` (a 4 s answer:
@@ -1092,8 +1095,8 @@ Round 3, 0.2.0 (the pkg goes up as `Couch-0.2.0-rcN.pkg`):
 2. Unattended, `auto.txt` = `150`, `ps3run round`: `board.ppm` with the
    money extras and the sky, `info.ppm` with the Internet row; in
    `couch.txt`, the fetch lines with "connect N s" and "8 news".
-3. By hand: R1 to the News (the accents of the titles), R1 to the Info page,
-   R1 back to the Board, L1. Then no button for 10 min: the screen dims; a
+3. By hand: R1 to the News (the accents of the titles), R1 back to the
+   Board, L1 to the News, SELECT to the Info page, CIRCLE back. Then no button for 10 min: the screen dims; a
    minute later the News, moved 6 px; START wakes the screen and Couch does
    not exit; `couch.txt` has the two `ambient:` lines. On the TV, check the
    dim layer's strength and the 6 px moves.
