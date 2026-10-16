@@ -1,0 +1,16 @@
+{
+  "name": "couch-board",
+  "private": true,
+  "type": "module",
+  "description": "Couch's Board Worker: GET /board, /news and /article as plain text for the PS3",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "dev": "wrangler dev --ip 0.0.0.0 --port 8787"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  }
+}

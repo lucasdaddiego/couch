@@ -1,0 +1,74 @@
+# LV2 syscalls the ELF makes, one number per line (PS3 Health's tools/syscalls.py
+# --allow checks the ELF against this file; --write rewrites it from a
+# known-good ELF and drops these notes). Written on 2026-10-11 from Couch
+# 0.1.0's second ELF (the first had one sc the scanner could not resolve: gcc
+# put sysUsleep's li r11 after the sc, so it went through nap(), until the
+# exit's fix below removed that loop), each
+# number looked at before it went in: 39 numbers, 79
+# call sites, every sc resolved. They are PS3 Health's runtime set without its
+# drive, temperature and fan calls (383, 409, 600, 601, 609, 616): threads and
+# time (44, 141, 142, 145, 146), memory (330, 331, 337), the tty (402, 403),
+# the network (700 to 714) and the file system (801 to 834), from PSL1GHT's
+# runtime and ps3gfx. Couch's own calls add no number: libnet, libnetctl,
+# sysModuleLoad and sysUtilGetSystemParamInt are SPRX imports, and
+# sysLv2FsStat (808) and sysUsleep (141) were in the set already. The exit's
+# fix of 2026-10-11 (board_stop shuts the socket down and joins with no wait
+# loop, so nap() went; net_end) keeps these 39 numbers at 78 call sites,
+# every sc resolved: netShutdown, netCtlTerm, netDeinitialize and
+# sysModuleUnload add no number. On 2026-10-13 (Couch 0.3.0, stage 8 of
+# the revamp design: the effects' SPU group, source/spu_fx_run.c) the nine
+# SPU numbers of PS3 Health and Cell Bench came in, each looked at in the
+# audit's list: 165 (a thread's exit status), 169 (sysSpuInitialize), 170
+# (the group's create), 171 (its destroy), 172 (a thread's initialize), 173
+# (the group's start), 177 (its terminate), 178 (its join) and 190 (a
+# mailbox word): 48 numbers at 93 call sites, every sc resolved. The
+# image's import and close are SPRX imports (no number). Never 602, 604 or
+# 870: the script refuses them whatever this file says.
+44
+141
+142
+145
+146
+165
+169
+170
+171
+172
+173
+177
+178
+190
+330
+331
+337
+402
+403
+700
+701
+702
+706
+707
+710
+712
+713
+714
+801
+802
+803
+804
+805
+806
+807
+808
+809
+810
+811
+812
+813
+814
+815
+818
+820
+831
+832
+834

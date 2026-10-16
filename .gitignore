@@ -1,0 +1,8 @@
+build/
+tools/preview/build/
+tools/hostcheck/build/
+*.elf
+*.self
+*.pkg
+*.map
+pkgfiles/USRDIR/

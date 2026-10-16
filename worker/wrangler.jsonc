@@ -1,0 +1,41 @@
+// Couch's Board Worker, a template: set the vars below to your place, then
+//   npx wrangler deploy
+// Couch has no usable TLS, so it needs plain HTTP: put the Worker on a custom domain (routes
+// below) whose zone answers HTTP for that host (README.md, "The Worker"). No secrets: every
+// setting is a var.
+// - CITY, LAT, LON, TZ: the place (an IANA time zone). LOCALE: the numbers' format (BCP 47).
+// - CURRENCY: your currency (ISO 4217); RATES: up to 8 others ("USD,GBP:Pound,JPY", an optional
+//   label after ":"), each shown as CURRENCY per one unit, from Frankfurter (the ECB's reference
+//   rates); FEATURE: the code of the large tile (else the first). Empty RATES: no rates.
+// - COUNTRY: the public holidays' country (ISO 3166 alpha-2, Nager.Date); HOLIDAY_NAMES: "local"
+//   or "english". Empty COUNTRY: no holiday.
+// - NEWS_FEEDS: "Label*weight@category=URL" between commas, at most 6 (weight and category
+//   optional): RSS feeds; NEWS_MAX headlines on the Board (at most 8), the weight a feed's share
+//   of them; NEWS_LIST on the News page. Empty: no news.
+// - *_TTL: seconds a cached answer stays fresh.
+{
+  "name": "couch-board",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": false,
+  "routes": [{ "pattern": "board.example.com", "custom_domain": true }],
+  "vars": {
+    "CITY": "Berlin",
+    "LAT": "52.52",
+    "LON": "13.40",
+    "TZ": "Europe/Berlin",
+    "LOCALE": "de-DE",
+    "CURRENCY": "EUR",
+    "RATES": "USD,GBP,CHF,JPY",
+    "FEATURE": "USD",
+    "COUNTRY": "DE",
+    "HOLIDAY_NAMES": "local",
+    "NEWS_FEEDS": "BBC*4@world=https://feeds.bbci.co.uk/news/world/rss.xml,BBC*2@business=https://feeds.bbci.co.uk/news/business/rss.xml,BBC*2@tech=https://feeds.bbci.co.uk/news/technology/rss.xml",
+    "NEWS_MAX": "8",
+    "NEWS_LIST": "30",
+    "WX_TTL": "900",
+    "FX_TTL": "3600",
+    "NEWS_TTL": "600",
+    "ARTICLE_TTL": "3600"
+  }
+}
