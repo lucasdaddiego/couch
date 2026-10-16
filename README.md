@@ -788,6 +788,11 @@ calls and `start.c`'s job thread add call sites of numbers already in the
 list, no new number), every `sc` resolved, the EBOOT matches the ELF, no
 compiler warning.
 
+Since 2026-10-15 Couch builds against ps3gfx 3ea00e1: the journal reads its
+whole history, and a journal it cannot write makes the Info page's Journal
+row YELLOW ("not written: a freeze may go unrecorded"); the calls still run
+(the `nofolder` scenario). The pkg is 424,160 B.
+
 Stage 11 (0.3.1, 2026-10-14) builds against the pinned ps3gfx a311375 (no
 ps3gfx change). The pkg is 425 KB (425,376 B); 48 syscall numbers at 110
 call sites (couch_log's queue and its wait add call sites of numbers in the

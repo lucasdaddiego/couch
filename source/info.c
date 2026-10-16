@@ -157,7 +157,8 @@ static void tile_console(float x0, float y0, float w0, float h0)
     if (net_state == NET_UP) y = row(x, y, w, yb, "Address", net_has_ip() ? WHITE : YELLOW, "%s", net_ip);
     else if (net_state == NET_FAILED) y = row(x, y, w, yb, "Address", YELLOW, "none: netInitialize rc 0x%08x", (unsigned)net_rc);
     else y = row(x, y, w, yb, "Address", DIM, "none: the network is not started");
-    y = row(x, y, w, yb, "Journal", WHITE, "net_start %s, tz_params %s, fx_first %s", jword("net_start"), jword("tz_params"), jword("fx_first"));
+    y = row(x, y, w, yb, "Journal", journal_io_failed() ? YELLOW : WHITE, "net_start %s, tz_params %s, fx_first %s%s", jword("net_start"), jword("tz_params"),
+            jword("fx_first"), journal_io_failed() ? "; not written: a freeze may go unrecorded" : "");   /* ps3gfx 3ea00e1 */
     if (utf8_rc == 0) y = row(x, y, w, yb, "UTF-8 text", WHITE, "on: text_utf8 rc 0");
     else y = row(x, y, w, yb, "UTF-8 text", YELLOW, "off: text_utf8 rc %d, so the Board's accents are folded to ASCII", utf8_rc);
     if (!fs_ok)
