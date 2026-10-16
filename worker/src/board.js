@@ -196,6 +196,17 @@ export function dayWords(ymd, now, tz) {
   return `${p.year}-${p.month}-${p.day}` === m[0] ? 'Today' : `${+m[3]} ${MONTHS[+m[2] - 1]}`;
 }
 
+// holiday=YYYY-MM-DD|name|days: the next national holiday on or after now's local date (index.js's
+// hol: its list, sorted), days 0 for today; none when the list holds none (or a stale one ends).
+export function holidayLine(hol, now, tz) {
+  const l = hol && Array.isArray(hol.data) ? hol.data : null;
+  if (!l) return null;
+  const today = localDate(now, tz), next = l.find((x) => x && x.fecha >= today);
+  if (!next) return null;
+  const days = Math.round((Date.parse(`${next.fecha}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86400000);
+  return `holiday=${next.fecha}|${clean(next.nombre).replaceAll('|', '/')}|${days}`;
+}
+
 // The money lines: riesgo pais (its date), the last monthly inflation (its month) and the
 // fixed-term deposit rate of PF_BANK (TNA for clients; the list has no date, so the time of the
 // Worker's read). money=label|value|date|state, and the reason after a stale or none state.
@@ -423,7 +434,7 @@ export function newsLines(feeds, now, max) {
 // per feed of NEWS_FEEDS (none: no news lines). chg is {closes, blue, rpList}, results too (absent:
 // no change or spark lines): closes.data {day, rates: {casa: sell}} (index.js's closes), blue.data
 // and rpList.data the series' entries ([{fecha, venta}], [{fecha, valor}], series.js).
-export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news = [], chg = {}, env }) {
+export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news = [], chg = {}, hol = NONE, env }) {
   const tz = env.TZ || 'UTC', locale = env.LOCALE || 'es-AR';
   // The offset at now, not Open-Meteo's utc_offset_seconds: a cached forecast keeps the offset of
   // its fetch, which is wrong after a DST change. The city is cut to 100 code points, the only
@@ -506,6 +517,8 @@ export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news =
   out.push(`wx_moon=${moonPhase(now)}`);
   if (hours) out.push(hours);
   out.push(`wx_age=${Math.max(0, wx.age | 0)}`, `wx_state=${stateLine(wx)}`);
+  const h = holidayLine(hol, now, tz);
+  if (h) out.push(h);
   out.push(...newsLines(news, now, Math.min(8, Number(env.NEWS_MAX) || 8)), 'end');
   let text = out.join('\n') + '\n';
   // A body over MAX_BYTES would be refused whole by a Couch 0.1.0 ("the reply is over 4 KB": its
@@ -513,7 +526,7 @@ export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news =
   // the news first, then the Blue series, the 12 hours, the changes, the money lines, the sky lines
   // (a Couch 0.1.0 skips all of these, so its Board stays as it was), then the rate and day lines.
   // geo stays with city (26 bytes).
-  const drop = [['news='], ['spark='], ['wx_hours='], ['usd_chg=', 'money_chg='], ['money='],
+  const drop = [['news='], ['holiday=', 'spark='], ['wx_hours='], ['usd_chg=', 'money_chg='], ['money='],
     ['wx_rain=', 'wx_sun=', 'wx_moon=', 'wx_fx=', 'days_fx='], ['usd=', 'day=']];
   for (const keys of drop) {
     while (new TextEncoder().encode(text).length > MAX_BYTES) {

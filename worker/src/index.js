@@ -11,7 +11,7 @@
 
 import { addDays, boardText, clean, fold, localDate, parseCasas } from './board.js';
 import { findRow, latin1, unzipFirst } from './smn.js';
-import { FEED_ITEMS, feedItems, parseFeeds, readFeedHead } from './news.js';
+import { FEED_ITEMS, FEEDS_MAX, feedItems, parseFeeds, readFeedHead } from './news.js';
 import { readTail, tailEntries } from './series.js';
 import { articleText, capParas, NEWS_LIST, newsText } from './reader.js';
 import { extractPage } from './article.js';
@@ -137,6 +137,34 @@ async function loadCloses(env, now, deps) {
   return { data: { day: addDays(stamp, -1), rates, missing }, bad: (got.find((g) => g.bad) || {}).bad || 'no rate in CASAS' };
 }
 
+// The national holidays (since 2026-10-16): argentinadatos.com's list of the local year (2 KB,
+// {fecha, tipo, nombre}), and the next year's too when none of this year is left (from the last
+// one, 25 December, to the year's end), cached as one entry under the year: {data: [{fecha,
+// nombre}]} sorted, the valid entries only.
+export const HOL_TTL = 86400;
+const ADH = 'https://api.argentinadatos.com/v1/feriados';
+async function loadHolidays(env, now, deps) {
+  const today = localDate(now, env.TZ || 'UTC'), year = Number(today.slice(0, 4));
+  const list = [];
+  for (const y of [year, year + 1]) {
+    const r = await deps.fetch(`${ADH}/${y}`, fetchOpts());
+    if (!r.ok) {
+      if (r.body) r.body.cancel().catch(() => {});
+      return { data: null, bad: `HTTP ${r.status}` };
+    }
+    const { data } = await readJson(r);
+    if (!Array.isArray(data)) return { data: null, bad: 'bad JSON' };
+    for (const x of data) {
+      if (x && typeof x === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String(x.fecha)) && clean(x.nombre)) {
+        list.push({ fecha: String(x.fecha), nombre: clean(x.nombre).slice(0, 80) });
+      }
+    }
+    if (list.some((h) => h.fecha >= today)) break;
+  }
+  list.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+  return { data: list, bad: 'no holiday' };
+}
+
 export const UPSTREAMS = {
   usd: {
     host: 'dolarapi.com',
@@ -212,6 +240,13 @@ export const UPSTREAMS = {
     ttl: () => SERIES_TTL,
     read: (r) => readSeries(r, 'venta', 31),
     valid: series(25, 3),
+  },
+  hol: {
+    host: 'argentinadatos.com',
+    key: (env, now) => `https://couch.internal/hol?y=${localDate(now, env.TZ || 'UTC').slice(0, 4)}`,
+    ttl: () => HOL_TTL,
+    load: loadHolidays,
+    valid: (d) => Array.isArray(d) && d.length > 0,
   },
   // The 10 newest entries of riesgo pais (413 KB, no weekend or holiday entries: a long weekend
   // leaves 4 days, so a newest entry up to 7 days old is a good read).
@@ -382,17 +417,19 @@ export async function handle(request, env, deps) {
   }
   const now = deps.now();
   // No SMN_STATION: no SMN fetch, the now line from Open-Meteo. No PF_BANK: no fixed-term line.
-  // No NEWS_FEEDS: no news lines. Every upstream in parallel.
+  // No NEWS_FEEDS: no news lines. FEEDS_MAX feeds: no holidays (their fetch and two cache calls
+  // would pass the free plan's 50 subrequests). Every upstream in parallel.
   const smnOff = { state: 'none', reason: 'no SMN_STATION', age: 0, data: null };
   const feeds = parseFeeds(env.NEWS_FEEDS);
   const pfOn = clean(env.PF_BANK) !== '';
   // The changes: the closes when CASAS has a rate, the Blue series when it has blue.
   const casas = parseCasas(env.CASAS).slice(0, 8);
-  const [usd, wx, smn, rp, ipc, pf, closes, blue, rpList, ...rs] = await Promise.all([get('usd', env, now, deps), get('wx', env, now, deps),
+  const [usd, wx, smn, rp, ipc, pf, closes, blue, rpList, hol, ...rs] = await Promise.all([get('usd', env, now, deps), get('wx', env, now, deps),
     String(env.SMN_STATION ?? '').trim() ? get('smn', env, now, deps) : smnOff, get('rp', env, now, deps),
     get('ipc', env, now, deps), pfOn ? get('pf', env, now, deps) : null,
     casas.length ? get('closes', env, now, deps) : null, casas.some((x) => x.casa === 'blue') ? get('blue30', env, now, deps) : null,
-    get('rplist', env, now, deps), ...feeds.map((f) => get(newsUpstream(f), env, now, deps))]);
+    get('rplist', env, now, deps), feeds.length < FEEDS_MAX ? get('hol', env, now, deps) : null,
+    ...feeds.map((f) => get(newsUpstream(f), env, now, deps))]);
   const money = { rp, ipc, pf: pf || undefined };
   const chg = { closes: closes || undefined, blue: blue || undefined, rpList };
   const news = feeds.map((f, i) => ({ label: f.label, weight: f.weight, r: rs[i] }));
@@ -400,7 +437,7 @@ export async function handle(request, env, deps) {
   // gives the upstreams as none with the error, and a bad setting (TZ) the bare lines.
   let text;
   try {
-    text = boardText({ now, usd, wx, smn, money, news, chg, env });
+    text = boardText({ now, usd, wx, smn, money, news, chg, hol: hol || undefined, env });
   } catch (e) {
     const reason = `worker: ${clean((e && e.message) || e).slice(0, 60)}`;
     const none = { state: 'none', reason, age: 0, data: null };

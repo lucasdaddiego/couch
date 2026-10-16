@@ -176,6 +176,10 @@ text with a sign.
   (before 21:00 ART), the entry dated today holds today's close in the evening: that evening's
   chips show flat. Blue takes its close from the same fetch (one fetch more than the design: the
   series is cached 6 h and can lack today's entry).
+- `holiday=2026-11-23|Soberanía nacional|38` (since 2026-10-16): the next national holiday on or
+  after the local date, its name and the days to it (0: today). The list is argentinadatos.com's
+  `/v1/feriados/<year>` (2 KB), cached a day under the year (`https://couch.internal/hol?y=`),
+  with the next year's list too once none of this year is left; none with 6 feeds (below).
 - `money_chg=Riesgo país|flat|0,0%|0|9 Oct`: riesgo pais against the entry of its list before the
   current value's date (the list has no weekend or holiday entries: a Monday compares with
   Friday), whole points. The list is `/v1/finanzas/indices/riesgo-pais` (413 KB, 7,721 entries),
@@ -325,10 +329,12 @@ a day, when the Cache API drops the entry), not on every request as before (Goog
 Board 4.1 s).
 
 The free plan's limits: the Cache API's `match` and `put` count with `fetch` in the 50
-subrequests of a request. With the vars of `wrangler.jsonc` and a cold cache: 18 fetches (usd,
-wx, smn, riesgo pais, inflation, plazo fijo, 4 feeds, 6 closes, the 2 lists), 13 reads and 13
-writes, 44 in all (a test counts them); warm, 13 reads. With 6 feeds (`FEEDS_MAX`) it is 50,
-the limit. CPU: the two tail reads run once per 6 h. Measure after the deploy (the dashboard's CPU
+subrequests of a request. With the vars of `wrangler.jsonc` and a cold cache: 19 fetches (usd,
+wx, smn, riesgo pais, inflation, plazo fijo, 4 feeds, 6 closes, the 2 lists, the holidays), 14
+reads and 14 writes, 47 in all (a test counts them); warm, 14 reads. A 5th feed makes 50, the
+limit (in late December the holidays' second year makes one fetch more: 51 with 5 feeds, a
+fetch the platform then refuses, so the holidays line goes); with 6 feeds (`FEEDS_MAX`) the
+Worker leaves the holidays out: 50. CPU: the two tail reads run once per 6 h. Measure after the deploy (the dashboard's CPU
 time, or `wrangler tail`). Each request has its own 50: `/news` on a cold cache makes 4 fetches,
 4 reads and 4 writes (12), warm 4 reads; `/article` on a cold cache 5 fetches (4 feeds, the
 page), 5 reads and 5 writes (15, and one more per redirect of the page), with the feeds cached 7,

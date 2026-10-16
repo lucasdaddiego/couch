@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 import {
   boardText, wmoWords, clean, money, localWhen, tzOffset, parseCasas, MAX_BYTES, fold, skyWords, smnNow,
   rainWords, sunTimes, moonPhase, dayWords, moneyLines, newsLines, NEW_MOON_2000, SYNODIC_DAYS,
-  geoLine, smnCode, fxLine, hoursLine, change, usdChgLines, sparkLine, rpChgLine, addDays, localDate, shortDate,
+  geoLine, smnCode, fxLine, hoursLine, change, usdChgLines, sparkLine, rpChgLine, addDays, localDate, shortDate, holidayLine,
 } from '../src/board.js';
 import { zipEntry, unzipFirst, latin1, obsTime, parseRow, findRow } from '../src/smn.js';
 import {
@@ -548,8 +548,8 @@ test('handle: SMN for the now line, Open-Meteo for the days; SMN down or no SMN_
   assert.ok(lines.includes('wx_now=10°|10°|84%|Cloudy|3 km/h|night|SMN 23:00'));
   assert.deepEqual(lines.filter((l) => l.startsWith('day=')), ['day=Today|Overcast|16°|9°|2%', 'day=Mon|Drizzle|16°|10°|22%']);
   assert.ok(lines.includes('wx_state=ok') && lines.includes('usd_state=ok'));
-  assert.equal(d.calls.length, 13);                             // usd, wx, smn, riesgo pais, inflation, 6 closes, the Blue
-  // series, the riesgo pais list: no PF_BANK, no NEWS_FEEDS
+  assert.equal(d.calls.length, 14);                             // usd, wx, smn, riesgo pais, inflation, 6 closes, the Blue
+  // series, the riesgo pais list, the holidays: no PF_BANK, no NEWS_FEEDS
   const down = deps({ answers: { ...ok, 'ssl.smn.gob.ar': { status: 503, body: 'down' } }, now: SMN_NOW });
   const body = await (await handle(new Request('http://couch.test/board'), smnEnv, down)).text();
   assert.equal(wxNow(body), OM_NOW);
@@ -819,8 +819,8 @@ test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leav
   const d = deps({ answers: all, now: JUN_NOW });
   const body = await (await handle(new Request('http://couch.test/board'), e, d)).text();
   const lines = body.trimEnd().split('\n');
-  assert.equal(d.calls.length, 15);                             // usd, wx, riesgo pais, inflation, plazo fijo, two feeds,
-  // 6 closes, the Blue series, the riesgo pais list: no SMN_STATION
+  assert.equal(d.calls.length, 16);                             // usd, wx, riesgo pais, inflation, plazo fijo, two feeds,
+  // 6 closes, the Blue series, the riesgo pais list, the holidays: no SMN_STATION
   assert.ok(d.calls.some((u) => u.includes('hourly=precipitation_probability%2Cprecipitation') && u.includes('sunrise%2Csunset')));
   assert.deepEqual(lines.filter((l) => l.startsWith('money=')),
     ['money=Riesgo país|589|12 Oct|ok', 'money=Inflación mensual|1,7%|Aug 2026|ok', 'money=Plazo fijo BNA (TNA)|19,25%|14:47|ok']);
@@ -833,7 +833,7 @@ test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leav
   assert.ok(half.includes('news_state=stale|infobae.com: HTTP 500'));
   const off = deps({ answers: all, now: JUN_NOW });
   const none = await (await handle(new Request('http://couch.test/board'), { ...junEnv, PF_BANK: ' ' }, off)).text();
-  assert.ok(!/\nnews/.test(none) && !none.includes('Plazo fijo') && off.calls.length === 12);   // 4 and the 8 of the changes
+  assert.ok(!/\nnews/.test(none) && !none.includes('Plazo fijo') && off.calls.length === 13);   // 4, the 8 of the changes, the holidays
 });
 
 // ---- 2026-10-13: the mix of NEWS_FEEDS (Infobae through Google News, Ambito, Clarin, BBC) ------------
@@ -939,7 +939,7 @@ test('handle: the mix of the fixtures (MIX_FEEDS): 3 economy, 3 politics, 2 worl
   };
   const fine = await news(all);
   assert.equal(fine.calls.length, 19);                            // usd, wx, riesgo pais, inflation, plazo fijo, six feeds,
-  // 6 closes, the Blue series, the riesgo pais list: no SMN_STATION
+  // 6 closes, the Blue series, the riesgo pais list: no SMN_STATION, and no holidays with FEEDS_MAX feeds
   assert.deepEqual(fine.lines, [
     "news=BBC|250|Why the lonely in China are hiring 'temporary children'",
     "news=Infobae|964|Tomaron la Facultad de Filosofía y Letras de la UBA y permanecerá así hasta la marcha del 15 de octubre",
@@ -1247,23 +1247,56 @@ test('the 4 KB guard with the keys of 0.3.0: 8 titles of 110 three-byte characte
   assert.ok(!u.includes('money_chg=') && u.includes('\ngeo=') && u.includes('\nusd_state=ok\n'));
 });
 
-test('handle: the vars of wrangler.jsonc on a cold cache: 18 fetches, 44 of the free plan\'s 50 subrequests; the live mix', async () => {
+test('handle: the vars of wrangler.jsonc on a cold cache: 19 fetches, 47 of the free plan\'s 50 subrequests; the live mix', async () => {
   const e = { ...wranglerVars, NEWS_FEEDS: wranglerVars.NEWS_FEEDS };
   const answers = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData }, 'ssl.smn.gob.ar': { body: zipBytes },
     ...dayRoutes('2026-10-13'), ...seriesRoutes, 'www.ambito.com': { body: mix.ambito }, 'www.clarin.com/rss/politica/': { body: mix.clarinPol },
-    'www.clarin.com/rss/mundo/': { body: mix.clarinMundo }, 'feeds.bbci.co.uk': { body: mix.bbc } };
+    'www.clarin.com/rss/mundo/': { body: mix.clarinMundo }, 'feeds.bbci.co.uk': { body: mix.bbc },
+    'api.argentinadatos.com/v1/feriados/2026': { body: [{ fecha: '2026-11-23', tipo: 'trasladable', nombre: 'Soberan\u00eda nacional' }] } };
   const d = deps({ answers, now: MIX_NOW });
   const body = await (await handle(new Request('http://couch.test/board'), e, d)).text();
   await Promise.all(d.waits);
-  // usd, wx, smn, riesgo pais, inflation, plazo fijo, 4 feeds, 6 closes, the 2 lists; 13 cache reads and 13 writes
-  assert.deepEqual([d.calls.length, d.cache.ops, d.calls.length + d.cache.ops], [18, 26, 44]);
+  // usd, wx, smn, riesgo pais, inflation, plazo fijo, 4 feeds, 6 closes, the 2 lists, the holidays; 14 cache reads
+  // and 14 writes (a 5th feed would make 50; in late December the holidays of the next year make 48)
+  assert.deepEqual([d.calls.length, d.cache.ops, d.calls.length + d.cache.ops], [19, 28, 47]);
   const lines = body.trimEnd().split('\n');
   assert.ok(new TextEncoder().encode(body).length <= MAX_BYTES && body.endsWith('\nnews_state=ok\nend\n'));
   const by = (label) => lines.filter((l) => l.startsWith(`news=${label}|`)).length;
   assert.deepEqual([by('Ámbito'), by('Clarín'), by('BBC')], [3, 4, 1]);
-  for (const k of ['geo', 'usd_chg', 'spark', 'money_chg', 'wx_fx', 'days_fx', 'wx_hours']) assert.ok(lineOf(body, k), k);
-  // warm: no fetch, 13 cache reads
+  for (const k of ['geo', 'usd_chg', 'spark', 'money_chg', 'wx_fx', 'days_fx', 'wx_hours', 'holiday']) assert.ok(lineOf(body, k), k);
+  // warm: no fetch, 14 cache reads
   const w = deps({ cache: d.cache, answers, now: MIX_NOW + 60 });
   await handle(new Request('http://couch.test/board'), e, w);
-  assert.deepEqual([w.calls.length, w.cache.ops - 26], [0, 13]);
+  assert.deepEqual([w.calls.length, w.cache.ops - 28], [0, 14]);
+});
+
+// The holidays (2026-10-16): the next one from the list, the next year's list after the last one
+const HOL = 'api.argentinadatos.com/v1/feriados';
+const hol26 = [{ fecha: '2026-10-12', tipo: 'trasladable', nombre: 'Diversidad cultural' },
+  { fecha: '2026-11-23', tipo: 'trasladable', nombre: 'Soberanía nacional' },
+  { fecha: '2026-12-08', tipo: 'inamovible', nombre: 'Inmaculada Concepción' },
+  { fecha: '2026-12-25', tipo: 'inamovible', nombre: 'Navidad' }, { fecha: 'x', nombre: 'bad' }];
+const hol27 = [{ fecha: '2027-01-01', tipo: 'inamovible', nombre: 'Año nuevo' }];
+
+test('holidayLine: the next holiday and its days; today is 0; none after the list ends', () => {
+  const l = { data: hol26.slice(0, 4) };
+  assert.equal(holidayLine(l, JUN_NOW, 'America/Argentina/Buenos_Aires'), 'holiday=2026-11-23|Soberanía nacional|41');
+  assert.equal(holidayLine({ data: [{ fecha: '2026-10-13', nombre: 'Hoy | test' }] }, JUN_NOW, 'America/Argentina/Buenos_Aires'), 'holiday=2026-10-13|Hoy test|0');
+  assert.equal(holidayLine({ data: [{ fecha: '2026-10-12', nombre: 'Ayer' }] }, JUN_NOW, 'America/Argentina/Buenos_Aires'), null);
+  assert.equal(holidayLine({ state: 'none', data: null }, JUN_NOW, 'America/Argentina/Buenos_Aires'), null);
+});
+
+test('get hol: one fetch of the year, sorted and valid entries; the next year only after the last holiday', async () => {
+  const d = deps({ answers: { [`${HOL}/2026`]: { body: hol26 }, [`${HOL}/2027`]: { body: hol27 } }, now: JUN_NOW });
+  const r = await get('hol', junEnv, JUN_NOW, d);
+  assert.equal(r.state, 'ok');
+  assert.deepEqual(d.calls.map((u) => new URL(u).pathname), ['/v1/feriados/2026']);
+  assert.deepEqual(r.data.map((x) => x.fecha), ['2026-10-12', '2026-11-23', '2026-12-08', '2026-12-25']);
+  const late = 1798416000;   // 2026-12-27 12:00 UTC: no 2026 holiday left
+  const d2 = deps({ answers: { [`${HOL}/2026`]: { body: hol26 }, [`${HOL}/2027`]: { body: hol27 } }, now: late });
+  const r2 = await get('hol', junEnv, late, d2);
+  assert.equal(d2.calls.length, 2);
+  assert.equal(holidayLine(r2, late, 'America/Argentina/Buenos_Aires'), 'holiday=2027-01-01|Año nuevo|5');
+  const bad = await get('hol', junEnv, JUN_NOW, deps({ answers: { [`${HOL}/2026`]: { status: 500, body: 'x' } }, now: JUN_NOW }));
+  assert.deepEqual([bad.state, bad.reason], ['none', 'argentinadatos.com: HTTP 500']);
 });
