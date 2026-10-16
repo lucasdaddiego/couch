@@ -1,7 +1,7 @@
 # Couch's Board Worker
 
 `GET /board` answers the Board's data for Couch on the PS3 as plain text (format version 1:
-`~/.claude/plans/2026-10-10-couch-design.md`, section 4): the dollar rates of dolarapi.com, the
+`ps3tools_private's notes/couch-design/design.md (private)`, section 4): the dollar rates of dolarapi.com, the
 weather now of SMN (Argentina's Servicio Meteorologico Nacional), else Open-Meteo, the days, the
 rain of the next 12 h and the sun of Open-Meteo, the moon from the date, the money extras of
 argentinadatos.com and the headlines of RSS feeds. Each upstream is kept in the Cache API with its
@@ -140,7 +140,7 @@ The keys of 2026-10-13 (Lucas's choices; a Couch 0.1.0 skips them, so the versio
   answer the Worker. A feed that fails gives `news_state=stale|<host>: HTTP <status>` and leaves
   its share to the other feeds.
 
-The keys of Couch 0.3.0 (`~/.claude/plans/2026-10-13-couch-revamp-design.md`, section 5; new keys
+The keys of Couch 0.3.0 (`ps3tools_private's notes/couch-design/revamp-design.md (private)`, section 5; new keys
 only, which Couch 0.1.0 and 0.2.0 skip, so the version stays 1). Numbers use a dot for decimals
 and no thousands mark, `-` for a missing one; only a change's percent and amount are `LOCALE`
 text with a sign.

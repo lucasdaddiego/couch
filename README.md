@@ -41,7 +41,7 @@ License (`OFL.txt`) and Project Nayuki's QR Code generator (MIT).
 A PS3 homebrew app for the living-room TV, drawn by
 [ps3gfx](https://github.com/lucasdaddiego/ps3gfx). Title `Couch`, APPID
 `COUC00001`, app folder `/dev_hdd0/tmp/couch`, pkg `couch.gnpdrm.pkg`. The
-design is `~/.claude/plans/2026-10-10-couch-design.md`. Lucas cut it to the
+design is `ps3tools_private's notes/couch-design/design.md (private)`. Lucas cut it to the
 Board on 2026-10-10: a clock in the console's time zone, the dollar rates
 and the weather, which come over plain HTTP from the Worker in `worker/`
 (live on `http://couch.daddiego.com.ar/board`), and an Info screen. That
@@ -297,7 +297,7 @@ is 0.2.0's, kept for the words and the rules that stay.)
 ## The effects (0.3.0, stage 8 of the revamp)
 
 `source/spu_fx_run.c` drives ps3gfx's effects program (`spu_fx`,
-`<ps3gfx/spu_fx.h>`; design `~/.claude/plans/2026-10-13-couch-revamp-design.md`,
+`<ps3gfx/spu_fx.h>`; design `ps3tools_private's notes/couch-design/revamp-design.md (private)`,
 sections 3 and 6): one group of six SPU threads, modelled on PS3 Health's
 `spu_run.c` and Cell Bench's `run.c`. Threads 0 to 4 make the pictures, a
 band each: the clouds and the frosted glass (`FX_SKY`, 480 x 270 and
@@ -512,7 +512,7 @@ the Info page are 0.2.0's until stage 10.
 
 ## The frame (0.3.0, stage 10 of the revamp)
 
-Stage 10 of the design (`~/.claude/plans/2026-10-13-couch-revamp-design.md`)
+Stage 10 of the design (`ps3tools_private's notes/couch-design/revamp-design.md (private)`)
 and Lucas's notes of 2026-10-14 from the pre2 round ("the news section can
 have more love. the background is too blurry, and the text marquee is fast.
 and the icons moves in installments, and not smooth"; "maybe they can be a

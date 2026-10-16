@@ -1,4 +1,4 @@
-// The Board's reply for Couch, version 1 (the design: ~/.claude/plans/2026-10-10-couch-design.md,
+// The Board's reply for Couch, version 1 (the design: ps3tools_private's notes/couch-design/design.md (private),
 // section 4): UTF-8 text that the PS3 parses with no JSON library. Line 1 is "couch-board 1",
 // then key=value lines with "|" between the fields of a value, then "end". Pure functions: the
 // Worker (index.js) gets the upstream data, this file only formats it. The now line comes from

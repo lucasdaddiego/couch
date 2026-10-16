@@ -1,7 +1,7 @@
 /* Couch 0.3.1: the Board on the living-room TV, drawn by ps3gfx. The clock
  * in the console's time zone, the dollar rates and the money extras, the
  * weather with the rain, the sun and the moon, and the news, from the Worker
- * at couch.daddiego.com.ar (design: ~/.claude/plans/2026-10-10-couch-design.md,
+ * at couch.daddiego.com.ar (design: ps3tools_private's notes/couch-design/design.md (private),
  * cut to the Board on 2026-10-10). Three pages: the Board, the News, the
  * Info screen; L1 and R1 move between the Board and the News, SELECT opens
  * the Info page and CIRCLE closes it.
