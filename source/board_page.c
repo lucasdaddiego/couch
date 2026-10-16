@@ -198,7 +198,7 @@ static void halo(float x, float y, float w, float h, const char *label)
  * UP or DOWN, a grey dash for flat, nothing for none. Its left x. */
 static float chip(float xr, float y, const board_chg *c, int money)
 {
-    if (!c || c->dir == CHG_NONE) return xr;
+    if (!c || c->dir == CHG_NONE || c->dir == CHG_FLAT) return xr;   /* 0.3.2: a chip only for a move (no grey minus) */
     u32 col = c->dir == CHG_UP ? UP : c->dir == CHG_DOWN ? DOWN : GREY;
     int ic = c->dir == CHG_UP ? IC_S_CARET_UP : c->dir == CHG_DOWN ? IC_S_CARET_DOWN : IC_S_MINUS;
     const char *s = c->dir == CHG_FLAT ? "" : money ? c->abs : c->pct;
@@ -750,8 +750,17 @@ static void small_tile(float x, float y, float w, float h, const item *it)
     else if (paren[0]) snprintf(foot, sizeof foot, "%s, %s", paren, it->when);
     else snprintf(foot, sizeof foot, "%s", it->when);
     if (wide) {
-        text_fit(x + 22, y + 12, F_SMALL, GREY, cl - x - 32, "%s", lab);
-        text_fit(x + 22, rnd(y + h - 31), F_SMALL, fc, w - 40, "%s", foot);
+        /* 0.3.2: two rows, the label and, on its right, the time or the date (the chip when the value
+         * moved), then the value; a rate's buy price is the Blue card's only */
+        if (!it->money && !it->none) snprintf(foot, sizeof foot, "%s", it->when);
+        if (cl >= x + w - 16 && text_w(F_SMALL, lab) + text_w(F_SMALL, foot) + 14 > w - 44) {   /* no room: a shorter foot */
+            char *cm = strstr(foot, ", "), *sp = strchr(foot, ' ');
+            if (cm) memmove(foot, cm + 2, strlen(cm + 2) + 1);                /* "TNA, 14:47" -> "14:47" */
+            else if (sp) *sp = 0;                                             /* "Aug 2026" -> "Aug" */
+        }
+        float fw = cl < x + w - 16 ? 0 : (float)text_w(F_SMALL, foot), lw = (cl < x + w - 16 ? cl - 10 : x + w - 22 - fw - 14) - (x + 22);
+        text_fit(x + 22, y + 14, F_SMALL, GREY, lw, "%s", lab);
+        if (fw > 0) text_fit(rnd(x + w - 22 - fw), y + 14, F_SMALL, fc, fw, "%s", foot);
     } else {
         /* narrow (no room for a foot row): the label's first word and the time or the date on the label row */
         const char *sp = strchr(lab, ' ');
@@ -762,8 +771,8 @@ static void small_tile(float x, float y, float w, float h, const item *it)
         if (t[0] && lx + 10 + text_w(F_SMALL, t) <= x + 22 + room) text(lx + 10, y + 10, F_SMALL, fc, "%s", t);
     }
     const char *v = it->none || miss(it->val) ? "-" : shown(it->label, it->val, cnt, sizeof cnt);
-    /* wide: the digits' ink centred between the label's and the foot's (the baseline at (h + 9) / 2 + 19) */
-    float vy = wide ? rnd(y + (h + 9) / 2 + 19 - asc_of(line_h(F_LARGE))) : rnd(y + 36);
+    /* wide: the value centred in the room under the label row */
+    float r0 = y + 14 + (float)line_h(F_SMALL), vy = wide ? rnd(r0 + (y + h - r0 - (float)line_h(F_LARGE)) / 2 - 2) : rnd(y + 36);
     value(x + 22, vy, -1, F_LARGE, F_BODY, v[0] == '-' && !v[1] ? DIM : WHITE, v);
 }
 

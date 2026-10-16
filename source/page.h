@@ -24,9 +24,9 @@ extern const char *const page_name[PAGE_N];
 int page_wide(void);
 float page_top(void);
 float page_bar_y(void);
-#define G 16                         /* the gap between the columns */
-#define RG 12                        /* the gap between rows of tiles */
-#define TR 20                        /* a tile's corner radius */
+#define G 24                         /* the gap between the columns (0.3.2: 16 before) */
+#define RG 16                        /* the gap between rows of tiles (0.3.2: 12 before) */
+#define TR 26                        /* a tile's corner radius (0.3.2: 20 before) */
 
 /* The frame of the page on the TV (the frame loop's draw): the sky, the
  * header, the body (two during a slide), the bottom bar, the start

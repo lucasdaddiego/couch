@@ -752,6 +752,13 @@ theme, or better, a theme that adapts to the sun".
   ...") while the clock is the console's own; otherwise the clock's source,
   as before (the Info page always shows it). A reply whose holiday passed
   shows none.
+- **The whole app in the same spirit** (Lucas: "also the full app should
+  look like it"): tiles with 26 px corners (20 before), gaps of 24 px
+  between the columns and 16 px between rows (16 and 12); a change chip only
+  for a move (no grey minus for "no change"); the small money tiles in two
+  rows, the label with the time or the date on its right (shorter when the
+  label needs the room: "Aug", "14:47"), then the value; a rate's buy price
+  is the Blue card's only.
 - Preview: `ambient` (by day, with a holiday), `ambient_night` (the aurora,
   then the next three headlines), `holiday` (the header). PASSES=2 now
   counts a pixel only when it moves by more than 8 levels (the sky's blur
