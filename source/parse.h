@@ -333,12 +333,14 @@ int ambient_page(long step, int has_news);
 #define AMBIENT_BLOCK_Y 150
 #define AMBIENT_GLIDE_S 6.0
 void ambient_place(double t, float *x, float *y);
-/* 0.3.2's centred block: a slow drift of at most AMBIENT_DRIFT_X and
- * AMBIENT_DRIFT_Y px from the centre, whole pixels, periods of 7 and 5 min
- * (the TV's burn-in guard; a pixel step every few seconds). */
+/* The waiting screen's block (the TV's burn-in guard): its place for the
+ * k-th span of AMB_MOVE_S (page.c), at most AMBIENT_DRIFT_X and
+ * AMBIENT_DRIFT_Y px from the centre, whole pixels; span 0 is the centre.
+ * Since 0.4.1 the block moves only while it is faded out (0.3.2 drifted a
+ * whole pixel every few seconds, which looked like a fault). */
 #define AMBIENT_DRIFT_X 40
 #define AMBIENT_DRIFT_Y 24
-void ambient_drift(double t, float *x, float *y);
+void ambient_spot(long k, float *x, float *y);
 int ambient_line(long minute, unsigned has);
 
 /* The ticker's offset in px at t seconds for a speed of px_s px a second,

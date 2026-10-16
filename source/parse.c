@@ -1256,8 +1256,9 @@ int holiday_words(const board_data *b, long local_now, char *out, int n)
     return 1;
 }
 
-void ambient_drift(double t, float *x, float *y)
+void ambient_spot(long k, float *x, float *y)
 {
-    *x = (float)floor(AMBIENT_DRIFT_X * sin(t * 6.283185307179586 / 420.0) + 0.5);
-    *y = (float)floor(AMBIENT_DRIFT_Y * sin(t * 6.283185307179586 / 300.0 + 1.0) + 0.5);
+    if (k < 0) k = 0;
+    *x = (float)floor(AMBIENT_DRIFT_X * sin((double)k * 2.399963229728653) + 0.5);   /* the golden angle: no place soon again */
+    *y = (float)floor(AMBIENT_DRIFT_Y * sin((double)k * 1.3) + 0.5);
 }

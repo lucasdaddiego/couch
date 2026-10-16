@@ -170,8 +170,8 @@ night_line() {   # $2: the wx_now words and wx_fx of the night
     esac
 }
 hol_line() { [[ $1 == holiday=* ]] && { print -r -- "holiday=2026-10-12|Founders' Day|4"; return }; print -r -- "$1"; }   # the next holiday in 4 days
-dayhol_line() {   # and the hours from 15:00, the clock's next hour (the base reply's start at 18 hides the hourly card)
-    [[ $1 == wx_hours=* ]] && { print -r -- "wx_hours=15|13 15 16 17 18 19 19 18 17 15 14 13|0 0 10 20 40 60 75 70 50 30 10 0|2 2 3 3 61 61 63 61 3 2 1 0"; return }
+dayhol_line() {   # and the hours from 10:00, the preview clock's next hour (the base reply's start at 18 hides the hourly card)
+    [[ $1 == wx_hours=* ]] && { print -r -- "wx_hours=10|13 15 16 17 18 19 19 18 17 15 14 13|0 0 10 20 40 60 75 70 50 30 10 0|2 2 3 3 61 61 63 61 3 2 1 0"; return }
     hol_line "$1"
 }
 body_hol() { each dayhol_line; }
@@ -307,10 +307,10 @@ net_slow|all)      # the answer takes 4 s: the header says the internet is slow
     scn net_slow "400:SNAP=net_slow 402:SELECT 430:SNAP=net_slow_info 431:EXIT" PV_BOARD_FAIL=slow ;|
 net_down|all)      # a good reply, then SQUARE after 10 s and a refused connect: no internet since 09:00
     scn net_down "120:SNAP=net_down_first 700:SQUARE 820:SNAP=net_down 822:SELECT 850:SNAP=net_down_info 851:EXIT" PV_BOARD_FAIL=ok,refused ;|
-ambient|all)       # 10 min with no button (1 min in the preview's build): the aurora with the clock, the date and the weather's line (0.3.0); a
-                   # minute on, the block glided to its next place with the hero rate; then the newest headline;
-                   # START wakes the screen (the Board) and does not exit; the fetches go on (every 5 min: 3 min of frames, one)
-    BODY=hol scn ambient "120:SNAP=ambient_before 3720:SNAP=ambient 7320:SNAP=ambient_news 10920:SNAP=ambient_board2 10940:START 10960:SNAP=ambient_awake 10970:EXIT" PV_MAXFRAMES=11000
+ambient|all)       # 10 min with no button (1 min in the preview's build): the waiting screen; after 2 min of it the block
+                   # fades out (ambient_fade, half way), comes back at its next place (ambient_moved); START wakes the
+                   # screen (the Board) and does not exit; the fetches go on (every 5 min: 3 min of frames, one)
+    BODY=hol scn ambient "120:SNAP=ambient_before 3720:SNAP=ambient 7320:SNAP=ambient_news 10800:SNAP=ambient_fade 10920:SNAP=ambient_moved 10940:START 10960:SNAP=ambient_awake 10970:EXIT" PV_MAXFRAMES=11000
     print -r -- "  requests: $(command grep -c '^GET' $P/build/sbx/ambient$SFX/peer.log); couch.txt: $(command grep -h '^ambient' $P/build/sbx/ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 board_src|all)     # the now line from another source: the weather card's foot names it; the same folded to ASCII
     BODY=src scn board_src "120:SNAP=board_src 121:EXIT"

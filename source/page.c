@@ -27,6 +27,7 @@
 #include "start.h"
 #include "reader.h"
 #include "stext.h"
+#include "fade.h"                 /* last: it wraps ps3gfx's draws */
 
 #define DIM_LAYER 0x000000a8         /* RSX only: black at 66 %, the picture at a third of its light */
 #define DOT_R 7
@@ -416,7 +417,10 @@ int ambient_day(void)
 
 #define AMB_ROT_S 10.0                       /* one headline at a time, the next every 10 s */
 #define AMB_FADE_S 0.6                       /* out and in over 0.6 s */
-#define AMB_W 1240                           /* the block's width */
+#define AMB_MOVE_S 120.0                     /* the block moves every 2 min: out, a new place, in (0.4.1) */
+#define aw_MAX 1520                       /* the block's width, at most (1240 before 0.4.1) */
+
+float amb_ga = 1.0f;                         /* fade.h: the block's fade, 1 outside the waiting screen */
 #define AMB_R 28                             /* a card's corners */
 
 /* A card of the waiting screen: a light, translucent rounded panel with a
@@ -435,7 +439,8 @@ static const char *const mon3[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "
 
 /* The waiting screen (redone in 0.3.2: a centred clock, the weather and
  * more news, in cards): the sky by day under a dim layer, the aurora by night; one block
- * of AMB_W px in the middle that drifts a few pixels (ambient_drift). The
+ * up to AMB_W_MAX px wide in the middle, at a new place every AMB_MOVE_S
+ * (ambient_spot), faded out and in (fade.h). The
  * date small over the clock (D_XL); under it two cards, the weather (the
  * hero's icon, the temperature, the words, the high, the low, the rain) and
  * the next holiday (else the sunrise and the sunset); a card of the next
@@ -466,7 +471,15 @@ static void ambient_frame(void)
     }
     double t = (double)(sysGetSystemTime() - amb_since) / 1e6;
     float px, py;
-    ambient_drift(t, &px, &py);
+    /* the place of this 2-minute span; the block fades out over its last AMB_FADE_S and in over the
+     * next span's first: a move, never a visible step (0.3.2 crept a whole pixel every few seconds) */
+    long span = (long)(t / AMB_MOVE_S);
+    double mt = t - (double)span * AMB_MOVE_S;
+    float ga = mt > AMB_MOVE_S - AMB_FADE_S ? (float)((AMB_MOVE_S - mt) / AMB_FADE_S) : span > 0 && mt < AMB_FADE_S ? (float)(mt / AMB_FADE_S) : 1.0f;
+    ambient_spot(span, &px, &py);
+    float aw = (float)SW - 2 * (AMBIENT_DRIFT_X + 60);
+    if (aw > aw_MAX) aw = aw_MAX;
+    aw = rnd(aw);
     u32 c1 = day ? WHITE : 0xdfe5eeff, c2 = day ? 0xdde3ecd0 : 0xaab5c6ff;
     clock_offset(&off);
     long local = clock_utc() + off;
@@ -479,21 +492,25 @@ static void ambient_frame(void)
     int nn = board_have ? b->n_news : 0;
     int big = !digits_rc ? D_XL : -1;
     float ch = big >= 0 ? (float)digits_h(D_XL) : (float)line_h(F_LARGE);
-    float cardh = 200, newsh = 92 + 2 * (float)wrap_step(F_MED);
+    int nl = 1;                                  /* the headline's lines: two when any of them needs two (no jump at a change) */
+    for (int i = 0; i < nn; i++)
+        if (text_w(F_LARGE, b->news[i].title) > aw - 72) nl = 2;
+    float cardh = 192, newsh = 92 + (float)nl * (float)wrap_step(F_LARGE);
     float hrsh = 220;
     int has_hrs = has_wx && board_hours_left(c.hour) >= 2;
-    float rest = (has_wx || has_side ? 40 + cardh : 0) + (nn ? 24 + newsh : 0), room = (float)SH - 64;   /* 64: the drift's 2 x 24 and a margin */
-    if (has_hrs && big >= 0 && (float)line_h(F_MED) + ch + rest + 24 + hrsh > room) {
+    float rest = (has_wx || has_side ? 28 + cardh : 0) + (nn ? 20 + newsh : 0), room = (float)SH - 64;   /* 64: the drift's 2 x 24 and a margin */
+    if (has_hrs && big >= 0 && (float)line_h(F_MED) + ch + rest + 20 + hrsh > room) {
         big = D_L;                               /* a narrow area: a smaller clock first */
         ch = (float)digits_h(D_L);
     }
-    if (has_hrs && (float)line_h(F_MED) + ch + rest + 24 + hrsh > room) {   /* still too tall: no hourly card, the large clock */
+    if (has_hrs && (float)line_h(F_MED) + ch + rest + 20 + hrsh > room) {   /* still too tall: no hourly card, the large clock */
         has_hrs = 0;
         big = D_XL;
         ch = (float)digits_h(D_XL);
     }
-    float hgt = (float)line_h(F_MED) + ch + rest + (has_hrs ? 24 + hrsh : 0);
-    float cx = rnd((float)SW / 2 + px), x0 = rnd(cx - AMB_W / 2), y = rnd((float)SH / 2 - hgt / 2 + py);
+    float hgt = (float)line_h(F_MED) + ch + rest + (has_hrs ? 20 + hrsh : 0);
+    float cx = rnd((float)SW / 2 + px), x0 = rnd(cx - aw / 2), y = rnd((float)SH / 2 - hgt / 2 + py);
+    amb_ga = ga;                                /* fade.h: the block's draws from here */
     /* the date over the clock, then the clock */
     text_c(cx, y, F_MED, c2, "%s%s%s", date, ampm ? "  " : "", ampm ? ampm : "");
     y += (float)line_h(F_MED);
@@ -501,24 +518,24 @@ static void ambient_frame(void)
     else text_c(cx, y, F_LARGE | TNUM, c1, "%s", hm);
     y += ch;
     if (has_wx || has_side) {
-        y += 40;
-        float sw = has_side ? 400 : 0, ww = has_wx ? AMB_W - (has_side ? sw + 24 : 0) : 0;
-        if (!has_wx) sw = AMB_W;
+        y += 28;
+        float sw = has_side ? 460 : 0, ww = has_wx ? aw - (has_side ? sw + 24 : 0) : 0;
+        if (!has_wx) sw = aw;
         if (has_wx) {
             amb_card(x0, y, ww, cardh, day);
             board_ambient_wx(x0, y, ww, cardh, c1, c2);
         }
         if (has_side) {
-            float sx = rnd(x0 + AMB_W - sw), ix = sx + 36, iw = sw - 72;
+            float sx = rnd(x0 + aw - sw), ix = sx + 36, iw = sw - 72;
             amb_card(sx, y, sw, cardh, day);
             if (has_hol) {
-                text(ix, y + 28, F_SMALL, c2, "%s", hd == 0 ? "Holiday today" : hd == 1 ? "Holiday tomorrow" : "Next holiday");
+                text(ix, y + 24, F_SMALL, c2, "%s", hd == 0 ? "Holiday today" : hd == 1 ? "Holiday tomorrow" : "Next holiday");
                 if (hd > 1) {
                     snprintf(a, sizeof a, "in %ld days", hd);
-                    text_r(ix + iw, y + 28, F_SMALL, 0xffc27aff, "%s", a);
+                    text_r(ix + iw, y + 24, F_SMALL, 0xffc27aff, "%s", a);
                 }
-                text_fit(ix, y + 28 + (float)line_h(F_SMALL) + 6, F_LARGE, c1, iw, "%s %d %s", wday3[hw], b->hol_day, mon3[b->hol_month - 1]);
-                text_wrap(ix, y + 28 + (float)line_h(F_SMALL) + 12 + (float)line_h(F_LARGE), F_SMALL, c2, iw, 2, b->hol_name);
+                text_fit(ix, y + 24 + (float)line_h(F_SMALL) + 6, F_LARGE, c1, iw, "%s %d %s", wday3[hw], b->hol_day, mon3[b->hol_month - 1]);
+                text_wrap(ix, y + 24 + (float)line_h(F_SMALL) + 12 + (float)line_h(F_LARGE), F_SMALL, c2, iw, 2, b->hol_name);
             } else {
                 float lh = (float)line_h(F_LARGE), yy = rnd(y + (cardh - 2 * lh - 12) / 2);
                 text(ix, yy + (lh - (float)line_h(F_SMALL)) / 2, F_SMALL, c2, "Sunrise");
@@ -530,14 +547,14 @@ static void ambient_frame(void)
         y += cardh;
     }
     if (has_hrs) {
-        y += 24;
-        amb_card(x0, y, AMB_W, hrsh, day);
-        board_ambient_hours(x0, y, AMB_W, hrsh, c.hour, c1, c2);
+        y += 20;
+        amb_card(x0, y, aw, hrsh, day);
+        board_ambient_hours(x0, y, aw, hrsh, c.hour, c1, c2);
         y += hrsh;
     }
     if (nn) {
-        y += 24;
-        amb_card(x0, y, AMB_W, newsh, day);
+        y += 20;
+        amb_card(x0, y, aw, newsh, day);
         double ph = fmod(t, AMB_ROT_S);
         float k = ph < AMB_FADE_S ? (float)(ph / AMB_FADE_S) : ph > AMB_ROT_S - AMB_FADE_S ? (float)((AMB_ROT_S - ph) / AMB_FADE_S) : 1.0f;
         if (t < AMB_FADE_S) k = 1.0f;            /* the first headline shows at once */
@@ -555,8 +572,9 @@ static void ambient_frame(void)
             text(ix + pw + 16, rnd(ty + (phh - (float)line_h(F_SMALL)) / 2), F_SMALL, alpha_times(c2, k), "%s ago", a);
         }
         for (int d = 0; d < nn; d++)               /* a dot per headline, the shown one lit */
-            aa_disc(x0 + AMB_W - 36 - (float)(nn - 1 - d) * 18, ty + phh / 2, 4, d == i ? c1 : 0xffffff40);
-        text_wrap(ix, ty + phh + 16, F_MED, alpha_times(c1, k), AMB_W - 72, 2, n->title);
+            aa_disc(x0 + aw - 36 - (float)(nn - 1 - d) * 18, ty + phh / 2, 4, d == i ? c1 : 0xffffff40);
+        text_wrap(ix, ty + phh + 16, F_LARGE, alpha_times(c1, k), aw - 72, nl, n->title);
     }
+    amb_ga = 1.0f;
     ui_flip();
 }

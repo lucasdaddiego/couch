@@ -428,15 +428,20 @@ static void check_032(void)
         snprintf(buf, sizeof buf, "couch-board 1\nnow=1791913620\n%s\nend\n", bad[i]);
         CHECK(parse(buf, 0) == BP_OK && !b.has_holiday);
     }
-    float x, y, mx = 0, my = 0;
-    for (double s = 0; s < 1800; s += 0.25) {
-        ambient_drift(s, &x, &y);
+    float x, y, mx = 0, my = 0, lx = 0, ly = 0;
+    int same = 0;
+    ambient_spot(0, &x, &y);
+    CHECK(x == 0 && y == 0);                          /* the first span: the centre */
+    for (long k = 1; k < 200; k++) {
+        ambient_spot(k, &x, &y);
         CHECK(x == floorf(x) && y == floorf(y) && fabsf(x) <= AMBIENT_DRIFT_X && fabsf(y) <= AMBIENT_DRIFT_Y);
         if (fabsf(x) > mx) mx = fabsf(x);
         if (fabsf(y) > my) my = fabsf(y);
+        if (x == lx && y == ly) same++;
+        lx = x, ly = y;
     }
-    CHECK(mx == AMBIENT_DRIFT_X && my == AMBIENT_DRIFT_Y);
-    group("0.3.2: holiday= and its words, bad lines left out; the ambient drift (whole pixels, its range)", f0);
+    CHECK(mx >= AMBIENT_DRIFT_X - 1 && my >= AMBIENT_DRIFT_Y - 1 && same == 0);   /* the whole range, a new place each span */
+    group("0.3.2: holiday= and its words, bad lines left out; the block's places (whole pixels, its range, a new one each span)", f0);
 }
 
 static void check_stage10(void)

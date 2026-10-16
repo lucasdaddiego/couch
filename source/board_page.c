@@ -43,6 +43,7 @@
 #include "spu_fx_run.h"
 #include "marquee.h"
 #include "start.h"
+#include "fade.h"                 /* last: it wraps ps3gfx's draws */
 
 #define HALO 24                      /* the glow outside a changed tile */
 #define COUNT_S 0.4                  /* the counting's time (stage 9: 0.8 s read as slow) */

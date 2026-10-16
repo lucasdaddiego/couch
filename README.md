@@ -19,7 +19,7 @@ deploy for your place (`worker/`).
   effects' and the display's times.
 - **The waiting screen:** after 10 minutes with no button, a large clock, the
   weather, the next hours, the next holiday and one headline at a time, over
-  the sky by day and an aurora by night. It drifts slowly to protect the TV.
+  the sky by day and an aurora by night. Every 2 minutes it fades out and back in at a slightly different place, to protect the TV from burn-in.
 
 <img src="docs/news.jpg" width="640" alt="The News page"> <img src="docs/article.jpg" width="640" alt="The reader">
 
