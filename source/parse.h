@@ -263,6 +263,8 @@ long days_from_civil(long y, int m, int d);
  * days)". 0 and no words when b has none or its date has passed (a stale
  * reply), or it is over 400 days away. */
 int holiday_words(const board_data *b, long local_now, char *out, int n);
+/* Its days from local_now's date and its weekday (0 Sunday); 0 as above. */
+int holiday_parts(const board_data *b, long local_now, long *days, int *wday);
 extern const char *const weekday_name[7];
 extern const char *const month_name[12];
 

@@ -1220,19 +1220,27 @@ void wind_words(char *buf, int n, int deg, int gusts)
     else if (n > 0) buf[0] = 0;
 }
 
-int holiday_words(const board_data *b, long local_now, char *out, int n)
+int holiday_parts(const board_data *b, long local_now, long *days, int *wday)
 {
     civil_time c;
-    out[0] = 0;
     if (!b->has_holiday) return 0;
     civil_from_unix(local_now, &c);
-    long today = days_from_civil(c.year, c.month, c.day), at = days_from_civil(b->hol_year, b->hol_month, b->hol_day);
-    long d = at - today;
+    long at = days_from_civil(b->hol_year, b->hol_month, b->hol_day), d = at - days_from_civil(c.year, c.month, c.day);
     if (d < 0 || d > 400) return 0;
+    *days = d;
+    *wday = (int)(((at % 7) + 11) % 7);
+    return 1;
+}
+
+int holiday_words(const board_data *b, long local_now, char *out, int n)
+{
+    long d;
+    int wd;
+    out[0] = 0;
+    if (!holiday_parts(b, local_now, &d, &wd)) return 0;
     if (d == 0) snprintf(out, (size_t)n, "Today is a holiday: %s", b->hol_name);
     else if (d == 1) snprintf(out, (size_t)n, "Tomorrow is a holiday: %s", b->hol_name);
-    else snprintf(out, (size_t)n, "Next holiday: %s %d %s, %s (in %ld days)", weekday_name[((at % 7) + 11) % 7], b->hol_day,
-                  month_name[b->hol_month - 1], b->hol_name, d);
+    else snprintf(out, (size_t)n, "Next holiday: %s %d %s, %s (in %ld days)", weekday_name[wd], b->hol_day, month_name[b->hol_month - 1], b->hol_name, d);
     return 1;
 }
 

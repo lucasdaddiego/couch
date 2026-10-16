@@ -731,13 +731,20 @@ theme, or better, a theme that adapts to the sun".
   -2 degrees, night below -4, so a dusk does not flicker. The SPU job
   follows (`fx_tick` asks for the sky by day). The Board itself already
   follows the sun since 0.3.0: the sky's colours and the glass tint.
-- **The block**, centred: the clock in D_XL (WHITE by day, GREY at night),
-  the date, the next holiday, the weather of now (the hero's moving icon,
-  the temperature, the words, today's high and low and its rain chance),
-  then three headlines with their source's pill; every 20 s the next three,
-  with a 0.8 s fade. The block drifts at most 40 px sideways and 24 px up
-  and down, in whole pixels, on periods of 7 and 5 min (`ambient_drift`):
-  the TV's burn-in guard, instead of 0.3.0's nine places.
+- **The block** (redone the same night after Lucas: "I see it
+  disproportionate. make it more gorgeous, like apple"), AMB_W 1240 px in
+  the middle: the date small over the clock (D_XL); under it two cards, the
+  weather (the hero's moving icon at 120 px, the temperature in D_M, the
+  words in F_LARGE, the high, the low and the rain's chance) and the next
+  holiday ("Next holiday", "in 4 days", "Mon 12 Oct" and the name; else the
+  sunrise and the sunset); then one card with a headline in two lines of
+  F_MED, its source's pill and its age, the next every 10 s with a 0.6 s
+  fade, and a dot per headline. The cards are light translucent rounded
+  panels (28 px corners, a 1 px edge): the Board's glass needs the sky's
+  blur, which the aurora does not make. WHITE by day; by night a little
+  under it. The block drifts at most 40 px sideways and 24 px up and down,
+  in whole pixels, on periods of 7 and 5 min (`ambient_drift`): the TV's
+  burn-in guard, instead of 0.3.0's nine places.
 - **The holidays**: the Worker's `holiday=` line (worker/README.md; the
   official list of argentina.gob.ar). The header's second line names the
   next one ("Next holiday: Monday 9 November, Visita de Su Santidad el Papa

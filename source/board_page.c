@@ -262,6 +262,37 @@ int board_wx_icon(float cx, float cy, float box)
     return 1;
 }
 
+/* The waiting screen's weather card (0.3.2) in the box x, y, w, h: the
+ * hero's moving icon (120 px), the temperature in D_M, then a column with
+ * the words (F_LARGE), today's high and low and the rain's chance (F_MED). */
+void board_ambient_wx(float x, float y, float w, float h, u32 c1, u32 c2)
+{
+    const board_data *b = &board_cur;
+    if (!board_have || !b->has_wx) return;
+    char t[16], hl[64], rain[32];
+    int k = b->has_fx ? wmo_kind(b->fx_code) : WK_NONE;
+    temp_digits(t, sizeof t, b->temp);
+    hl[0] = rain[0] = 0;
+    if (b->n_day > 0 && !strcmp(b->day[0].label, "Today")) {
+        const board_day *d = &b->day[0];
+        if (!miss(d->max) && !miss(d->min)) snprintf(hl, sizeof hl, "H %s   L %s", d->max, d->min);
+        if (!miss(d->rain)) snprintf(rain, sizeof rain, "Rain %s", d->rain);
+    }
+    float ic = k == WK_NONE || icons_rc ? 0 : 120, cx = x + 40;
+    if (ic > 0) {
+        hero_icon(k, b->is_day, cx + ic / 2, y + h / 2, ic);
+        cx += ic + 28;
+    }
+    float xe = big(rnd(cx), rnd(y + (h - (float)big_h(D_M)) / 2), D_M, c1, t), col = rnd(xe + 40), mw = x + w - 36 - col;
+    float l1 = (float)line_h(F_LARGE), l2 = (float)line_h(F_MED), ch = l1 + (hl[0] || rain[0] ? 8 + l2 : 0), cy = rnd(y + (h - ch) / 2);
+    text_fit(col, cy, F_LARGE, c1, mw, "%s", b->words);
+    if (hl[0] || rain[0]) {
+        float xx = col;
+        if (hl[0]) xx = text_fit(col, rnd(cy + l1 + 8), F_MED, c2, mw, "%s", hl) + 28;
+        if (rain[0] && xx < col + mw - 60) text_fit(xx, rnd(cy + l1 + 8), F_MED, 0x8ec9ffff, col + mw - xx, "%s", rain);
+    }
+}
+
 /* The hero's icon (design 3.9): layers of the L set that move, by
  * fractions of a pixel (bilinear), slowly and over a wider range since the
  * round of 2026-10-14 (Lucas: "a bit bigger and more range of movement"):

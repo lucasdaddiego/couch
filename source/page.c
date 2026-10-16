@@ -415,22 +415,40 @@ int ambient_day(void)
     return amb_day;
 }
 
-#define AMB_ROT_S 20.0                       /* the headlines change every 20 s */
-#define AMB_FADE_S 0.8                       /* and fade out and in over 0.8 s */
+#define AMB_ROT_S 10.0                       /* one headline at a time, the next every 10 s */
+#define AMB_FADE_S 0.6                       /* out and in over 0.6 s */
+#define AMB_W 1240                           /* the block's width */
+#define AMB_R 28                             /* a card's corners */
 
-/* The waiting screen (design 3.12, centred since 0.3.2: Lucas, "center the
- * clock on the waiting screen, add weather and more news"): the sky by day
- * under a dim layer, the aurora by night; one block in the middle that
- * drifts a few pixels (ambient_drift): the clock in D_XL, the date and the
- * next holiday, the weather of now (the hero's icon, the temperature, the
- * words, today's high and low and the rain's chance), then three headlines
- * with their source's pill, the next three every AMB_ROT_S. */
+/* A card of the waiting screen: a light, translucent rounded panel with a
+ * 1 px edge (the glass of the Board needs the sky's blur, which the aurora
+ * does not make). */
+static void amb_card(float x, float y, float w, float h, int day)
+{
+    u32 fill = day ? 0xffffff24 : 0xffffff14;
+    round_rect(x, y, w, h, AMB_R, fill);
+    aa_corners(x, y, w, h, AMB_R, fill);
+    round_frame(x, y, w, h, AMB_R, 1, day ? 0xffffff38 : 0xffffff22);
+}
+
+static const char *const wday3[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+static const char *const mon3[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+
+/* The waiting screen (design 3.12, redone in 0.3.2 after Lucas: "center the
+ * clock", "add weather and more news", "make it more gorgeous, like
+ * apple"): the sky by day under a dim layer, the aurora by night; one block
+ * of AMB_W px in the middle that drifts a few pixels (ambient_drift). The
+ * date small over the clock (D_XL); under it two cards, the weather (the
+ * hero's icon, the temperature, the words, the high, the low, the rain) and
+ * the next holiday (else the sunrise and the sunset); then one card with a
+ * headline, its source and age, the next every AMB_ROT_S, and a dot per
+ * headline. */
 static void ambient_frame(void)
 {
     int off;
     civil_time c;
     const char *ampm;
-    char hm[16], date[64], hol[160], wx[200];
+    char hm[16], date[64], a[32];
     const board_data *b = &board_cur;
     begin_frame();
     int day = ambient_day();
@@ -450,70 +468,78 @@ static void ambient_frame(void)
     double t = (double)(sysGetSystemTime() - amb_since) / 1e6;
     float px, py;
     ambient_drift(t, &px, &py);
-    u32 c1 = day ? WHITE : GREY, c2 = day ? 0xd6dce6ff : DIM;
+    u32 c1 = day ? WHITE : 0xdfe5eeff, c2 = day ? 0xdde3ecd0 : 0xaab5c6ff;
     clock_offset(&off);
-    civil_from_unix(clock_utc() + off, &c);
+    long local = clock_utc() + off;
+    civil_from_unix(local, &c);
     clock_hm(hm, sizeof hm, c.hour, c.min, clock_h24(), &ampm);
-    snprintf(date, sizeof date, "%s %d %s%s%s", weekday_name[c.wday], c.day, month_name[c.month - 1], ampm ? "  " : "", ampm ? ampm : "");
-    int has_hol = board_have && holiday_words(b, clock_utc() + off, hol, sizeof hol);
-    int has_wx = board_have && b->has_wx;
-    wx[0] = 0;
-    if (has_wx) {
-        int n = snprintf(wx, sizeof wx, "%s", b->words);
-        if (b->n_day > 0 && !strcmp(b->day[0].label, "Today") && strcmp(b->day[0].max, "-"))
-            n += snprintf(wx + n, sizeof wx - (size_t)n, "   %s / %s", b->day[0].max, b->day[0].min);
-        if (b->n_day > 0 && !strcmp(b->day[0].label, "Today") && strcmp(b->day[0].rain, "-") && n < (int)sizeof wx)
-            snprintf(wx + n, sizeof wx - (size_t)n, "   rain %s", b->day[0].rain);
-    }
-    int nn = board_have ? b->n_news : 0, rows = nn < 3 ? nn : 3;
-    /* the block's height, then its top: centred, plus the drift */
+    snprintf(date, sizeof date, "%s %d %s", weekday_name[c.wday], c.day, month_name[c.month - 1]);
+    long hd = 0;
+    int hw = 0, has_hol = board_have && holiday_parts(b, local, &hd, &hw);
+    int has_wx = board_have && b->has_wx, has_side = has_hol || (board_have && b->has_sun);
+    int nn = board_have ? b->n_news : 0;
     int big = !digits_rc ? D_XL : -1;
     float ch = big >= 0 ? (float)digits_h(D_XL) : (float)line_h(F_LARGE);
-    float wxh = 84, rowh = 50;
-    float hgt = ch + 6 + (float)line_h(F_MED) + (has_hol ? 4 + (float)line_h(F_SMALL) : 0) + (has_wx ? 36 + wxh : 0) + (rows ? 40 + rows * rowh : 0);
-    float cx = rnd((float)SW / 2 + px), y = rnd((float)SH / 2 - hgt / 2 + py);
+    float cardh = 200, newsh = 92 + 2 * (float)wrap_step(F_MED);
+    float hgt = (float)line_h(F_MED) + ch + (has_wx || has_side ? 40 + cardh : 0) + (nn ? 24 + newsh : 0);
+    float cx = rnd((float)SW / 2 + px), x0 = rnd(cx - AMB_W / 2), y = rnd((float)SH / 2 - hgt / 2 + py);
+    /* the date over the clock, then the clock */
+    text_c(cx, y, F_MED, c2, "%s%s%s", date, ampm ? "  " : "", ampm ? ampm : "");
+    y += (float)line_h(F_MED);
     if (big >= 0) digits(rnd(cx - (float)digits_w(D_XL, hm) / 2), y, D_XL, c1, hm);
     else text_c(cx, y, F_LARGE | TNUM, c1, "%s", hm);
-    y += ch + 6;
-    text_c(cx, y, F_MED, c1, "%s", date);
-    y += (float)line_h(F_MED);
-    if (has_hol) {
-        y += 4;
-        text_c(cx, y, F_SMALL, c2, "%s", hol);
-        y += (float)line_h(F_SMALL);
-    }
-    if (has_wx) {
-        y += 36;
-        char temp[16];
-        snprintf(temp, sizeof temp, "%s", b->temp);
-        float ic = 84, tw = (float)text_w(F_LARGE, temp), ww = (float)text_w(F_MED, wx);
-        if (ww > 900) ww = 900;
-        float total = ic + 18 + tw + 24 + ww, x = rnd(cx - total / 2);
-        if (!icons_rc && board_wx_icon(x + ic / 2, y + wxh / 2, ic)) x += ic + 18;
-        else x += (ic + 18) / 2;
-        float xe = text(x, rnd(y + (wxh - (float)line_h(F_LARGE)) / 2), F_LARGE, c1, "%s", temp);
-        text_fit(rnd(xe + 24), rnd(y + (wxh - (float)line_h(F_MED)) / 2), F_MED, c2, 900, "%s", wx);
-        y += wxh;
-    }
-    if (rows) {
+    y += ch;
+    if (has_wx || has_side) {
         y += 40;
+        float sw = has_side ? 400 : 0, ww = has_wx ? AMB_W - (has_side ? sw + 24 : 0) : 0;
+        if (!has_wx) sw = AMB_W;
+        if (has_wx) {
+            amb_card(x0, y, ww, cardh, day);
+            board_ambient_wx(x0, y, ww, cardh, c1, c2);
+        }
+        if (has_side) {
+            float sx = rnd(x0 + AMB_W - sw), ix = sx + 36, iw = sw - 72;
+            amb_card(sx, y, sw, cardh, day);
+            if (has_hol) {
+                text(ix, y + 28, F_SMALL, c2, "%s", hd == 0 ? "Holiday today" : hd == 1 ? "Holiday tomorrow" : "Next holiday");
+                if (hd > 1) {
+                    snprintf(a, sizeof a, "in %ld days", hd);
+                    text_r(ix + iw, y + 28, F_SMALL, 0xffc27aff, "%s", a);
+                }
+                text_fit(ix, y + 28 + (float)line_h(F_SMALL) + 6, F_LARGE, c1, iw, "%s %d %s", wday3[hw], b->hol_day, mon3[b->hol_month - 1]);
+                text_wrap(ix, y + 28 + (float)line_h(F_SMALL) + 12 + (float)line_h(F_LARGE), F_SMALL, c2, iw, 2, b->hol_name);
+            } else {
+                float lh = (float)line_h(F_LARGE), yy = rnd(y + (cardh - 2 * lh - 12) / 2);
+                text(ix, yy + (lh - (float)line_h(F_SMALL)) / 2, F_SMALL, c2, "Sunrise");
+                text_r(ix + iw, yy, F_LARGE, c1, "%s", b->sunrise);
+                text(ix, yy + lh + 12 + (lh - (float)line_h(F_SMALL)) / 2, F_SMALL, c2, "Sunset");
+                text_r(ix + iw, yy + lh + 12, F_LARGE, c1, "%s", b->sunset);
+            }
+        }
+        y += cardh;
+    }
+    if (nn) {
+        y += 24;
+        amb_card(x0, y, AMB_W, newsh, day);
         double ph = fmod(t, AMB_ROT_S);
         float k = ph < AMB_FADE_S ? (float)(ph / AMB_FADE_S) : ph > AMB_ROT_S - AMB_FADE_S ? (float)((AMB_ROT_S - ph) / AMB_FADE_S) : 1.0f;
-        if (t < AMB_ROT_S) k = ph > AMB_ROT_S - AMB_FADE_S ? k : 1.0f;   /* the first three show at once */
-        int first = (int)(((long)(t / AMB_ROT_S) * 3) % nn);
-        float bw = 1280, x0 = rnd(cx - bw / 2), col = 168, ph_h = 34;
-        for (int i = 0; i < rows; i++) {
-            const board_news *n = &b->news[(first + i) % nn];
-            float ry = y + (float)i * rowh;
-            float pw = (float)text_w(F_SMALL, n->source) + 24;
-            if (pw > col - 16) pw = col - 16;
-            u32 pc = alpha_times(source_colour(n->source), k * (day ? 1.0f : 0.75f));
-            float px0 = x0 + col - 16 - pw;
-            round_rect(px0, ry + (rowh - ph_h) / 2, pw, ph_h, ph_h / 2, pc);
-            aa_corners(px0, ry + (rowh - ph_h) / 2, pw, ph_h, ph_h / 2, pc);
-            text_fit(px0 + 12, rnd(ry + (rowh - (float)line_h(F_SMALL)) / 2), F_SMALL, alpha_times(WHITE, k), pw - 22, "%s", n->source);
-            text_fit(x0 + col, rnd(ry + (rowh - (float)line_h(F_BODY)) / 2), F_BODY, alpha_times(c1, k), bw - col, "%s", n->title);
+        if (t < AMB_FADE_S) k = 1.0f;            /* the first headline shows at once */
+        int i = (int)((long)(t / AMB_ROT_S) % nn);
+        const board_news *n = &b->news[i];
+        float ix = x0 + 36, ty = y + 26, phh = 36;
+        float pw = (float)text_w(F_SMALL, n->source) + 28;
+        if (pw > 220) pw = 220;
+        u32 pc = alpha_times(source_colour(n->source), k);
+        round_rect(ix, ty, pw, phh, phh / 2, pc);
+        aa_corners(ix, ty, pw, phh, phh / 2, pc);
+        text_fit(ix + 14, rnd(ty + (phh - (float)line_h(F_SMALL)) / 2), F_SMALL, alpha_times(WHITE, k), pw - 26, "%s", n->source);
+        if (n->age >= 0) {
+            age_words(a, sizeof a, n->age + board_age());
+            text(ix + pw + 16, rnd(ty + (phh - (float)line_h(F_SMALL)) / 2), F_SMALL, alpha_times(c2, k), "%s ago", a);
         }
+        for (int d = 0; d < nn; d++)               /* a dot per headline, the shown one lit */
+            aa_disc(x0 + AMB_W - 36 - (float)(nn - 1 - d) * 18, ty + phh / 2, 4, d == i ? c1 : 0xffffff40);
+        text_wrap(ix, ty + phh + 16, F_MED, alpha_times(c1, k), AMB_W - 72, 2, n->title);
     }
     ui_flip();
 }
