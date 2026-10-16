@@ -160,7 +160,7 @@ static const char *blocked(void)
 /* ---- the calls behind the job screen --------------------------------------------- */
 
 /* Each call runs in start_job's thread behind the counter (start.c: the
- * kit's run_job in the loading screen's look, the visible freeze signal),
+ * kit's run_job in Couch's look: a counter after 2 s, the visible freeze signal),
  * one job screen per call; the main thread writes the journal lines
  * between them. */
 static s32 (*job_fn)(void);
@@ -170,7 +170,7 @@ static s32 job_call(s32 (*fn)(void))
 {
     job_fn = fn;
     job_rc = -1;
-    start_job(SS_FX, job_tramp);             /* the loading screen's counter (start.c: the kit's run_job in Couch's look) */
+    start_job(SS_FX, job_tramp);             /* the job screen's counter after 2 s (start.c: the kit's run_job in Couch's look) */
     return job_rc;
 }
 

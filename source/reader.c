@@ -144,7 +144,8 @@ void reader_tick(void)
     as_pos = scroll_follow(as_pos, as_target, dt, TAU);
     int opened = page == PAGE_NEWS && !was_news;
     was_news = page == PAGE_NEWS;
-    if (page != PAGE_NEWS || ambient || art != ART_NONE || list_pending || net_state != NET_UP || !board_running()) return;
+    int prefetch = !list_asked && board_fetches > 0;      /* 0.4.1: the list once after the first Board fetch: the page opens with it */
+    if ((page != PAGE_NEWS && !prefetch) || ambient || art != ART_NONE || list_pending || net_state != NET_UP || !board_running()) return;
     s64 now = sysGetSystemTime(), since = now - list_asked;
     if (!list_asked || since >= (list_last_ok ? LIST_PERIOD_US : LIST_RETRY_US) || (opened && since >= LIST_OPEN_US)) ask_list(now);
 }

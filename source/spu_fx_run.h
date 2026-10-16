@@ -59,8 +59,8 @@ typedef struct {
 extern fx_scene fx_sc;
 
 /* The start, at each opening of the Board before the network
- * start: the textures, then the SPU calls behind start_job (the loading
- * screen's counter), the six start reports (2 s) and their known-answer test. It
+ * start: the textures, then the SPU calls behind start_job (a counter
+ * after 2 s), the six start reports (2 s) and their known-answer test. It
  * runs once, and again only after an entry that the journal held was
  * cleared (SQUARE twice on the Info page, as net_start). With no writable
  * folder, a pending quit or a frozen entry: RSX only, no SPU call.

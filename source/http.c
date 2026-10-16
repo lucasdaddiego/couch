@@ -79,7 +79,7 @@ void net_start(int fs_ok)
     /* The counter shows the console works, and the journal backs the job
      * screen's skip promise. Without a journal the start still runs, with
      * no job screen: no screen promises a skip that cannot happen. */
-    if (fs_ok) start_job(SS_NET, start_calls);   /* the loading screen's counter (start.c: the kit's run_job in Couch's look) */
+    if (fs_ok) start_job(SS_NET, start_calls);   /* the job screen's counter after 2 s (start.c: the kit's run_job in Couch's look) */
     else start_calls();
     journal_done("net_start", net_rc, net_rc == 0);
     net_state = net_rc == 0 ? NET_UP : NET_FAILED;

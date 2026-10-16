@@ -1,20 +1,20 @@
-/* The start (start.c): the loading screen, the times of the start's steps,
- * the start's job screen, and the start animation.
+/* The start (start.c): the times of the start's steps, the start's job
+ * screen, and the start animation.
  *
- * The start had a black delay, so a loading screen came. The first frame comes right after ui_init, before text_utf8,
- * digits_init, icons_init and the SPU start: Couch's name and "Starting"
- * with the steps under it, the step that runs marked. Each step is timed
- * from main's first statement, and couch.txt gets the times (after
- * fs_selftest, since couch.txt needs the folder): the black delay measured.
- * Each step also writes its mark to boot.txt (boot.h). The screen uses only
- * the kit's ASCII fonts and shapes: nothing else is loaded yet.
+ * The first frame comes right after ui_init: the background only (0.4.1
+ * removed the loading screen's name and step list, which the TV showed too
+ * briefly to read). Each step is timed from main's first statement, and
+ * couch.txt gets the times and ui_init's own steps (after fs_selftest,
+ * since couch.txt needs the folder). Each step also writes its mark to
+ * boot.txt (boot.h).
  *
  * The effects' and the network's starts run their calls in a job thread
- * while the main thread draws this screen with a counter (the kit's
- * run_job, in Couch's look: a counter that stops is the freeze signal).
+ * while the main thread draws frames (the kit's run_job, in Couch's look):
+ * a job that runs 2 s or more shows its name and a counter, and a counter
+ * that stops is the freeze signal.
  *
  * Then the loop's first frame begins the start animation: the
- * sky fades in from the loading screen's colour, the header moves down into
+ * sky fades in from the background's colour, the header moves down into
  * place, the two columns and the bottom rise into place, a little apart,
  * and the clock's digits flip from 00:00 to the time. Any button ends it.
  * The main thread only. */
@@ -29,13 +29,13 @@ extern const char *const start_name[SS_N];
 extern s64 t_main;                   /* sysGetSystemTime at main's first statement */
 
 void start_main(void);               /* main's first statement after boot_mark("main") */
-/* Before a step: a loading frame that shows it running (none before
- * ui_init). After it: its time and its boot.txt mark. start_end of SS_FRAME
+/* Before a step: its start time, and the job screen's name. After it:
+ * its time and its boot.txt mark (after SS_UI also the first frame). start_end of SS_FRAME
  * and SS_FETCH count only their first time. */
 void start_begin(int step);
 void start_end(int step);
-/* fn in a job thread while the loading screen (or, after the start, the
- * same look with only that step) draws a counter; step names the line
+/* fn in a job thread while the main thread draws frames, with a counter
+ * after 2 s; step names the line
  * (SS_FX, SS_NET). As the kit's run_job: no thread, one frame and the call
  * here. */
 void start_job(int step, void (*fn)(void));
@@ -54,7 +54,7 @@ float start_k(int part);
 int start_anim_on(void);
 #define SA_RISE 30                   /* px the columns rise */
 #define SA_DROP 24                   /* px the header comes down */
-#define LOADING_TOP 0x0a1222ff       /* the loading screen's colours (the kit's background), the start's fade from them */
+#define LOADING_TOP 0x0a1222ff       /* the kit's background colours, the start's fade from them */
 #define LOADING_BOT 0x13264cff
 
 #endif

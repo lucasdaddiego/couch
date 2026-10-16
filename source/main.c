@@ -9,8 +9,9 @@
  * with an article open) the waiting screen shows (page.c).
  * Each start appends a block to couch.txt in the app folder, and each step
  * of the start and the exit a line to boot.txt (boot.c), the first one as
- * main's first statement. The start shows the loading screen from the first
- * frame after ui_init (start.c), then the start animation.
+ * main's first statement. The first frame after ui_init is the background
+ * (start.c); the last Board reply (board_last.txt) is in before the loop,
+ * then the start animation.
  *
  * The frame loop: read_pad, the ambient mode's wake, the exit, board_take
  * (a new reply from the Board thread), the input, the ambient mode's step,
@@ -264,7 +265,7 @@ static int board_enter(void)
         couch_log("quit before the Board opened: %s", net_state == NET_UP ? "the network was up" : "no network start");
         return -1;
     }
-    start_begin(SS_FX);                      /* the loading screen names the step (the first start only) */
+    start_begin(SS_FX);                      /* the job screen's name for the step, when it is slow */
     fx_start();                              /* the SPUs behind their job screen, or RSX only */
     start_end(SS_FX);
     if (net_state != NET_UP) {
@@ -332,7 +333,7 @@ int main(void)
     start_main();
     ui_init(&(const ui_app){"Couch", APP_VERSION, APP_DIR});
     t_start = sysGetSystemTime();
-    start_end(SS_UI);                        /* the loading screen's first frame, at once */
+    start_end(SS_UI);                        /* the first frame, the background, at once */
     start_begin(SS_UTF8);
 #ifdef COUCH_UTF8_OFF
     utf8_rc = -1;                            /* the preview's utf8_off build: a console whose text_utf8 failed */
@@ -356,6 +357,7 @@ int main(void)
     board_init();
     log_start();
     start_log_early();
+    board_load_last();                       /* the last reply: the first frame has the data */
     if (unattended == 0 || (unattended > 0 && !fs_ok)) {
         const char *why = !fs_ok ? "the app cannot write its folder" : "auto.txt does not hold a number of seconds";
         char line[160];
@@ -373,7 +375,7 @@ int main(void)
     ui_stats(&st, 1);                        /* the frame times from here: the Board's loop */
     int step = 0, stext_on = 0;
     page = PAGE_BOARD;
-    start_anim_begin();                      /* the loading screen hands over to the start animation */
+    start_anim_begin();                      /* the background hands over to the start animation */
     while (!quit) {
         int was = page;
         read_pad();

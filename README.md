@@ -74,6 +74,7 @@ it knows and skips the rest.
 | File | Content |
 |---|---|
 | `board_url.txt` | one `http://` line: the Board Worker's URL. Absent, or an `https://` URL or a bad line: the setup steps |
+| `board_last.txt` | the last good Board reply: the next start shows it at once (same URL, at most 24 h old) until its first fetch |
 | `couch.txt` | one block per start: the version, the URL, the network start, the first fetches, the reader's replies, the waiting screen, the frame times, the exit; emptied at start past 64 KB |
 | `boot.txt` | a line per step of the start and of the exit, synced at once (it shows where a freeze stopped) |
 | `starts.txt`, `journal.txt` | ps3gfx's freeze journal: each risky call is written before it runs, and a call that froze the console before is skipped (SQUARE twice on Info clears it) |

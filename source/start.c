@@ -1,4 +1,4 @@
-/* The start (start.h): the loading screen, the steps' times, the job
+/* The start (start.h): the steps' times, the first frame, the job
  * screen, the start animation. */
 #include <stdio.h>
 #include <string.h>
@@ -12,72 +12,40 @@
 
 const char *const start_name[SS_N] = {"ui_init", "text_utf8", "digits_init", "icons_init", "fs_selftest",
                                       "fx_start", "net_start", "first_frame", "first_fetch"};
-/* The loading screen's words for the steps it lists (SS_UI to SS_NET). */
+/* A slow start job's name on the screen (SS_UI to SS_NET). */
 static const char *const shown_name[SS_FRAME] = {"The picture",    "Accented letters", "The display digits",  "The icons",
                                                  "The app folder", "The effects (6 SPUs)", "The network"};
 
 s64 t_main;
 static s64 t_begin[SS_N], t_end[SS_N];      /* from sysGetSystemTime; 0: not yet */
 static int running = -1;                    /* the step on the screen */
-static int loading = 1;                     /* the loading screen lists every step until the loop's first frame */
 static int logged_late;
-static s64 t_first;                         /* the loading screen's first frame on the TV (its ui_flip returned) */
+static s64 t_first;                         /* the first frame on the TV (its ui_flip returned) */
 
 static s64 now(void) { return (s64)sysGetSystemTime(); }
 static double sec_of(s64 us) { return (double)us / 1e6; }
 
 void start_main(void) { t_main = now(); }
 
-/* A small sofa, drawn with the kit's shapes (the pkg icon's, in outline):
- * the back, the seat, two arms. */
-static void sofa(float cx, float cy)
-{
-    const u32 c = 0x3a6fb8ff, d = 0x24497eff;
-    round_rect(cx - 70, cy - 40, 140, 52, 16, c);          /* the back */
-    round_rect(cx - 86, cy + 2, 172, 34, 12, d);           /* the seat */
-    round_rect(cx - 104, cy - 14, 34, 60, 14, c);          /* the arms */
-    round_rect(cx + 70, cy - 14, 34, 60, 14, c);
-    rect(cx - 80, cy + 44, 10, 12, d);                      /* the feet */
-    rect(cx + 70, cy + 44, 10, 12, d);
-}
+#define JOB_SHOW_S 2.0                  /* a start job's counter shows after this time: the freeze signal */
 
-/* One loading frame: the name, "Starting", the steps (done, running with
- * the spinner, still to come), and the counter of a job (sec >= 0). Only
- * the kit's ASCII text: the other atlases may not be loaded yet. */
+/* One start frame: the background only (since 0.4.1: the TV showed the old
+ * loading screen too briefly to read it). A job that runs JOB_SHOW_S or
+ * more (sec) shows its name and its counter. Only the kit's ASCII text: the
+ * other atlases may not be loaded yet. */
 static void draw(double sec)
 {
     begin_frame();
-    float cx = (float)SW / 2, y = (float)SH * 0.20f;
-    sofa(cx, y);
-    y += 92;
-    text_c(cx, y, F_TITLE, WHITE, "Couch");
-    text_c(cx, y + (float)line_h(F_TITLE) + 2, F_SMALL, DIM, "%s", APP_VERSION);
-    y = (float)SH * 0.46f;
-    text_c(cx, y, F_MED, GREY, "Starting ...");
-    y += (float)line_h(F_MED) + 28;
-    float x = cx - 210, rh = 42, t = sec_of(now() - t_main);
-    for (int i = 0; i < SS_FRAME; i++) {
-        if (!loading && i != running) continue;
-        float my = y + (float)line_h(F_BODY) / 2;
-        u32 c;
-        if (i == running) {
-            spinner(x + 12, my, 13, sec >= 0 ? sec : t);
-            c = WHITE;
-        } else if (t_end[i]) {
-            disc(x + 12, my, 6, GREEN);
-            c = GREY;
-        } else {
-            ring(x + 12, my, 6, 2, DIM);
-            c = DIM;
-        }
-        float xe = text(x + 40, y, F_BODY, c, "%s", shown_name[i]);
-        if (i == running && sec >= 0) text(xe + 16, y, F_BODY | TNUM, GREY, "%.1f s", sec);
-        y += rh;
+    if (sec >= JOB_SHOW_S && running >= 0 && running < SS_FRAME) {
+        float cx = (float)SW / 2, y = (float)SH * 0.42f;
+        spinner(cx, y - 40, 18, sec);
+        text_c(cx, y, F_MED, WHITE, "%s", shown_name[running]);
+        text_c(cx, y + (float)line_h(F_MED) + 10, F_BODY | TNUM, GREY, "%.1f s", sec);
+        if (fs_ok)
+            text_wrap(MG, (float)SH - 150, F_SMALL, GREY, (float)SW - 2 * MG, 2,
+                      "The counter runs while the console works. If it stops, the console froze: hold the power button, then start "
+                      "Couch again, and it skips this step.");
     }
-    if (sec >= 0 && fs_ok)
-        text_wrap(MG, (float)SH - 150, F_SMALL, GREY, (float)SW - 2 * MG, 2,
-                  "The counter runs while the console works. If it stops, the console froze: hold the power button, then start "
-                  "Couch again, and it skips this step.");
     ui_flip();
 }
 
@@ -85,9 +53,7 @@ void start_begin(int step)
 {
     if (step < 0 || step >= SS_N) return;
     if (!t_end[step]) t_begin[step] = now();               /* the first run's time only (a step may run again) */
-    if (step >= SS_FRAME) return;
-    running = step;
-    if (step > SS_UI && loading) draw(-1);                 /* the picture is up from ui_init on */
+    if (step < SS_FRAME) running = step;
 }
 
 void start_end(int step)
@@ -97,8 +63,7 @@ void start_end(int step)
     if (!t_begin[step]) t_begin[step] = step == SS_UI ? t_main : t_end[step];
     if (running == step) running = -1;
     boot_mark(start_name[step]);
-    if (step == SS_FRAME) loading = 0;
-    if (step == SS_UI) {                                   /* the first frame: right after ui_init */
+    if (step == SS_UI) {                                   /* the first frame: right after ui_init, the background */
         draw(-1);
         t_first = now();
     }
@@ -145,7 +110,10 @@ void start_log_early(void)
     int k = 0;
     for (int i = SS_UI; i <= SS_FS && k < (int)sizeof w; i++)
         k += snprintf(w + k, sizeof w - (size_t)k, "%s%s %.2f s", i ? ", " : "", start_name[i], took(i));
-    couch_log("start: %s; the loading screen's first frame on the TV at %.2f s from main", w, t_first ? sec_of(t_first - t_main) : -1.0);
+    couch_log("start: %s; the first frame on the TV at %.2f s from main", w, t_first ? sec_of(t_first - t_main) : -1.0);
+    couch_log("ui_init: journal_init %.3f s, pad %.3f s, gfx_init %.3f s (gcmInitBody %.3f s, videoConfigure %.3f s), fonts_init %.3f s, safe_apply %.3f s",
+              ui_init_us[UI_T_JOURNAL] / 1e6, ui_init_us[UI_T_PAD] / 1e6, ui_init_us[UI_T_GFX] / 1e6, ui_init_us[UI_T_GCM] / 1e6,
+              ui_init_us[UI_T_VIDEO] / 1e6, ui_init_us[UI_T_FONTS] / 1e6, ui_init_us[UI_T_SAFE] / 1e6);
 }
 
 void start_log_late(void)

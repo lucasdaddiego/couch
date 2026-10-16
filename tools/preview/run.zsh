@@ -233,7 +233,7 @@ end
 "
 }
 
-scn() {   # name script [VAR=value ...]; JOURNAL, BODY, NEWS, URL, AUTO, BIN, SAFE from the caller
+scn() {   # name script [VAR=value ...]; JOURNAL, BODY, NEWS, URL, AUTO, BIN, SAFE, LAST from the caller
     local name=$1$SFX e s=()
     for e in ${=2}; do [[ $e == *SNAP=* ]] && e=$e$SFX; s+=$e; done
     shift 2
@@ -246,6 +246,7 @@ scn() {   # name script [VAR=value ...]; JOURNAL, BODY, NEWS, URL, AUTO, BIN, SA
     [[ -n $AUTO ]] && print -r -- "$AUTO" > $sbx/$DIR/auto.txt
     [[ -n $NOFOLDER ]] && { rm -rf $sbx/$DIR; : > $sbx/$DIR }   # the app folder is a file: no folder, no journal
     body_${BODY:-ok} > $sbx/body.txt
+    [[ -n $LAST ]] && { print -r -- "couch-last 1|$(( 1791460800 - LAST ))|${LASTURL:-${URL-$URL_LAN}}"; body_ok } > $sbx/$DIR/board_last.txt   # the last reply, LAST s old
     local b2=()
     [[ -n $BODY2 ]] && { body_$BODY2 > $sbx/body2.txt; b2=(PV_BOARD2=$sbx/body2.txt) }   # the second and later replies
     local rd=(PV_ARTICLES=$FIX/articles)                 # the reader: /news from the fixture (NEWS=none, 404), the articles
@@ -417,12 +418,22 @@ holiday|all)       # 0.3.2: the header's second line names the next holiday (the
     BODY=hol scn holiday "120:SNAP=holiday 121:EXIT" ;|
 ambient_rsx|all)   # the ambient mode in RSX-only mode (fx_first froze before): 0.2.0's dimmed page, 6 px moves, the page each minute
     JOURNAL=$'start fx_first\n'$TZ_DONE scn ambient_rsx "3720:SNAP=ambient_rsx 7320:SNAP=ambient_rsx_news 7330:EXIT" PV_MAXFRAMES=8000 ;|
-start|all)         # the start (0.3.0): the loading screen from the first frame after ui_init (frame 3: the icons'
-                   # step), during the effects' job (its counter), the start animation half way, then the Board;
-                   # couch.txt's start times and boot.txt's marks
-    scn start "3:SNAP=loading 7:SNAP=loading_fx 30:SNAP=start_mid 120:SNAP=start_end 121:EXIT"
-    print -r -- "  couch.txt: $(command grep -h '^start' $P/build/sbx/start$SFX/$DIR/couch.txt | tr '\n' ';')"
+start|all)         # the start: since 0.4.1 the background from the first frame after ui_init (frame 3), no counter
+                   # in a short effects' job (frame 7), the start animation half way, then the Board; couch.txt's
+                   # start times, ui_init's steps and boot.txt's marks
+    scn start "3:SNAP=start_first 7:SNAP=start_fx 30:SNAP=start_mid 120:SNAP=start_end 121:EXIT"
+    print -r -- "  couch.txt: $(command grep -h '^(start|ui_init)' -E $P/build/sbx/start$SFX/$DIR/couch.txt | tr '\n' ';')"
     print -r -- "  boot.txt: $(tr '\n' ' ' < $P/build/sbx/start$SFX/$DIR/boot.txt)" ;|
+slow_net|all)      # 0.4.1: a network start of 3 s: the job screen's counter shows after 2 s, not before
+    scn slow_net "40:SNAP=slow_net_1s 200:SNAP=slow_net 400:EXIT" PV_NET_SLOW=3000 ;|
+last|all)          # 0.4.1: board_last.txt of 30 min ago and a 4 s answer: the first frames show the last reply with its
+                   # age, then the fetch's reply; an old file (2 days) and one of another URL are not shown
+    LAST=1800 scn last "30:SNAP=last_start 120:SNAP=last 400:SNAP=last_fetched 401:EXIT" PV_BOARD_FAIL=slow
+    print -r -- "  couch.txt: $(command grep -h '^board_last' $P/build/sbx/last$SFX/$DIR/couch.txt)"
+    LAST=172800 scn last_old "30:SNAP=last_old 31:EXIT" PV_BOARD_FAIL=slow
+    print -r -- "  couch.txt: $(command grep -h '^board_last' $P/build/sbx/last_old$SFX/$DIR/couch.txt)"
+    LAST=1800 LASTURL=http://other.example.com/board scn last_url "30:EXIT" PV_BOARD_FAIL=slow
+    print -r -- "  couch.txt: $(command grep -h '^board_last' $P/build/sbx/last_url$SFX/$DIR/couch.txt)" ;|
 skeleton|all)      # before the first reply (a 4 s answer): the skeleton's bars on the Board and on the News page
     scn skeleton "120:SNAP=skeleton 122:R1 150:SNAP=skeleton_news 151:EXIT" PV_BOARD_FAIL=slow ;|
 news_rain|all)     # the News page on the rainy day of the mockups (the sources' pills, the categories, the ages): since 0.3.1 the

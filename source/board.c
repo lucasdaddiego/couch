@@ -8,6 +8,7 @@
  * couch_log_drain: file calls only, the ones the main thread made) and
  * makes the reader's requests (reader.c). */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/thread.h>
 #include <sys/systime.h>
@@ -27,6 +28,8 @@
 #define RETRY_US 60000000LL          /* 60 s after a failure */
 #define GAP_US 10000000LL            /* SQUARE: at most once in 10 s */
 #define LOG_FETCHES 50               /* fetch lines in couch.txt per start */
+#define LAST APP_DIR "/board_last.txt"   /* the last whole Board reply: the next start shows it until its first fetch */
+#define LAST_MAX_S 86400L            /* an older one is not shown */
 
 char board_url[200];
 int board_url_file;
@@ -86,6 +89,7 @@ s64 board_net_us, board_connect_us = -1;
 long board_net_down_utc;
 static board_data tmp;               /* the parse of the last reply, good or not */
 static s64 cur_at;                   /* the system time of the reply in board_cur */
+long board_last_age = -1;
 static int logged;
 /* The words of the stale status line: a redirect without its Location, so
  * that the line keeps the data's time at 1600 wide (the Info screen and
@@ -165,6 +169,46 @@ static void reader_work(void)
         slot.qr_ok = qrcodegen_encodeText(slot.art.link, slot.qr_tmp, slot.qr, qrcodegen_Ecc_LOW, 1, QR_MAX_VERSION, qrcodegen_Mask_AUTO, true);
 }
 
+/* board_last.txt: a line "couch-last 1|<the console's clock>|<the URL>",
+ * then the reply. The thread writes it before it sets ready, so the body
+ * does not change during the write. A cut write has no end line, and the
+ * load drops it. */
+static void save_last(const char *body, int len)
+{
+    char h[260];
+    int n = snprintf(h, sizeof h, "couch-last 1|%ld|%s\n", clock_utc(), board_url);
+    if (n > 0 && n < (int)sizeof h && fs_write_file(LAST, h, (uint64_t)n, 0) == 0) fs_write_file(LAST, body, (uint64_t)len, 1);
+}
+
+void board_load_last(void)
+{
+    static char buf[BOARD_MAX + 300];
+    char why[80] = "";
+    long saved = 0;
+    int n = fs_ok && board_url[0] ? fs_read_file(LAST, buf, (int)sizeof buf - 1) : -1;
+    if (n <= 0) return;
+    buf[n] = 0;
+    char *nl = strchr(buf, '\n'), *bar;
+    if (!nl || strncmp(buf, "couch-last 1|", 13) || !(bar = strchr(buf + 13, '|')) || bar > nl) snprintf(why, sizeof why, "no header");
+    else {
+        *nl = 0;
+        saved = strtol(buf + 13, NULL, 10);
+        long age = clock_utc() - saved;
+        if (strcmp(bar + 1, board_url)) snprintf(why, sizeof why, "another URL");
+        else if (age < 0 || age > LAST_MAX_S) snprintf(why, sizeof why, "%ld s old", age);
+        else if (board_parse(nl + 1, n - (int)(nl + 1 - buf), utf8_rc != 0, &tmp) != BP_OK) snprintf(why, sizeof why, "no whole reply");
+        else {
+            board_cur = tmp;
+            board_have = 1;
+            board_gen++;
+            cur_at = sysGetSystemTime() - (s64)age * 1000000;
+            board_last_age = age;
+        }
+    }
+    if (why[0]) couch_log("board_last.txt: not shown, %s", why);
+    else couch_log("board_last.txt: the reply of %ld s ago, shown until the first fetch", board_last_age);
+}
+
 static void board_thread(void *unused)
 {
     (void)unused;
@@ -205,6 +249,7 @@ static void board_thread(void *unused)
                 int whole = slot.r.step == H_OK && board_has_end(slot.body, slot.r.len);
                 next = slot.at + (whole ? PERIOD_US : RETRY_US);
                 next_us = next;
+                if (whole && fs_ok) save_last(slot.body, slot.r.len);
             }
             __sync_synchronize();
             ready = 1;
@@ -458,7 +503,10 @@ u32 board_status_words(char *buf, int n)
         return RED;
     }
     if (!board_fetches) {
-        snprintf(buf, (size_t)n, "Fetching the Board ...");
+        if (board_have) {                                    /* since 0.4.1: board_last.txt's reply */
+            clock_words(t, sizeof t, clock_utc() - board_age(), 0);
+            snprintf(buf, (size_t)n, "Fetching the Board ... It shows the data of %s.", t);
+        } else snprintf(buf, (size_t)n, "Fetching the Board ...");
         return GREY;
     }
     if (!board_last_ok && !net_has_ip()) {

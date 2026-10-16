@@ -213,8 +213,8 @@ static float header_right(float y)
     return r - (w1 > w2 ? w1 : w2);
 }
 
-/* The clock: HH:MM in the display digits, whole (the loading screen's and
- * the ambient mode's font), no seconds (flip cards looked cut in half).
+/* The clock: HH:MM in the display digits, whole (the ambient mode's
+ * font too), no seconds (flip cards looked cut in half).
  * At the start it fades in with the header. */
 static float big_clock(float x, float y, float right)
 {
@@ -333,7 +333,7 @@ static void draw_frame(const char *msg, u32 msg_color)
         body(page, sl_dir * (SW - d));
     } else body(page, 0);
     bar_of(page, msg, msg_color);
-    if (start_anim_on()) {                                   /* the start: the sky from the loading screen's colours */
+    if (start_anim_on()) {                                   /* the start: the sky from the background's colours */
         float f = start_k(SA_FADE), ox, oy;
         u32 a = (u32)(255 * (1 - f));
         if (a) {
@@ -494,8 +494,8 @@ static void ambient_frame(void)
     float ch = big >= 0 ? (float)digits_h(D_XL) : (float)line_h(F_LARGE);
     int nl = 1;                                  /* the headline's lines: two when any of them needs two (no jump at a change) */
     for (int i = 0; i < nn; i++)
-        if (text_w(F_LARGE, b->news[i].title) > aw - 72) nl = 2;
-    float cardh = 192, newsh = 92 + (float)nl * (float)wrap_step(F_LARGE);
+        if (text_w(F_MED, b->news[i].title) > aw - 72) nl = 2;
+    float cardh = 192, newsh = 92 + (float)nl * (float)wrap_step(F_MED);
     float hrsh = 220;
     int has_hrs = has_wx && board_hours_left(c.hour) >= 2;
     float rest = (has_wx || has_side ? 28 + cardh : 0) + (nn ? 20 + newsh : 0), room = (float)SH - 64;   /* 64: the drift's 2 x 24 and a margin */
@@ -573,7 +573,7 @@ static void ambient_frame(void)
         }
         for (int d = 0; d < nn; d++)               /* a dot per headline, the shown one lit */
             aa_disc(x0 + aw - 36 - (float)(nn - 1 - d) * 18, ty + phh / 2, 4, d == i ? c1 : 0xffffff40);
-        text_wrap(ix, ty + phh + 16, F_LARGE, alpha_times(c1, k), aw - 72, nl, n->title);
+        text_wrap(ix, ty + phh + 16, F_MED, alpha_times(c1, k), aw - 72, nl, n->title);
     }
     amb_ga = 1.0f;
     ui_flip();

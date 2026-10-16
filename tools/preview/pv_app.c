@@ -35,6 +35,7 @@
  *   PV_TZ_FAIL=1          the three calls fail
  *   PV_NOIP=1             netCtlGetInfo fails: the console has no address
  *   PV_NET_FAIL=1         netInitialize fails (rc 0x80010002)
+ *   PV_NET_SLOW=<ms>      netInitialize takes that long (real time)
  *   PV_NETCTL_FAIL=1      netCtlInit fails (rc 0x80130101)
  *   PV_QUIT=net           netInitialize sets quit, as a Quit Game during the
  *                         network start would (the preview's system sends
@@ -349,6 +350,7 @@ s32 netClose(s32 s)
 s32 netInitialize(void)
 {
     if (getenv("PV_QUIT") && !strcmp(getenv("PV_QUIT"), "net")) quit = 1;
+    if (getenv("PV_NET_SLOW")) usleep((useconds_t)atoi(getenv("PV_NET_SLOW")) * 1000);   /* a slow start (ms): the job screen's counter */
     return getenv("PV_NET_FAIL") ? (s32)0x80010002 : 0;
 }
 
