@@ -74,6 +74,8 @@ int ambient_aurora(void);            /* 1: the mode shows the SPUs' picture (the
 int ambient_day(void);               /* 0.3.2: 1 while the sun is up (the sky), 0 at night (the aurora) */
 int board_wx_icon(float cx, float cy, float box);   /* board_page.c: the weather icon of now; 0 when none */
 void board_ambient_wx(float x, float y, float w, float h, u32 c1, u32 c2);   /* board_page.c: the waiting screen's weather card */
+int board_ambient_hours(float x, float y, float w, float h, int local_hour, u32 c1, u32 c2);   /* board_page.c: its hourly card */
+int board_hours_left(int local_hour);   /* board_page.c: the hours from local_hour on */
 
 /* The bodies and the bars of the pages (board_page.c, reader.c, info.c):
  * the body between the header and the bottom bar, the bar at y. */

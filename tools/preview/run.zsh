@@ -171,7 +171,11 @@ night_line() {   # $2: the wx_now words and wx_fx of the night
     esac
 }
 hol_line() { [[ $1 == end ]] && print -r -- "holiday=2026-10-12|D${I_ACUTE}a de la Raza|4"; print -r -- "$1"; }   # 0.3.2: the next holiday
-body_hol() { each hol_line; }
+dayhol_line() {   # and the hours from 10:00, the clock's next hour (the base reply's start at 15 hides the hourly card)
+    [[ $1 == wx_hours=* ]] && { print -r -- "wx_hours=10|13 15 16 17 18 19 19 18 17 15 14 13|0 0 10 20 40 60 75 70 50 30 10 0|2 2 3 3 61 61 63 61 3 2 1 0"; return }
+    hol_line "$1"
+}
+body_hol() { each dayhol_line; }
 body_nighthol() { local l; for l in "${(@f)$(body_night)}"; do hol_line "$l"; done; }
 body_night() { local l; for l in "${(@f)$(< $REPLY)}"; do night_line "$l" Clear "0|3|0|200|6|11"; done; }
 body_ocnight() { local l; for l in "${(@f)$(< $REPLY)}"; do night_line "$l" Overcast "3|100|0|200|8|15"; done; }

@@ -745,6 +745,15 @@ theme, or better, a theme that adapts to the sun".
   under it. The block drifts at most 40 px sideways and 24 px up and down,
   in whole pixels, on periods of 7 and 5 min (`ambient_drift`): the TV's
   burn-in guard, instead of 0.3.0's nine places.
+- **The next hours** (2026-10-16, `board_ambient_hours`): a card between
+  the two cards and the headline, one column per hour of `wx_hours` (12 from
+  the next whole hour): the hour ("Now" once the reply is an hour old, and
+  the hours that have passed left out), the M icon (the moon between the
+  sunset and the sunrise), the rain's chance in blue from 20 %, the
+  temperature. A reply whose hours have all passed shows no card. The block
+  must fit the visible area with the drift: when it does not (the narrow
+  area, 900 px high), the clock takes D_L; when that is not enough either,
+  the card is left out and the clock stays D_XL.
 - **The holidays**: the Worker's `holiday=` line (worker/README.md; the
   official list of argentina.gob.ar). The header's second line names the
   next one ("Next holiday: Monday 9 November, Visita de Su Santidad el Papa

@@ -440,7 +440,8 @@ static const char *const mon3[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "
  * of AMB_W px in the middle that drifts a few pixels (ambient_drift). The
  * date small over the clock (D_XL); under it two cards, the weather (the
  * hero's icon, the temperature, the words, the high, the low, the rain) and
- * the next holiday (else the sunrise and the sunset); then one card with a
+ * the next holiday (else the sunrise and the sunset); a card of the next
+ * hours (board_ambient_hours); then one card with a
  * headline, its source and age, the next every AMB_ROT_S, and a dot per
  * headline. */
 static void ambient_frame(void)
@@ -481,12 +482,24 @@ static void ambient_frame(void)
     int big = !digits_rc ? D_XL : -1;
     float ch = big >= 0 ? (float)digits_h(D_XL) : (float)line_h(F_LARGE);
     float cardh = 200, newsh = 92 + 2 * (float)wrap_step(F_MED);
-    float hgt = (float)line_h(F_MED) + ch + (has_wx || has_side ? 40 + cardh : 0) + (nn ? 24 + newsh : 0);
+    float hrsh = 220;
+    int has_hrs = has_wx && board_hours_left(c.hour) >= 2;
+    float rest = (has_wx || has_side ? 40 + cardh : 0) + (nn ? 24 + newsh : 0), room = (float)SH - 64;   /* 64: the drift's 2 x 24 and a margin */
+    if (has_hrs && big >= 0 && (float)line_h(F_MED) + ch + rest + 24 + hrsh > room) {
+        big = D_L;                               /* a narrow area: a smaller clock first */
+        ch = (float)digits_h(D_L);
+    }
+    if (has_hrs && (float)line_h(F_MED) + ch + rest + 24 + hrsh > room) {   /* still too tall: no hourly card, the large clock */
+        has_hrs = 0;
+        big = D_XL;
+        ch = (float)digits_h(D_XL);
+    }
+    float hgt = (float)line_h(F_MED) + ch + rest + (has_hrs ? 24 + hrsh : 0);
     float cx = rnd((float)SW / 2 + px), x0 = rnd(cx - AMB_W / 2), y = rnd((float)SH / 2 - hgt / 2 + py);
     /* the date over the clock, then the clock */
     text_c(cx, y, F_MED, c2, "%s%s%s", date, ampm ? "  " : "", ampm ? ampm : "");
     y += (float)line_h(F_MED);
-    if (big >= 0) digits(rnd(cx - (float)digits_w(D_XL, hm) / 2), y, D_XL, c1, hm);
+    if (big >= 0) digits(rnd(cx - (float)digits_w(big, hm) / 2), y, big, c1, hm);
     else text_c(cx, y, F_LARGE | TNUM, c1, "%s", hm);
     y += ch;
     if (has_wx || has_side) {
@@ -517,6 +530,12 @@ static void ambient_frame(void)
             }
         }
         y += cardh;
+    }
+    if (has_hrs) {
+        y += 24;
+        amb_card(x0, y, AMB_W, hrsh, day);
+        board_ambient_hours(x0, y, AMB_W, hrsh, c.hour, c1, c2);
+        y += hrsh;
     }
     if (nn) {
         y += 24;

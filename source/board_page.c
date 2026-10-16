@@ -293,6 +293,45 @@ void board_ambient_wx(float x, float y, float w, float h, u32 c1, u32 c2)
     }
 }
 
+/* The hours of wx_hours from the hour of local_hour on: all of them for a
+ * list that starts up to 3 hours later, none for a list whose hours have
+ * all gone. The hourly card needs 2. */
+int board_hours_left(int local_hour)
+{
+    const board_data *b = &board_cur;
+    int n = board_have ? b->n_hours : 0, skip = (local_hour - (board_have ? b->hours_start : 0) + 24) % 24;
+    if (skip < n) return n - skip;
+    return skip >= 21 ? n : 0;                               /* a list that starts in the next 3 hours, else an old one */
+}
+
+/* The waiting screen's hourly card (0.3.2) in the box x, y, w, h: a
+ * column per hour of wx_hours (up to 12, from the hour of local_hour when
+ * the reply is older): the hour ("Now" for local_hour), the M icon (the moon between the sunset and the
+ * sunrise), the rain's chance in blue from 20 %, the temperature. 0 when
+ * there are fewer than 2 hours (no card). */
+int board_ambient_hours(float x, float y, float w, float h, int local_hour, u32 c1, u32 c2)
+{
+    const board_data *b = &board_cur;
+    int n = board_hours_left(local_hour), skip = board_have ? b->n_hours - n : 0;
+    if (n < 2) return 0;
+    int rise = b->has_sun ? hm_parse(b->sunrise) : -1, set = b->has_sun ? hm_parse(b->sunset) : -1;
+    float cw = (w - 72) / (float)n, ly = rnd(y + 22), iy = rnd(ly + (float)line_h(F_SMALL) + 36), py = rnd(iy + 30);
+    float ty = rnd(y + h - 22 - (float)line_h(F_MED));
+    for (int j = 0; j < n; j++) {
+        int i = j + skip, hr = (b->hours_start + i) % 24, m = hr * 60 + 30;
+        float cx = rnd(x + 36 + cw * ((float)j + 0.5f));
+        int day = rise >= 0 && set >= 0 ? m >= rise && m < set : b->is_day;
+        if (hr == local_hour) text_c(cx, ly, F_SMALL, c1, "Now");
+        else text_c(cx, ly, F_SMALL | TNUM, c2, "%02d", hr);
+        int k = wmo_kind(b->hour_code[i]), pop = b->hour_pop[i];
+        wx_icon_m(wx_icon(k, day), cx, iy, 0, 0.8f);
+        if (pop >= 20) text_c(cx, py, F_SMALL | TNUM, 0x8ec9ffff, "%d%%", pop);
+        if (b->hour_temp[i] == TEMP_NONE) text_c(cx, ty, F_MED, c2, "-");
+        else text_c(cx, ty, F_MED | TNUM, c1, "%d%s", b->hour_temp[i], utf8_rc == 0 ? "\xc2\xb0" : "");
+    }
+    return 1;
+}
+
 /* The hero's icon (design 3.9): layers of the L set that move, by
  * fractions of a pixel (bilinear), slowly and over a wider range since the
  * round of 2026-10-14 (Lucas: "a bit bigger and more range of movement"):
