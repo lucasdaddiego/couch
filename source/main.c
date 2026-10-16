@@ -1,10 +1,12 @@
-/* Couch 0.3.0: the Board on the living-room TV, drawn by ps3gfx. The clock
+/* Couch 0.3.1: the Board on the living-room TV, drawn by ps3gfx. The clock
  * in the console's time zone, the dollar rates and the money extras, the
  * weather with the rain, the sun and the moon, and the news, from the Worker
  * at couch.daddiego.com.ar (design: ~/.claude/plans/2026-10-10-couch-design.md,
  * cut to the Board on 2026-10-10). Three pages: the Board, the News, the
  * Info screen; L1 and R1 move between them, SELECT opens the Info page.
- * After 10 min with no button the ambient mode shows the aurora (page.c).
+ * The News page is a reader since 0.3.1 (reader.h): the list of 30
+ * headlines, an article and its QR code. After 10 min with no button (20
+ * with an article open) the ambient mode shows the aurora (page.c).
  * Each start appends a block to couch.txt in the app folder, and each step
  * of the start and the exit a line to boot.txt (boot.c), the first one as
  * main's first statement. The start shows the loading screen from the first
@@ -12,13 +14,15 @@
  *
  * The frame loop: read_pad, the ambient mode's wake, the exit, board_take
  * (a new reply from the Board thread), the input, the ambient mode's step,
- * the draw. Only this thread calls journal_* and writes files: the Board
- * thread fills one record (board.c). */
+ * the draw. Only this thread calls journal_*; the Board thread fills one
+ * record (board.c) and, since 0.3.1, writes couch.txt's queued lines
+ * (couch_log below), never another file. */
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <lv2/systime.h>
+#include <sys/systime.h>
 #include <sys/file.h>
 #include <sysutil/sysutil.h>
 #include <ps3gfx/ui.h>
@@ -38,6 +42,8 @@
 #include "boot.h"
 #include "start.h"
 #include "marquee.h"
+#include "reader.h"
+#include "stext.h"
 
 #ifndef PS3GFX_COMMIT
 #define PS3GFX_COMMIT "unknown"      /* the preview: the Makefile defines it on the console */
@@ -55,9 +61,58 @@ int unattended = -1;
 s64 t_start;
 unsigned frame_ev;
 
+/* couch.txt's queue (couch.h): a ring of LOGQ bytes, lq_head and lq_tail
+ * counting the bytes put in (the main thread) and written out (the writer)
+ * since the start. The writer is the Board thread (couch_log_drain) or the
+ * main thread (a line written at once): lq_owner, taken by an atomic swap,
+ * keeps one at a time from the read of the queue to the file's close. */
+#define LOGQ 16384
+#define LOG_LINE 400
+static char logq[LOGQ];
+static volatile unsigned lq_head, lq_tail;
+static volatile int lq_owner;
+static char lq_out[LOGQ + LOG_LINE];         /* the owner's: the queue and a line, one write */
+volatile int log_async;
+
+/* The queued bytes into lq_out from k: the new k. The owner only. */
+static int lq_take(int k)
+{
+    unsigned t = lq_tail, h = lq_head;
+    __sync_synchronize();                    /* the bytes before the head was read */
+    for (; t != h; t++) lq_out[k++] = logq[t % LOGQ];
+    __sync_synchronize();
+    lq_tail = t;
+    return k;
+}
+
+void couch_log_drain(void)
+{
+    if (lq_head == lq_tail || __sync_lock_test_and_set(&lq_owner, 1)) return;
+    int k = lq_take(0);
+    if (k) fs_write_file(LOG, lq_out, (u64)k, 1);
+    __sync_lock_release(&lq_owner);
+}
+
+/* A millisecond's sleep, out of line: inlined in log_now's loop, gcc put
+ * sysUsleep's "li r11,141" after its sc (the loop's turn), and Health's
+ * syscalls.py could not read the number (0.1.0's first ELF had the same). */
+static void __attribute__((noinline)) nap_ms(void) { sysUsleep(1000); }
+
+/* The queue and line (n bytes) written now, the queue first. The Board
+ * thread holds the queue through the file close. Wait for it before taking
+ * lq_out so both the shared buffer and the append-only file stay serialized. */
+static void log_now(const char *line, int n)
+{
+    while (__sync_lock_test_and_set(&lq_owner, 1)) nap_ms();
+    int k = lq_take(0);
+    memcpy(lq_out + k, line, (size_t)n);
+    fs_write_file(LOG, lq_out, (u64)(k + n), 1);
+    __sync_lock_release(&lq_owner);
+}
+
 void couch_log(const char *fmt, ...)
 {
-    char line[400];
+    char line[LOG_LINE];
     va_list ap;
     if (!fs_ok) return;
     frame_ev |= EV_LOG;
@@ -67,7 +122,14 @@ void couch_log(const char *fmt, ...)
     if (n < 0) return;
     if (n > (int)sizeof line - 2) n = (int)sizeof line - 2;
     line[n++] = '\n';
-    fs_write_file(LOG, line, (u64)n, 1);
+    unsigned h = lq_head;
+    if (!log_async || h - lq_tail + (unsigned)n > LOGQ) {
+        log_now(line, n);                    /* no writer thread, the exit, or a full queue */
+        return;
+    }
+    for (int i = 0; i < n; i++) logq[(h + (unsigned)i) % LOGQ] = line[i];
+    __sync_synchronize();                    /* the bytes before the new head */
+    lq_head = h + (unsigned)n;
 }
 
 /* The three slowest frames of the Board's loop (the main thread's busy time,
@@ -139,6 +201,7 @@ static void slow_log(void)
 static void leave(void)
 {
     boot_mark("leave");                      /* boot.txt: the step about to run */
+    log_async = 0;                           /* couch.txt's lines at once from here: the marks of a hang must be on the disk */
     int board = board_stop();
     boot_mark("fx_stop");
     fx_stop();
@@ -236,11 +299,13 @@ static int go(int to, int dir)
     return 0;
 }
 
-/* SQUARE on the Board: a refresh, or the network start and the thread again. */
+/* SQUARE on the Board: a refresh, or the network start and the thread
+ * again; on the News page the list too. */
 static int square(void)
 {
     if (net_state == NET_UP && board_running()) {
         board_refresh();
+        if (page == PAGE_NEWS) reader_refresh();
         return 0;
     }
     return board_enter();
@@ -305,7 +370,7 @@ int main(void)
     if (board_enter() < 0) return 0;
     ui_stat st;
     ui_stats(&st, 1);                        /* the frame times from here: the Board's loop */
-    int step = 0;
+    int step = 0, stext_on = 0;
     page = PAGE_BOARD;
     start_anim_begin();                      /* the loading screen hands over to the start animation */
     while (!quit) {
@@ -328,6 +393,8 @@ int main(void)
             if (lv == 0) {                   /* CIRCLE: back to the Board */
                 if (go(PAGE_BOARD, -1) < 0) break;
             } else info_input();
+        } else if (page == PAGE_NEWS && reader_input(lv == 0)) {
+                                             /* the reader's pad: the selection, CROSS, an article's scroll, CIRCLE back */
         } else if (pressed & BTN_SELECT) {
             go(PAGE_INFO, 1);
         } else if ((pressed & BTN_SQUARE) && square() < 0) break;
@@ -347,6 +414,9 @@ int main(void)
         fx_tick(ambient ? FXM_AURORA : FXM_SKY);   /* after the last ui_flip: a picture's swap, the next picture */
         sky_tick();                          /* the moon's sphere (into the texture no frame shows), the bolts */
         marquee_tick();                      /* the ticker's text: a headline a frame into the picture no frame shows */
+        if (page == PAGE_NEWS) stext_on = 1;
+        if (stext_on) stext_tick();          /* the reader's atlases: from the first News page, a few rows a frame until built */
+        reader_tick();                       /* the reader's scrolls and the news list's schedule */
         if (page != was) frame_ev |= EV_PAGE;
         page_draw();
         start_end(SS_FRAME);                 /* once: the first Board frame (boot.txt's mark) */

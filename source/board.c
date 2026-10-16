@@ -1,9 +1,12 @@
 /* The Board (board.h). The thread makes only the calls of PS3 Health's
  * download, which ran on this console in its job thread: DNS, a blocking
  * connect with SO_RCVTIMEO and SO_SNDTIMEO, one send, recv until the close
- * or the end line. It reads want and board_on every 50 ms and between the
- * steps of a fetch. The exit (board_stop) shuts its socket down and joins
- * it with no time limit, so no network call is left when net_end runs. */
+ * or the end line. It reads its requests and board_on every 50 ms and
+ * between the steps of a fetch. The exit (board_stop) shuts its socket down
+ * and joins it with no time limit, so no network call is left when net_end
+ * runs. Since 0.3.1 it also writes couch.txt's queued lines (main.c's
+ * couch_log_drain: file calls only, the ones the main thread made) and
+ * makes the reader's requests (reader.c). */
 #include <stdio.h>
 #include <string.h>
 #include <sys/thread.h>
@@ -18,6 +21,7 @@
 #include "http.h"
 #include "page.h"
 #include "spu_fx_run.h"
+#include "reader.h"
 
 #define PERIOD_US 300000000LL        /* a fetch every 5 min */
 #define RETRY_US 60000000LL          /* 60 s after a failure */
@@ -28,16 +32,39 @@ char board_url[200];
 int board_url_file;
 char board_url_note[160];
 static http_url url;                 /* set before the thread starts, only read after */
+static char news_path[160];          /* /news and /article?id= beside the Board's path (url_sibling) */
+static char art_base[160];
 
 /* The handoff: the thread writes the slot only while ready is 0 and sets
  * ready after a fence; the main thread parses it and clears ready after a
- * fence (Cell Bench's run.c). */
+ * fence (Cell Bench's run.c). One body for every kind: the largest reply,
+ * /news's 32 KB. The thread parses a news or article reply into the slot
+ * and makes the article's QR code (no frame pays for them). */
 static struct {
-    char body[BOARD_MAX + 1];
+    int kind;                        /* REQ_* */
+    char id[9];                      /* an article's id */
+    char body[NEWS_MAX + 1];
     http_result r;
     s64 at, us;                      /* the reply's system time, the fetch's duration */
+    int prc;
+    news_data news;
+    article_data art;
+    int qr_ok;
+    u8 qr[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAX_VERSION)];
+    u8 qr_tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAX_VERSION)];
 } slot;
-static volatile int ready, want, board_on, board_left, busy;
+static volatile int ready, want, board_on, board_left;
+static volatile int busy = -1;       /* the request in flight (REQ_*), -1 none */
+/* The reader's requests: want_news 1 asks for /news; want_art is the
+ * number of the latest article request (0: none), art_req its id. The main
+ * thread writes the id, then a fence, then the number; the thread reads the
+ * number, copies the id, and takes the request with a compare-and-swap of
+ * the number to 0: a request that changed during the copy stays for the
+ * next round (a torn id at most gives a reply that reader_take drops: its
+ * id is not the one open). */
+static volatile int want_news, want_art;
+static volatile char art_req[9];
+static int art_seq;
 static volatile s64 next_us, last_us;   /* the thread's schedule: the next fetch, the last one's start */
 static sys_ppu_thread_t tid;
 static int started;
@@ -86,29 +113,102 @@ void board_init(void)
     snprintf(board_url, sizeof board_url, "%s", BOARD_DEFAULT_URL);
 }
 
+/* The reader's paths beside the Board's (board_init's URL): the main
+ * thread, before the thread starts. */
+static void reader_paths(void)
+{
+    if (url_sibling(url.path, "news", news_path, sizeof news_path)) snprintf(news_path, sizeof news_path, "/news");
+    if (url_sibling(url.path, "article?id=", art_base, sizeof art_base) || strlen(art_base) + 8 >= sizeof url.path)
+        snprintf(art_base, sizeof art_base, "/article?id=");
+}
+
+void board_ask_news(void) { want_news = 1; }
+
+void board_ask_article(const char *id)
+{
+    for (int i = 0; i < 9; i++) art_req[i] = id[i];
+    __sync_synchronize();
+    if (++art_seq <= 0) art_seq = 1;
+    want_art = art_seq;
+}
+
+
 /* ---- the thread -------------------------------------------------------------- */
+
+/* The article's request, when one waits: 1 and its id in slot.id. */
+static int take_article(void)
+{
+    int s = want_art;
+    if (!s) return 0;
+    __sync_synchronize();
+    for (int i = 0; i < 9; i++) slot.id[i] = art_req[i];
+    slot.id[8] = 0;
+    __sync_synchronize();
+    return __sync_bool_compare_and_swap(&want_art, s, 0);
+}
+
+/* A news or article reply: the parse and the QR code, in this thread. The
+ * QR code: the smallest version at ECC low (big modules for a phone across
+ * the room), its ECC raised where that version has room (Health's call). */
+static void reader_work(void)
+{
+    int fold = utf8_rc != 0;                 /* set before the thread started */
+    slot.prc = -1;
+    slot.qr_ok = 0;
+    if (slot.r.step != H_OK) return;
+    if (slot.kind == REQ_NEWS) {
+        slot.prc = news_parse(slot.body, slot.r.len, fold, &slot.news);
+        return;
+    }
+    slot.prc = article_parse(slot.body, slot.r.len, fold, &slot.art);
+    if (slot.prc == BP_OK && slot.art.link[0])
+        slot.qr_ok = qrcodegen_encodeText(slot.art.link, slot.qr_tmp, slot.qr, qrcodegen_Ecc_LOW, 1, QR_MAX_VERSION, qrcodegen_Mask_AUTO, true);
+}
 
 static void board_thread(void *unused)
 {
     (void)unused;
     s64 next = 0;                            /* the first fetch at once */
     while (board_on) {
+        couch_log_drain();                   /* couch.txt's queued lines, between the requests */
         s64 now = sysGetSystemTime();
-        if (!ready && (now >= next || (want && now - last_us >= GAP_US))) {
-            want = 0;
-            last_us = now;
-            busy = 1;
-            http_get(&url, slot.body, BOARD_MAX, &slot.r, &board_on);
+        int kind = -1;
+        if (!ready) {
+            if (take_article()) kind = REQ_ARTICLE;     /* Lucas waits for it: first */
+            else if (now >= next || (want && now - last_us >= GAP_US)) kind = REQ_BOARD;
+            else if (want_news) kind = REQ_NEWS;
+        }
+        if (kind >= 0) {
+            http_url u = url;
+            int max = BOARD_MAX;
+            slot.kind = kind;
+            if (kind == REQ_BOARD) {
+                want = 0;
+                last_us = now;
+            } else if (kind == REQ_NEWS) {
+                want_news = 0;
+                snprintf(u.path, sizeof u.path, "%s", news_path);
+                max = NEWS_MAX;
+            } else {
+                snprintf(u.path, sizeof u.path, "%s%s", art_base, slot.id);
+                max = ARTICLE_MAX;
+            }
+            busy = kind;
+            http_get(&u, slot.body, max, &slot.r, &board_on);
             slot.at = sysGetSystemTime();
             slot.us = slot.at - now;
-            busy = 0;
+            if (kind != REQ_BOARD && board_on) reader_work();
+            busy = -1;
             if (!board_on) break;
-            /* a whole 200 reply waits 5 min, also one of another version: a retry would not change it */
-            int whole = slot.r.step == H_OK && board_has_end(slot.body, slot.r.len);
-            next = slot.at + (whole ? PERIOD_US : RETRY_US);
-            next_us = next;
+            if (kind == REQ_BOARD) {
+                /* a whole 200 reply waits 5 min, also one of another version: a retry would not change it */
+                int whole = slot.r.step == H_OK && board_has_end(slot.body, slot.r.len);
+                next = slot.at + (whole ? PERIOD_US : RETRY_US);
+                next_us = next;
+            }
             __sync_synchronize();
             ready = 1;
+            couch_log_drain();
         }
         sysUsleep(50000);
     }
@@ -119,6 +219,7 @@ static void board_thread(void *unused)
 int board_start(void)
 {
     if (started) return 0;
+    reader_paths();
     board_on = 1;
     board_left = 0;
     s32 rc = sysThreadCreate(&tid, board_thread, NULL, 1500, 0x20000, THREAD_JOINABLE, "board");
@@ -128,6 +229,7 @@ int board_start(void)
         return rc;
     }
     started = 1;
+    log_async = 1;                           /* couch_log queues its lines from now: the thread writes them */
     return 0;
 }
 
@@ -144,7 +246,7 @@ int board_running(void) { return started; }
 int board_stop(void)
 {
     if (!started) return 0;
-    int in_fetch = busy;
+    int in_fetch = busy >= 0;
     s64 t0 = sysGetSystemTime();
     couch_log("board thread: the exit stops it%s", in_fetch ? ", it is in a fetch" : "");   /* the mark of a hang in the join */
     board_on = 0;
@@ -165,16 +267,21 @@ void board_refresh(void)
 
 /* ---- the main thread's side ---------------------------------------------------- */
 
-/* brief: a redirect without its Location, for the stale status line. */
-static void fetch_words(char *w, int n, const http_result *r, int prc, int brief)
+/* brief: a redirect without its Location, for the stale status line.
+ * kind: whose reply (the words of a bad one, the size cap); version: the
+ * number of a reply of another version. */
+static void fetch_words(char *w, int n, const http_result *r, int prc, int brief, int kind, int version)
 {
+    static const char *const what[3] = {"Board", "news list", "article"};
+    static const int cap_kb[3] = {BOARD_MAX / 1024, NEWS_MAX / 1024, ARTICLE_MAX / 1024};
     char e[24];
+    if (kind < REQ_BOARD || kind > REQ_ARTICLE) kind = REQ_BOARD;
     switch (r->step) {
     case H_OK:
         if (prc == BP_OK) snprintf(w, (size_t)n, "ok");
-        else if (prc == BP_VERSION) snprintf(w, (size_t)n, "Board format %d: update Couch", tmp.version);
+        else if (prc == BP_VERSION) snprintf(w, (size_t)n, "%s%s format %d: update Couch", kind ? "the " : "", what[kind], version);
         else if (prc == BP_CUT) snprintf(w, (size_t)n, "the reply was cut (no end line)");
-        else snprintf(w, (size_t)n, "the answer is not a Board reply");
+        else snprintf(w, (size_t)n, "the answer is not a%s %s reply", kind == REQ_ARTICLE ? "n" : "", what[kind]);
         break;
     case H_DNS: snprintf(w, (size_t)n, "DNS failed for %s", url.host); break;
     case H_SOCKET: snprintf(w, (size_t)n, "no socket (%s)", net_err_words((int)r->err, e, sizeof e)); break;
@@ -193,9 +300,54 @@ static void fetch_words(char *w, int n, const http_result *r, int prc, int brief
         else snprintf(w, (size_t)n, "HTTP %d", r->http);
         break;
     case H_CHUNKED: snprintf(w, (size_t)n, "the answer is chunked, Couch reads a plain body"); break;
-    case H_OVER: snprintf(w, (size_t)n, "the reply is over 4 KB"); break;
+    case H_OVER: snprintf(w, (size_t)n, "the reply is over %d KB", cap_kb[kind]); break;
     default: snprintf(w, (size_t)n, "stopped"); break;
     }
+}
+
+/* The internet as any reply shows it (the Board's, the news list's, an
+ * article's): no answer when the DNS lookup, the socket, the connect, the
+ * send or the recv failed (also the 10 s timeout); any answer, also an HTTP
+ * error or a bad reply, reached the Worker. An article's time is the
+ * Worker's fetch of the page (up to its 8 s), not the internet's: an
+ * answered article only ends a "No internet", it never says slow. */
+static void net_seen(const http_result *r, long utc, int article)
+{
+    if (r->step == H_STOPPED) return;
+    int answered = r->step != H_DNS && r->step != H_SOCKET && r->step != H_CONNECT && r->step != H_SEND && r->step != H_RECV;
+    if (article && answered) {
+        if (board_net_q == NQ_DOWN || board_net_q == NQ_NONE) board_net_q = NQ_OK;
+        board_net_down_utc = 0;
+        return;
+    }
+    board_connect_us = r->connect_us;
+    board_net_q = net_quality(answered, (long long)slot.us);
+    board_net_us = slot.us;
+    if (answered) board_net_down_utc = 0;
+    else if (!board_net_down_utc) board_net_down_utc = utc;
+}
+
+/* A news or article reply: reader_take (reader.c) copies what it keeps and
+ * logs it. */
+static void take_reader(void)
+{
+    board_reply b;
+    memset(&b, 0, sizeof b);
+    b.kind = slot.kind;
+    memcpy(b.id, slot.id, sizeof b.id);
+    b.r = &slot.r;
+    b.at = slot.at;
+    b.us = slot.us;
+    b.prc = slot.prc;
+    b.news = &slot.news;
+    b.art = &slot.art;
+    b.qr_ok = slot.qr_ok;
+    b.qr = slot.qr;
+    fetch_words(b.words, sizeof b.words, &slot.r, slot.prc, 0, slot.kind,
+                slot.kind == REQ_NEWS ? slot.news.version : slot.art.version);
+    net_seen(&slot.r, clock_utc(), slot.kind == REQ_ARTICLE);
+    if (net_state == NET_UP) net_addr();    /* the thread is idle while ready is set (board_take's note) */
+    reader_take(&b);
 }
 
 void board_take(void)
@@ -203,6 +355,12 @@ void board_take(void)
     if (!ready) return;
     __sync_synchronize();
     frame_ev |= EV_REPLY;
+    if (slot.kind != REQ_BOARD) {
+        take_reader();
+        __sync_synchronize();
+        ready = 0;
+        return;
+    }
     const http_result *r = &slot.r;
     int prc = -1;
     if (r->step == H_OK) {
@@ -221,23 +379,13 @@ void board_take(void)
     board_fetches++;
     board_last_ok = prc == BP_OK;
     if (!board_last_ok) board_fails++;
-    fetch_words(board_last_words, sizeof board_last_words, r, prc, 0);
-    fetch_words(stale_words, sizeof stale_words, r, prc, 1);
+    fetch_words(board_last_words, sizeof board_last_words, r, prc, 0, REQ_BOARD, tmp.version);
+    fetch_words(stale_words, sizeof stale_words, r, prc, 1, REQ_BOARD, tmp.version);
     board_last_utc = clock_utc();
     board_last_us = slot.us;
     board_last_http = r->http;
     board_last_len = r->len;
-    /* The internet: no answer when the DNS lookup, the socket, the connect,
-     * the send or the recv failed (also the 10 s timeout); any answer, also
-     * an HTTP error or a bad reply, reached the Board's host. */
-    board_connect_us = r->connect_us;
-    if (r->step != H_STOPPED) {
-        int answered = r->step != H_DNS && r->step != H_SOCKET && r->step != H_CONNECT && r->step != H_SEND && r->step != H_RECV;
-        board_net_q = net_quality(answered, (long long)slot.us);
-        board_net_us = slot.us;
-        if (answered) board_net_down_utc = 0;
-        else if (!board_net_down_utc) board_net_down_utc = board_last_utc;
-    }
+    net_seen(r, board_last_utc, 0);          /* the internet's state */
     /* The address again, for the status line and the Info screen (DHCP may have
      * answered since): here the thread is idle, since it starts no fetch while
      * ready is set, so no two network calls overlap. */
@@ -276,7 +424,7 @@ void board_next_words(char *buf, int n)
     s64 now = sysGetSystemTime();
     buf[0] = 0;
     if (!started) return;
-    if (busy) snprintf(buf, (size_t)n, "Fetching the Board");
+    if (busy == REQ_BOARD) snprintf(buf, (size_t)n, "Fetching the Board");
     else if (want && now - last_us < GAP_US) {
         age_words(a, sizeof a, (long)((last_us + GAP_US - now + 999999) / 1000000));
         snprintf(buf, (size_t)n, "Refresh in %s", a);

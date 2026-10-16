@@ -51,7 +51,9 @@ typedef struct {
 
 /* GET u with "GET <path> HTTP/1.0", Host, User-Agent Couch/<version> and
  * Connection: close; SO_RCVTIMEO and SO_SNDTIMEO 10 s. It reads until the
- * server closes, the body holds its end line, or the body passes max bytes.
+ * server closes, the body holds its end line ("\nend\n": the Board's, the
+ * news list's and the article's), or the body passes max bytes (at most
+ * NEWS_MAX).
  * body gets the body and a NUL (max + 1 bytes). *on is read between the
  * steps: 0 stops the GET (H_STOPPED). The Board thread's: a static buffer. */
 void http_get(const http_url *u, char *body, int max, http_result *r, volatile int *on);

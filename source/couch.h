@@ -31,8 +31,25 @@ extern s64 t_start;                  /* sysGetSystemTime at the start */
 #define BBC         0x4a505cff       /* BBC's pill */
 
 /* One line appended to couch.txt, with its line end; nothing when the folder
- * is not writable. The main thread only. */
+ * is not writable. The main thread only.
+ *
+ * Since 0.3.1 (the console round of 0.3.0: the slowest frame, 16.2 ms, was
+ * a Board reply and a couch_log line, whose open, write, fsync and close
+ * ran on the main thread) the line goes to a queue while the Board thread
+ * runs (log_async 1, from board_start until leave() clears it), and the
+ * thread writes the queue between its requests (couch_log_drain, at most
+ * every 50 ms, or after the request in flight: up to its 10 s timeouts).
+ * Before the thread starts (the start's lines), after the exit cleared
+ * log_async (the exit's marks of a hang, which must be on the disk before
+ * their call), with no thread, and when the queue is full, the line is
+ * written at once as before, after the queued ones: couch.txt keeps the
+ * order of the calls. The journal (ps3gfx's journal.h) is not queued: its
+ * lines are on the disk before their call, as always. */
 void couch_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+extern volatile int log_async;       /* 1: couch_log queues (the Board thread writes the queue) */
+/* The queue into couch.txt, in one write: the Board thread between its
+ * requests. It does nothing while the main thread writes. */
+void couch_log_drain(void);
 
 /* What a frame did besides its draw, for the slowest frames in couch.txt
  * (main.c reads and clears the bits once a frame): a reply taken, a line

@@ -539,6 +539,16 @@ int url_split(const char *url, char *host, int hs, int *port, char *path, int ps
 
 /* ---- the clock ------------------------------------------------------------- */
 
+int url_sibling(const char *path, const char *leaf, char *out, int n)
+{
+    int q = (int)strcspn(path, "?#"), slash = -1;
+    for (int i = 0; i < q; i++)
+        if (path[i] == '/') slash = i;
+    int k = snprintf(out, (size_t)n, "%.*s%s", slash + 1, slash >= 0 ? path : "/", leaf);
+    if (slash < 0 && k >= 0 && k < n) k = snprintf(out, (size_t)n, "/%s", leaf);
+    return k < 0 || k >= n ? -1 : 0;
+}
+
 const char *const weekday_name[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 const char *const month_name[12] = {"January", "February", "March", "April", "May", "June",
                                     "July", "August", "September", "October", "November", "December"};
@@ -706,6 +716,251 @@ double ticker_offset(double t, double px_s, double period)
     if (!(period > 0) || !(px_s > 0) || t < 0) return 0;
     double d = fmod(t * px_s, period);
     return d < 0 ? 0 : d;
+}
+
+/* ---- the reader (0.3.1) ---------------------------------------------------------- */
+
+/* "magic N" on line 1: BP_OK for version 1, BP_VERSION (*version set), BP_NOT_BOARD. */
+static int head_line(const char **p, const char *end, const char *magic, int *version)
+{
+    const char *ls;
+    int ll, ml = (int)strlen(magic);
+    long v;
+    if (!next_line(p, end, &ls, &ll) || ll <= ml || memcmp(ls, magic, (size_t)ml) || !to_long(ls + ml, ll - ml, &v) || v < 0 || v > 9999)
+        return BP_NOT_BOARD;
+    *version = (int)v;
+    return v == 1 ? BP_OK : BP_VERSION;
+}
+
+/* An id: 8 characters 0-9a-f into dst (9 bytes), else "". */
+static void id_field(char *dst, const char *s, int n)
+{
+    dst[0] = 0;
+    if (n != 8) return;
+    for (int i = 0; i < 8; i++)
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return;
+    memcpy(dst, s, 8);
+    dst[8] = 0;
+}
+
+/* A category: the word, "" for "-" or nothing. */
+static void cat_field(char *dst, int size, const char *s, int n, int fold)
+{
+    text_field(dst, size, s, n, fold);
+    if (!strcmp(dst, "-")) dst[0] = 0;
+}
+
+/* An age: whole seconds of at most 15 digits, -1 for "-" or anything else. */
+static long age_field(const char *s, int n)
+{
+    long v;
+    return to_long(s, n, &v) && v >= 0 ? v : -1;
+}
+
+int news_parse(const char *body, int n, int fold, news_data *d)
+{
+    const char *p = body, *end = body + n, *ls;
+    int ll;
+    long v;
+    memset(d, 0, sizeof *d);
+    d->feed.age = -1;
+    int rc = head_line(&p, end, "couch-news ", &d->version);
+    if (rc != BP_OK) return rc;
+    while (next_line(&p, end, &ls, &ll)) {
+        if (ll == 3 && !memcmp(ls, "end", 3)) return BP_OK;
+        const char *eq = memchr(ls, '=', (size_t)ll);
+        if (!eq) continue;
+        const char *k = ls, *val = eq + 1;
+        int kl = (int)(eq - ls), vl = ll - kl - 1;
+        if (key_is(k, kl, "now")) {
+            if (to_long(val, vl, &v) && v > 0) d->now = v;
+        } else if (key_is(k, kl, "item")) {
+            /* id|source|category|age|title|summary: the summary ends at a '|', which the Worker never sends */
+            if (d->n == NEWS_ITEMS) continue;
+            const char *f[6];
+            int fl[6], c = split(val, vl, f, fl, 6);
+            news_item *it = &d->item[d->n];
+            memset(it, 0, sizeof *it);
+            if (c > 0) id_field(it->id, f[0], fl[0]);
+            put(it->source, sizeof it->source, f, fl, c, 1, fold);
+            if (c > 2) cat_field(it->category, sizeof it->category, f[2], fl[2], fold);
+            it->age = c > 3 ? age_field(f[3], fl[3]) : -1;
+            if (c > 4) text_field(it->title, sizeof it->title, f[4], fl[4], fold);
+            if (c > 5) text_field(it->summary, sizeof it->summary, f[5], fl[5], fold);
+            if (it->title[0]) d->n++;                /* a line with no title is not an item */
+        } else if (key_is(k, kl, "news_age")) {
+            feed_age(&d->feed, val, vl);
+        } else if (key_is(k, kl, "news_state")) {
+            feed_state(&d->feed, val, vl, fold);
+        }
+    }
+    return BP_CUT;
+}
+
+int article_parse(const char *body, int n, int fold, article_data *a)
+{
+    const char *p = body, *end = body + n, *ls;
+    int ll, used = 0;
+    long v;
+    memset(a, 0, sizeof *a);
+    a->age = -1;
+    int rc = head_line(&p, end, "couch-article ", &a->version);
+    if (rc != BP_OK) return rc;
+    while (next_line(&p, end, &ls, &ll)) {
+        if (ll == 3 && !memcmp(ls, "end", 3)) return BP_OK;
+        const char *eq = memchr(ls, '=', (size_t)ll);
+        if (!eq) continue;
+        const char *k = ls, *val = eq + 1;
+        int kl = (int)(eq - ls), vl = ll - kl - 1;
+        if (key_is(k, kl, "now")) {
+            if (to_long(val, vl, &v) && v > 0) a->now = v;
+        } else if (key_is(k, kl, "id")) {
+            id_field(a->id, val, vl);
+        } else if (key_is(k, kl, "source")) {
+            text_field(a->source, sizeof a->source, val, vl, fold);
+            if (!strcmp(a->source, "-")) a->source[0] = 0;
+        } else if (key_is(k, kl, "category")) {
+            cat_field(a->category, sizeof a->category, val, vl, fold);
+        } else if (key_is(k, kl, "title")) {
+            text_field(a->title, sizeof a->title, val, vl, fold);
+        } else if (key_is(k, kl, "date")) {
+            const char *f[2];
+            int fl[2], c = split(val, vl, f, fl, 2);
+            text_field(a->date, sizeof a->date, f[0], fl[0], fold);
+            if (!strcmp(a->date, "-")) a->date[0] = 0;
+            a->age = c > 1 ? age_field(f[1], fl[1]) : -1;
+        } else if (key_is(k, kl, "link")) {
+            if (vl > (int)sizeof a->link - 1) continue;      /* a cut link is a broken one: none (the Worker sends 1019 bytes at most) */
+            text_field(a->link, sizeof a->link, val, vl, 0);   /* bytes as they came: a fold would break the link */
+            for (int i = 0; a->link[i]; i++)
+                if (a->link[i] == ' ') {                     /* the Worker encodes spaces: one here is not a link */
+                    a->link[0] = 0;
+                    break;
+                }
+        } else if (key_is(k, kl, "state")) {
+            const char *bar = memchr(val, '|', (size_t)vl);
+            char w[8];
+            text_field(w, sizeof w, val, bar ? (int)(bar - val) : vl, 1);
+            a->reason[0] = 0;
+            if (!strcmp(w, "ok") || !strcmp(w, "cut") || !strcmp(w, "summary") || !strcmp(w, "none")) {
+                snprintf(a->state, sizeof a->state, "%s", w);
+                if (bar) text_field(a->reason, sizeof a->reason, bar + 1, vl - (int)(bar + 1 - val), fold);
+            } else {
+                snprintf(a->state, sizeof a->state, "none");
+                text_field(a->reason, sizeof a->reason, val, vl, fold);
+            }
+        } else if (key_is(k, kl, "p")) {
+            if (a->n_para == ART_PARAS || used >= ART_TEXT - 1) {
+                a->text_cut = 1;
+                continue;
+            }
+            char *dst = a->text + used;
+            int room = ART_TEXT - used;
+            /* the field cut on a code point boundary when the rest is short; a cut paragraph marks the text cut */
+            text_field(dst, room, val, vl, fold);
+            int len = (int)strlen(dst);
+            if (!len) continue;                      /* an empty paragraph: nothing */
+            if (len >= room - 1) a->text_cut = 1;          /* it filled the rest: cut, or exactly at the end */
+            a->para_off[a->n_para++] = used;
+            used += len + 1;
+        }
+    }
+    return BP_CUT;
+}
+
+/* The length of the UTF-8 sequence that starts with byte c (1 for a byte
+ * that starts none: it counts as one code point, as ps3gfx draws it). */
+static int seq_len(unsigned char c) { return c >= 0xf0 && c <= 0xf4 ? 4 : c >= 0xe0 && c <= 0xef ? 3 : c >= 0xc2 && c <= 0xdf ? 2 : 1; }
+
+int wrap_lines(const char *s, int n, float maxw, wrap_width_fn width, void *ctx, int *off, int *len, int max)
+{
+    int lines = 0, i = 0;
+    float sp = width(" ", 1, ctx);
+    while (i < n && lines < max) {
+        while (i < n && s[i] == ' ') i++;            /* the spaces at a break */
+        if (i >= n) break;
+        int start = i, end = i;                      /* end: the line's last word's end */
+        float w = 0;
+        while (i < n) {
+            int ws = i, we = i;
+            while (we < n && s[we] != ' ') we++;     /* a word: ws .. we */
+            float ww = width(s + ws, we - ws, ctx);
+            if (end == start) {                      /* the line's first word */
+                if (ww > maxw) {                     /* wider than the line: cut at the last code point that fits, one at least */
+                    int k = ws, fit = ws;
+                    while (k < we) {
+                        int l = seq_len((unsigned char)s[k]);
+                        if (k + l > we) l = we - k;
+                        if (fit > ws && width(s + ws, k + l - ws, ctx) > maxw) break;
+                        k += l;
+                        fit = k;
+                    }
+                    end = fit;
+                    i = fit;
+                    break;
+                }
+                w = ww;
+            } else {
+                float add = (float)(ws - end) * sp + ww;   /* the spaces between, as drawn */
+                if (w + add > maxw) break;           /* the word goes to the next line */
+                w += add;
+            }
+            end = we;
+            i = we;
+            while (i < n && s[i] == ' ') i++;
+        }
+        off[lines] = start;
+        len[lines] = end - start;
+        lines++;
+    }
+    return lines;
+}
+
+int grid_row(int i) { return i <= 0 ? 0 : 1 + (i - 1) / 2; }
+
+int grid_move(int sel, int n, int dir)
+{
+    if (n <= 0) return 0;
+    if (sel < 0) sel = 0;
+    if (sel >= n) sel = n - 1;
+    int row = grid_row(sel), col = sel == 0 ? 0 : (sel - 1) % 2, rows = grid_row(n - 1);
+    switch (dir) {
+    case NAV_LEFT: return sel > 0 && col == 1 ? sel - 1 : sel;
+    case NAV_RIGHT: return sel > 0 && col == 0 && sel + 1 < n ? sel + 1 : sel;
+    case NAV_UP:
+        if (row == 0) return sel;
+        if (row == 1) return 0;
+        return sel - 2;
+    case NAV_DOWN:
+        if (row == rows) return sel;
+        if (row == 0) return 1;
+        return sel + 2 < n ? sel + 2 : n - 1;        /* the row below has no right card: its left one */
+    }
+    return sel;
+}
+
+double scroll_clamp(double s, double view, double total)
+{
+    double m = total - view;
+    if (!(m > 0)) return 0;
+    return s < 0 ? 0 : s > m ? m : s;
+}
+
+double scroll_keep(double cur, double y0, double y1, double view, double total, double margin)
+{
+    double t = cur;
+    double top = y0 > 0 ? y0 - margin : 0, bot = y1 < total ? y1 + margin : total;
+    if (bot - top > view) bot = top + view;          /* taller than the view: its top shows */
+    if (top < t) t = top;
+    else if (bot > t + view) t = bot - view;
+    return scroll_clamp(t, view, total);
+}
+
+double scroll_follow(double s, double target, double dt, double tau)
+{
+    if (!(dt > 0) || !(tau > 0)) return s;
+    double d = (target - s) * exp(-dt / tau);
+    return fabs(d) < 0.02 ? target : target - d;
 }
 
 /* ---- the changes, the series, the numbers (0.3.0) ------------------------------ */

@@ -64,14 +64,14 @@ void bar_draw(float y, const char *left, u32 color, const char *note, const char
  * pressed button resets the idle time, and when the mode is on, it ends the
  * mode, puts back the page of before and clears pressed (1: the press woke
  * the screen, so it does nothing else). ambient_tick each frame: the mode
- * starts after AMBIENT_SEC of no press, and in RSX-only mode each step sets
- * the page. */
+ * starts after AMBIENT_SEC of no press (AMBIENT_READ_SEC while an article
+ * is open: reader.h), and in RSX-only mode each step sets the page. */
 extern int ambient;                  /* 1 while the mode is on */
 int ambient_input(void);
 void ambient_tick(void);
 int ambient_aurora(void);            /* 1: the mode shows the aurora (the SPUs run), not a dimmed page */
 
-/* The bodies and the bars of the pages (board_page.c, page.c, info.c):
+/* The bodies and the bars of the pages (board_page.c, reader.c, info.c):
  * the body between the header and the bottom bar, the bar at y. */
 void board_body(void);
 void board_bar(float y, const char *msg, u32 msg_color);

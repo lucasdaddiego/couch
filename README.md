@@ -34,14 +34,18 @@ Couch opens on the Board. L1 and R1 move between the three pages (R1 from
 the Info page wraps to the Board). SQUARE refreshes the Board, SELECT opens
 the Info page, START or Quit Game exits. On the Info page, SQUARE twice
 clears the freeze journal and CIRCLE goes back to the Board. In the ambient
-mode, the first button only wakes the screen.
+mode, the first button only wakes the screen. Since 0.3.1 the News page is
+a reader: UP, DOWN, LEFT and RIGHT move the selection over the headlines,
+CROSS opens one, UP and DOWN scroll it (L2, R2, LEFT and RIGHT by a page),
+CIRCLE goes back to the list; SQUARE there refreshes the Board and the list.
 
 What 0.2.0 does not do: no Music page and no LP10 client (no socket to port
 2018, no `lp10.txt`, no address editor, no fake LP10, no `a` actions in
 `auto.txt`); no TLS, so an `https://` URL is refused; no Config screen (the
 Info page shows, it edits nothing); no setting on the console for the
 city, the rates, the bank or the feeds (they are the Worker's vars: a change
-is a deploy, not a console round); no headline opens (titles only).
+is a deploy, not a console round); no headline opens (titles only: 0.3.1
+opens them, "The reader" below).
 
 ## The pages (0.2.0)
 
@@ -169,7 +173,8 @@ is 0.2.0's, kept for the words and the rules that stay.)
   the page on the TV. Each page draws through `page_begin` (the ambient
   shift, `begin_frame`, the background of the effects, the header)
   and `page_end` (the dim layer, `ui_flip`, the shift taken back). Only the
-  main thread calls `journal_*` and writes files.
+  main thread calls `journal_*` and writes files (since 0.3.1 but
+  `couch.txt`'s queued lines, which the Board thread writes: "The reader").
 - **The network start** (`http.c`): PS3 Health's `net_start` (`mod_net.c` at
   5becd5d): `netInitialize`, the netctl module, `netCtlInit` and the first
   address read as one journaled call. The main thread writes `start
@@ -207,7 +212,8 @@ is 0.2.0's, kept for the words and the rules that stay.)
   the body into a second record and swaps it in only when line 1 is
   `couch-board 1` and the `end` line came, then reads the console's address
   again (`netCtlGetInfo`) while the thread waits: Couch makes no two network
-  calls at once. The thread never journals and never writes a file. At the
+  calls at once. The thread never journals and (until 0.3.1, which gives it
+  `couch.txt`'s queue and the reader's two requests) never wrote a file. At the
   exit, a thread in a recv or a send returns at once (the shutdown; the
   10 s socket timeouts in any case), one in its 50 ms sleep after the
   sleep. A DNS lookup and a connect do not end at a shutdown: they run to
@@ -608,6 +614,110 @@ or `spu_fx`). The SPU cost: about 84 cycles a cloud pixel in place of 72
 (spu-objdump's inner loop), so about 2.2 ms a picture on the slowest SPU in
 place of the console's 1.97 ms: 13 % of each SPU at 60 pictures a second.
 
+## The reader (0.3.1, stage 11 of the revamp)
+
+Lucas, 2026-10-14: "add more news and also, select a new and enter it? and
+maybe scroll down for more". The Worker's side is live (worker/README.md,
+"The news reader": `GET /news`, up to 30 items in `couch-news 1`, at most
+32 KB; `GET /article?id=<id>`, the paragraphs in `couch-article 1`, at most
+16 KB). Couch's side, `source/reader.c` and `source/stext.c`:
+
+- The News page is the list of the last good `/news` reply: the featured
+  card for the newest item and rows of two glass cards (stage 10's look and
+  sizes: the first screen is stage 10's page), each with its source's pill,
+  its category (the Worker's word), its age and its title in two lines
+  ("..." when it goes on). Until the first list, the Board's 8 headlines
+  fill the page; they have no id, so CROSS on one says the list is not in
+  yet. A list that does not come (an old Worker's 404, no answer) leaves
+  them, with the reason in the bottom bar.
+- The list comes when the News page opens (unless one was asked in the last
+  60 s) and every 5 min while the page shows (60 s after a failure), never
+  while an article is open or in the ambient mode; SQUARE asks again (at most
+  once in 10 s). A new list keeps the selection on its headline (by id).
+- The selection: UP and DOWN move by a row, LEFT and RIGHT across the two
+  columns (from the featured card DOWN goes to the first card; from a right
+  card DOWN to a row with one card goes to it). The selected card has a
+  lighter glass and a white ring that brightens in 150 ms. The list scrolls
+  to keep it in view with 44 px of the next row showing (`scroll_keep`), by
+  an ease (`scroll_follow`: the rest falls by e every 75 ms, so a new press
+  mid-way stays smooth), by fractions of a pixel; a held direction repeats
+  after 350 ms, then every 110 ms. A scroll bar on the right shows the part
+  in view.
+- CROSS opens the selected item: a glass panel over the content area, the
+  title in `F_TITLE`, the source's pill, the category, the date and the
+  age, then the paragraphs in `F_MED` (32 px, a line step of 1.34 lines, a
+  column of at most 1,180 px: about 75 characters), word-wrapped with
+  ps3gfx's `text_w` (`wrap_lines`, ps3gfx's own break rules). While it
+  loads: the list's title and the skeleton bars. UP and DOWN scroll three
+  lines by the same ease, a held one glides at 900 px a second, L2, R2, LEFT
+  and RIGHT scroll a page. On the right, the QR code of the link (PS3
+  Health's encoder, `source/qrcodegen.c`, a copy: the smallest version for
+  ECC low, with a higher ECC when it fits in it, as Health's; version 25 at
+  most; made by the Board thread), "Scan it with a phone to open the whole
+  article"; the end of the text says so. `state=summary`: one YELLOW line
+  under the meta ("Only the feed's summary: the page could not be read
+  (reason)"); `state=cut` (or a text over Couch's 12 KB): "The article is cut
+  at 12 KB: the QR code opens the whole text". No answer, a bad reply or
+  `state=none`: the title and one line ("The article did not load: no
+  answer in 10 s."), and "CIRCLE goes back to the list". CIRCLE goes back to
+  the list, its selection and scroll as they were; a reply that comes after
+  CIRCLE (or for another item) is dropped and logged.
+- The ambient mode waits 20 min (`AMBIENT_READ_SEC`) while an article is
+  open on the News page, 10 min otherwise (Lucas reads, and a page of text
+  is still for a while); any press still only wakes the screen.
+- The Board's 8 headlines stay as they were for the ticker.
+
+The scroll by fractions of a pixel (`stext.h`): ps3gfx draws text pixel
+exact (nearest filtering at 1080p, each glyph on a whole pixel), so an eased
+scroll would end in whole-pixel steps. Couch keeps its own copy of four
+fonts' atlases (`F_SMALL`, `F_BODY`, `F_MED`, `F_TITLE`, ASCII and Latin, as
+`marquee.c` reads them), each glyph in a cell with a clear texel around it,
+in one bilinear texture per font: 3,378 KB of RSX memory, built after
+`ui_flip` 4 rows of cells a frame (about 15 frames) from the first News
+page. A glyph lands at any fractional y; at a whole pixel its texels land
+1:1: the list at rest and the back to the list are byte-identical to
+`text()`'s (checked in the preview with the atlases off; the article
+differs only in its faded last line). The cards, the pills and the rings
+are drawn at the same fractional y; every rest position is a whole pixel,
+so the text at rest is crisp. ps3gfx has no scissor, so the scrolling part
+is drawn in a band: each glyph quad and each glass polygon is cut at the
+band's edges and fades over up to 36 px there (per-vertex alpha; a glass
+tile that crosses is a clipped rounded polygon in three slabs, so the fade
+is exact). The list's fades grow with how far a card crosses the edge (none
+on the first screen); a pill, a ring or an icon goes when it crosses. Until
+the atlases are built (or with no RSX memory for them: a `couch.txt` line),
+the text is `text()` at the nearest pixel, a line only when it is in the
+band.
+
+The requests (`board.c`): the Board thread makes all three, one at a time;
+an article first (Lucas waits for it), then the Board when it is due, then
+the list. The body buffer is 32 KB for all; the end line stops the read as
+for the Board (the scan reads only the new bytes). The thread parses `/news`
+and `/article` itself (`news_parse`, `article_parse`: pure, in `parse.c`)
+and makes the QR code, so the frame only copies the reply (`reader_take`).
+A news or article reply sets the header's internet state as a Board reply
+does, except that an article's time is the Worker's page fetch (up to its
+8 s): an answered article only ends "No internet", it never says slow.
+
+couch.txt off the frame (the 0.3.0 round's slowest frame, 16.2 ms, was a
+Board reply and a `couch_log` line, whose open, write, fsync and close ran
+on the main thread): since 0.3.1 `couch_log` puts the line in a 16 KB queue
+while the Board thread runs, and the thread writes the queue in one append
+(the same `fs_write_file`, fsync'd) between its requests, at most every 50
+ms, or after the request in flight (up to its 10 s timeouts). Written at
+once as before, after the queued lines (couch.txt keeps the order of the
+calls): every line before the thread starts (the start's lines), after the
+exit begins (`leave()` clears `log_async`: the marks of a hang before the
+join and `net_end` are on the disk before their call), with no thread (no
+network), and when the queue is full. The journal is not queued. A freeze
+loses the queued lines (at most the last 50 ms, or the request in
+flight's). The slowest frames' "a log line" now means a queued line.
+
+The pad: `reader_input` runs on the News page after L1, R1 and the Info
+page's keys; the rest of the loop is 0.3.0's (L1 and R1 slide the pages,
+also from an open article, which stays open; SELECT; START). The ambient
+mode's wake clears the press first, as before.
+
 ## Files in /dev_hdd0/tmp/couch
 
 | File | Written by | Content |
@@ -618,7 +728,7 @@ place of the console's 1.97 ms: 13 % of each SPU at 60 pictures a second.
 | `gfx_init.txt` | ps3gfx, only when the picture cannot start | the failed step |
 | `board_url.txt` | FTP only, for test rounds | one `http://` line, e.g. `http://192.168.0.3:8787/board`. Absent: `http://couch.daddiego.com.ar/board`. An `https://` URL or a bad line: the default, and the note line says why |
 | `auto.txt` | FTP, for unattended rounds; Couch writes `0` at once | the seconds of a round, 60 to 600 |
-| `couch.txt` | Couch, appended | one block per start: the version and the ps3gfx stamp, the UTC time, `text_utf8`'s rc, the URL, the network start (the rcs of `netInitialize`, the netctl module load and `netCtlInit`) and the address, a quit before the Board opened, the three settings with their rcs, the first 50 fetches (time, duration, the connect's time or "no connection", HTTP status, bytes, the result, the Worker's `now` and `offset`, the console's clock minus the Worker's, the headlines), the ambient mode's starts and ends, the shots, the exit (a line before and after the Board thread's join, with its time; a line before and after `net_end`'s calls), `ui_stats` (since 2026-10-14 with the most vertices and draws of a frame) and the three slowest frames of the loop (the main thread's busy time, the frame's number and time, and what it did besides its draw: a reply, a log line, a journal line, a check row, the moon's upload, a texture made, a page change, a shot; each log and journal line waits for the drive's fsync), and the exit's time. Emptied at start past 64 KB |
+| `couch.txt` | Couch, appended | one block per start: the version and the ps3gfx stamp, the UTC time, `text_utf8`'s rc, the URL, the network start (the rcs of `netInitialize`, the netctl module load and `netCtlInit`) and the address, a quit before the Board opened, the three settings with their rcs, the first 50 fetches (time, duration, the connect's time or "no connection", HTTP status, bytes, the result, the Worker's `now` and `offset`, the console's clock minus the Worker's, the headlines), the ambient mode's starts and ends, the shots, the exit (a line before and after the Board thread's join, with its time; a line before and after `net_end`'s calls), `ui_stats` (since 2026-10-14 with the most vertices and draws of a frame) and the three slowest frames of the loop (the main thread's busy time, the frame's number and time, and what it did besides its draw: a reply, a log line, a journal line, a check row, the moon's upload, a texture made, a page change, a shot; each journal line waits for the drive's fsync, and since 0.3.1 a log line in the loop is queued: the Board thread writes it), and the exit's time. Since 0.3.1 also the reader's first 60 replies (`news N at T s: 0.31 s (connect 0.05 s), HTTP 200, 10495 bytes: ok; 30 items, state ok`; `article <id> at T s: ...: ok; state ok, 14 paragraphs, link 127 bytes, QR ok`, with "(closed: dropped)" after the id for a reply after CIRCLE), the atlases' line (`stext: the reader's atlases, 3378 KB of RSX memory`) and the ambient mode's 20 min ("an article open"). Emptied at start past 64 KB |
 | `board.ppm`, `info.ppm` | Couch, unattended only (`ui_shot`) | the two screens |
 
 An unattended round (Cell Bench's rule): `auto.txt` holds the seconds; Couch
@@ -678,6 +788,16 @@ calls and `start.c`'s job thread add call sites of numbers already in the
 list, no new number), every `sc` resolved, the EBOOT matches the ELF, no
 compiler warning.
 
+Stage 11 (0.3.1, 2026-10-14) builds against the pinned ps3gfx a311375 (no
+ps3gfx change). The pkg is 425 KB (425,376 B); 48 syscall numbers at 110
+call sites (couch_log's queue and its wait add call sites of numbers in the
+list), every `sc` resolved, the EBOOT matches the ELF, no compiler warning.
+The first build had one `sc` the audit could not read: gcc turned the wait
+loop of `log_now` so that `sysUsleep`'s `li r11,141` came after the `sc`
+(0.1.0's first ELF had the same); the sleep is now `nap_ms`, out of line.
+`source/qrcodegen.c` and `.h` are PS3 Health's copy of Project Nayuki's QR
+encoder (MIT, the notice in the file's head; Health's NOTICE lists it).
+
 `art/make_icon.py <Inter variable TTF>` draws `pkgfiles/ICON0.PNG` (a sofa,
 "Couch" and "Board", in PS3 Health's icon style); the font is
 `fonts/InterVariable.ttf` in the ps3sdk archive.
@@ -707,7 +827,22 @@ with new values: the Board's counting and glow), and
 repeating: `ok`, `refused`, `silent` (the 10 s timeout at once), `cut` (the
 body without its last 30 bytes), `301`, `v2`, `hang` (the recv waits until a
 `netShutdown`, at most 30 s of host time), `slow` (the answer comes 4 s of
-the preview's clock after the connect). `PV_TZ`, `PV_SUMMER`,
+the preview's clock after the connect). Since 0.3.1 the peer answers by path: `GET /news` gets `PV_NEWS`'s file
+(absent or `404`: HTTP 404, a Worker before the reader), `GET
+/article?id=<id>` gets `<PV_ARTICLES>/<id>.txt`, or the Worker's
+`state=none|unknown id` reply for an id with no file. `PV_NEWS_FAIL` and
+`PV_ARTICLE_FAIL` give those requests their answers in their own counts
+(`PV_BOARD_FAIL`'s kinds but `refused`, which a connect cannot know, and
+`404`); without them a reader request takes its connect's `PV_BOARD_FAIL`
+kind. `run.zsh` passes the fixtures: `tools/preview/fixtures/` holds live
+replies of 2026-10-14 saved with curl (`news.esc`, the 30 items;
+`article_f80706d6.esc` Ambito, `article_451cc556.esc` Clarin,
+`article_bb423307.esc` BBC; `article_01104e5c.esc` made from a Clarin one in
+the summary form with the item's summary, `article_d8f03105.esc` in the cut
+form, its last 4 paragraphs dropped), every byte from 0x80 as `\xNN` and the
+backslash as `\\` (the repository stays ASCII), decoded into
+`build/fixtures` at each run; `NEWS=none` or `NEWS=404` in a scenario gives
+the list of dead feeds or no `/news`. `PV_TZ`, `PV_SUMMER`,
 `PV_TIMEFMT` set the three settings (default -180, 0, 1), `PV_TZ_FAIL=1`
 fails them, `PV_NOIP=1` takes the address away, `PV_NET_FAIL=1` fails
 `netInitialize`, `PV_NETCTL_FAIL=1` fails `netCtlInit`, `PV_QUIT=net` sets
@@ -802,6 +937,21 @@ on the News page), `news_rain` (the News page with mixed sources: Ambito
 "Economy", BBC "World", Infobae, Clarin), `pages_slide` (in `pages`: 6
 frames into the slide to the News page), `ambient_rsx` (`start fx_first`
 in the journal: 0.2.0's dimmed mode), `tv_news` and `tv_info`. The
+reader's (0.3.1): `reader` (`news_list`: the 30 items, the featured card
+selected; DOWN four times and RIGHT: `news_scrolling` 3 frames after the
+last press, `news_scrolled` at rest; SQUARE 10 s later: a second `/news`),
+`reader_article` (CROSS on Ambito's item with a 4 s answer:
+`article_loading`, the skeleton; `article` with its QR code; DOWN, then
+DOWN held: `article_scrolled`; CIRCLE: `article_back`, the selection
+kept), `reader_states` (`article_summary`, `article_cut`, `article_none`
+for an id the Worker does not know, `article_error` for no answer and
+`article_error_back`, then `article_bbc`), `reader_first` (a 4 s `/news`:
+the Board's headlines, `news_first`; CROSS: `news_first_cross`, the bar's
+note; `news_first_full`), `reader_ambient` (an article open: no ambient
+mode at 11 min, `reader_noambient`; the aurora at 21 min, `reader_ambient`;
+one `/news`, 76,000 frames: not in the narrow pass). `news_rain`,
+`pages_news`, `tv_news` and `skeleton_news` show the reader's list since
+0.3.1, `news_none` the list of dead feeds, `news_v1` an old Worker's 404. The
 `ambient` snapshots now show the aurora with the block at three of its
 places. Since stage 10 a snapshot after a page change waits 28 frames (the
 slide is 17), and `frozen`, `tz_skip` and `tz_12h` start later (the loading
@@ -809,7 +959,14 @@ screen's frames come before the prompt and the Board). Every text fits at
 1786 and at 1600 wide, the News page's 8 headlines too. With `PASSES=2`,
 the snapshots repeat byte for byte, at both areas: 95 at the default area
 and 91 narrow (2026-10-14, stage 10; about 26 min for both areas twice;
-stage 9: 84 and 81). Before, an Info page after a
+stage 9: 84 and 81). Stage 11 (0.3.1): 114 at the default area and 108 narrow, about 36 min
+for both areas twice (`reader_ambient` alone 6 min a pass); every snapshot
+repeated byte for byte but `net_slow_narrow` and `net_slow_info_narrow` in
+that run: `net_slow`'s reply lands 4 s of the preview's clock after the
+connect, polled in host time, and the frame it lands in moves the sky's
+scene by up to 2 levels. 0.3.0 (71fd78e, from `git archive`) gives the same
+two pictures (the same hashes) at the same rate, about 1 run in 5, at
+either area: a race of that scenario, not of the reader. Before, an Info page after a
 fetch could differ at times (`board_cut_info`, `board_stale301_info`,
 `tz_12h_info`, `tz_skip_info`): the Board thread runs in host time while the
 preview's clock moves per frame, so a fetch's duration reads 0.00 or 0.02 s.
@@ -849,6 +1006,23 @@ drops by the code and the hour's mm, the flakes); and, in the sanitizer build,
 20,000 mutated replies with every field inside its buffer. Last,
 `old_check.c` builds Couch 0.1.0's `parse.c` (commit bcf4243, read with
 `git show`) and parses the same reply: within 4 KB, `BP_OK`, every old field.
+
+Since 0.3.1, `tools/hostcheck/reader_check.c` checks the reader's pure code
+in both builds: `news_parse` and `article_parse` against the Worker test's
+texts (couch/worker/test/reader.test.js: the `/news` item line and the
+`/article` texts, ok, summary, cut, no date and no link, which `run.zsh`
+extracts with its `NEWS_NOW` and `LINKS` put in) and the live replies of
+the preview's fixtures (30 items; a Clarin article), each cut at every byte
+(the whole reply, and the reply without its last LF, are the only two
+`BP_OK`), CR LF, another version, the wrong first line, unknown keys, bad
+ids, `-` fields, a 7th field, 31 items, long fields cut on a code point,
+items at the Worker's caps, a link that would be cut (none), a link never
+folded, 500 paragraphs (400 kept, marked cut), 12 KB of text; the fold;
+`wrap_lines` (10 px a code point: the breaks, a long word cut by code
+points, never inside a sequence, no stall, the cap),
+`grid_move`, `scroll_keep`, `scroll_clamp`, `scroll_follow`,
+`url_sibling`; and, in the sanitizer build, 20,000 mutated replies of the
+live list and of the live article.
 The repository's CI runs no app's C host checks, so this one is not in CI.
 
 ## The console rounds
@@ -927,17 +1101,37 @@ Round 3, 0.2.0 (the pkg goes up as `Couch-0.2.0-rcN.pkg`):
    HH:MM" after the first fetch. The fetch and connect times in `couch.txt`
    tell whether 3 s (`NQ_SLOW_US`) fits this line.
 
+The round of 0.3.1 (the reader; install by hand as for 0.3.0, the pkg as
+`Couch-0.3.1-rcN.pkg`):
+1. R1 to the News page: the list comes (`news 1: 30 items` in `couch.txt`);
+   the first News page builds the atlases (`stext:` line, about 15 frames):
+   watch the slowest frames for "a texture made" there.
+2. DOWN, RIGHT, a held DOWN: the selection and the scroll (smooth, no step
+   at the end of a move; the text sharp at rest); the scroll bar.
+3. CROSS on an Ambito, a Clarin and a BBC item: the skeleton, then the text
+   from the couch (is `F_MED` big enough?), UP/DOWN, a held DOWN, L2/R2;
+   the QR code with a phone from the couch; CIRCLE back to the same card.
+4. `couch.txt`: the `article` lines (the times include the Worker's page
+   fetch, up to 8 s, and a DNS lookup per request), the slowest frames (no
+   frame with "a log line" near 16 ms any more), `ui_stats`' vertices and
+   draws with an article and the list on the TV.
+5. An article open and no button: no ambient mode at 10 min, the aurora at
+   20 min.
+
 ## Layout
 
 `Makefile`, `build.sh`, `sfo.xml`, `pkgfiles/ICON0.PNG`, `art/make_icon.py`,
 `source/` (`main.c`: the start, the loop, the pages' keys, the unattended
-round, `couch.txt`; `board.c`: the thread, the handoff, the internet's
-state, the status words; `board_page.c`: the Board page; `page.c`: the
-header, the ambient mode, the News page, the background; `sky.c`: the
+round, `couch.txt` and its queue; `board.c`: the thread, its three requests,
+the handoff, the internet's state, the status words; `board_page.c`: the
+Board page; `page.c`: the header, the ambient mode, the background;
+`reader.c`: the News page, the reader (0.3.1); `stext.c`: the text and the
+glass that scroll by fractions of a pixel; `qrcodegen.c`: PS3 Health's QR
+encoder; `sky.c`: the
 stars, the moon, the sun, the lightning, the scrims and the shared
 textures; `spu_fx_run.c`: the effects' SPU group and their RSX-only
 fallbacks; `http.c`: the network start and the HTTP client; `clock.c`: the
 settings, the offset, the clock; `info.c`: the Info page; `parse.c`: the
 pure functions, also built by the host check), `tools/preview/`,
-`tools/hostcheck/` (with `old_check.c`, 0.1.0's parser), `tools/syscalls.allow`,
+`tools/hostcheck/` (with `old_check.c`, 0.1.0's parser, and `reader_check.c`), `tools/syscalls.allow`,
 and `worker/` (the Board's Worker, its own README).

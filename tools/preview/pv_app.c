@@ -21,6 +21,16 @@
  *                         netShutdown, at most 30 s of host time), slow
  *                         (the answer comes 4 s of the preview's clock
  *                         after the connect: a slow internet)
+ *   PV_NEWS=<file>        the body of GET /news (0.3.1's reader); "404" or
+ *                         absent: HTTP 404 (a Worker before the reader)
+ *   PV_ARTICLES=<dir>     GET /article?id=<id> answers <dir>/<id>.txt, and
+ *                         the Worker's "state=none|unknown id" reply for
+ *                         an id with no file; absent: HTTP 404
+ *   PV_NEWS_FAIL, PV_ARTICLE_FAIL=<list>  per /news or /article request (in
+ *                         their own counts, the last entry repeats), the
+ *                         answer of PV_BOARD_FAIL's kinds but refused (a
+ *                         connect cannot see its path), and 404; it takes
+ *                         the place of the connect's PV_BOARD_FAIL kind
  *   PV_TZ, PV_SUMMER, PV_TIMEFMT  the three settings (default -180, 0, 1)
  *   PV_TZ_FAIL=1          the three calls fail
  *   PV_NOIP=1             netCtlGetInfo fails: the console has no address
@@ -70,15 +80,14 @@ static const char default_body[] =
     "wx_state=ok\n"
     "end\n";
 
-enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2, K_HANG, K_SLOW, K_KINDS };
+enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2, K_HANG, K_SLOW, K_404, K_KINDS };
 
 extern volatile int quit;                    /* ps3gfx's: Quit Game from the PS button menu */
 
-/* The kind of connect n (0 first) from PV_BOARD_FAIL. */
-static int kind_at(int n)
+/* The kind of entry n (0 first) of a list: PV_BOARD_FAIL's, per connect. */
+static int kind_of(const char *s, int n)
 {
-    static const char *const names[K_KINDS] = {"ok", "refused", "silent", "cut", "301", "v2", "hang", "slow"};
-    const char *s = getenv("PV_BOARD_FAIL");
+    static const char *const names[K_KINDS] = {"ok", "refused", "silent", "cut", "301", "v2", "hang", "slow", "404"};
     char tok[16] = "ok";
     for (int i = 0; s && *s; i++) {
         int len = (int)strcspn(s, ",");
@@ -90,6 +99,8 @@ static int kind_at(int n)
         if (!strcmp(tok, names[k])) return k;
     return K_OK;
 }
+
+static int kind_at(int n) { return kind_of(getenv("PV_BOARD_FAIL"), n); }
 
 /* One "pv: " line in peer.log. */
 static void note(const char *fmt, ...)
@@ -116,7 +127,7 @@ static struct {
     char in[2048];
     char *out;
 } sk[NSOCK];
-static int connects;
+static int connects, news_reqs, art_reqs;
 static s32 err_val = NET_ENETDOWN;
 
 s32 *netErrnoLoc(void) { return &err_val; }
@@ -186,11 +197,67 @@ static char *body_text(int n, int *len)
     return b;
 }
 
+/* The path of the request's line ("GET <path> HTTP/1.0"). */
+static void req_path(int i, char *path, int n)
+{
+    path[0] = 0;
+    if (!strncmp(sk[i].in, "GET ", 4)) snprintf(path, (size_t)n, "%.*s", (int)strcspn(sk[i].in + 4, " \r\n"), sk[i].in + 4);
+}
+
+/* A file's bytes, malloc'd (64 KB at most), or NULL. */
+static char *file_text(const char *p, int *len)
+{
+    FILE *f = p ? fopen(p, "rb") : NULL;
+    if (!f) return NULL;
+    char *b = malloc(65536);
+    if (b) *len = (int)fread(b, 1, 65535, f);
+    fclose(f);
+    return b;
+}
+
+/* The reader's paths (0.3.1): the body of /news or /article, and the
+ * request's kind from PV_NEWS_FAIL or PV_ARTICLE_FAIL when set; NULL and
+ * K_404 for no body. 0 for another path (the Board's). */
+static int reader_body(int i, char **body, int *len)
+{
+    char path[300], p[1100];
+    req_path(i, path, sizeof path);
+    const char *q = strrchr(path, '/');
+    q = q ? q + 1 : path;
+    if (!strcmp(q, "news")) {
+        const char *f = getenv("PV_NEWS_FAIL");
+        if (f) sk[i].kind = kind_of(f, news_reqs);
+        news_reqs++;
+        const char *n = getenv("PV_NEWS");
+        *body = n && strcmp(n, "404") ? file_text(n, len) : NULL;
+        if (!*body) sk[i].kind = K_404;
+        return 1;
+    }
+    if (!strncmp(q, "article?id=", 11)) {
+        const char *f = getenv("PV_ARTICLE_FAIL"), *d = getenv("PV_ARTICLES");
+        if (f) sk[i].kind = kind_of(f, art_reqs);
+        art_reqs++;
+        *body = NULL;
+        if (!d) {
+            sk[i].kind = K_404;
+            return 1;
+        }
+        snprintf(p, sizeof p, "%s/%.8s.txt", d, q + 11);
+        *body = file_text(p, len);
+        if (!*body && (*body = malloc(256)))
+            *len = snprintf(*body, 256, "couch-article 1\nnow=1792022946\nstate=none|unknown id\nend\n");
+        return 1;
+    }
+    return 0;
+}
+
 /* The answer to a whole request, by its kind. */
 static void answer(int i)
 {
     int blen = 0;
-    char *body = body_text(sk[i].n, &blen);
+    char *body = NULL;
+    if (!reader_body(i, &body, &blen)) body = body_text(sk[i].n, &blen);
+    else if (!body && (body = malloc(1))) blen = 0;
     char *out = malloc(65536 + 512);
     if (!body || !out) {
         free(body);
@@ -198,11 +265,14 @@ static void answer(int i)
         return;
     }
     int n;
-    if (sk[i].kind == K_301)
+    if (sk[i].kind == K_404)
+        n = snprintf(out, 512, "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    else if (sk[i].kind == K_301)
         n = snprintf(out, 512, "HTTP/1.1 301 Moved Permanently\r\nLocation: https://couch.daddiego.com.ar/board\r\nContent-Length: 0\r\n"
                                "Connection: close\r\n\r\n");
     else {
         if (sk[i].kind == K_V2 && blen >= 13 && !memcmp(body, "couch-board 1", 13)) body[12] = '2';
+        if (sk[i].kind == K_V2 && blen >= 12 && !memcmp(body, "couch-news 1", 12)) body[11] = '2';
         int send_len = sk[i].kind == K_CUT ? (blen > 30 ? blen - 30 : 0) : blen;
         n = snprintf(out, 512, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\n"
                                "Connection: close\r\n\r\n", blen);

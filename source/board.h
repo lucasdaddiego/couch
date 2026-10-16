@@ -3,12 +3,22 @@
  * failure and at SQUARE (at most once in 10 s). The handoff is one record
  * and a ready word (Cell Bench's run.c). The main thread parses the reply
  * (parse.h), keeps the last good one, logs each fetch and draws the page.
- * The thread never journals and never writes a file. */
+ *
+ * Since 0.3.1 (stage 11, the reader) the same thread also makes the
+ * reader's requests, one at a time: GET /news and GET /article?id=<id>
+ * beside the Board's path. An article goes first (Lucas waits for it),
+ * then the Board when it is due, then the news list. The thread parses
+ * those two replies itself (pure code, parse.h) and makes the article's QR
+ * code, so the frame only copies them (reader.c takes them). It also
+ * writes couch.txt's queued lines (couch.h's couch_log_drain) between its
+ * requests. It never journals. */
 #ifndef BOARD_H
 #define BOARD_H
 
 #include <ppu-types.h>
 #include "parse.h"
+#include "http.h"
+#include "qrcodegen.h"
 
 #define BOARD_DEFAULT_URL "http://couch.daddiego.com.ar/board"
 
@@ -18,6 +28,31 @@ void board_init(void);
 extern char board_url[200];          /* the URL in use */
 extern int board_url_file;           /* 1: from board_url.txt */
 extern char board_url_note[160];     /* why board_url.txt was not used, or "" */
+
+/* The thread's requests. board_ask_news and board_ask_article (the
+ * reader, the main thread) ask for one at the thread's next free moment;
+ * a new article replaces one that has not started. */
+enum { REQ_BOARD, REQ_NEWS, REQ_ARTICLE };
+void board_ask_news(void);
+void board_ask_article(const char *id);
+
+/* A news or article reply as board_take hands it to reader_take: the
+ * request, the GET's result, the parse (the thread's: BP_* of parse.h, -1
+ * for no 200 answer), the result in words, the QR code of the article's
+ * link (qrcodegen's buffer, qr_ok 0 when none). Valid during the call. */
+#define QR_MAX_VERSION 25            /* PS3 Health's: a link of 1019 bytes fits at ECC low */
+typedef struct {
+    int kind;                        /* REQ_NEWS or REQ_ARTICLE */
+    char id[9];                      /* the id asked for */
+    const http_result *r;
+    s64 at, us;                      /* the reply's system time, the GET's time */
+    int prc;
+    const news_data *news;
+    const article_data *art;
+    int qr_ok;
+    const unsigned char *qr;
+    char words[160];                 /* "ok", "HTTP 404", "no answer in 10 s", ... */
+} board_reply;
 
 int board_start(void);               /* the thread: 0, or sysThreadCreate's rc */
 int board_running(void);

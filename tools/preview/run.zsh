@@ -11,7 +11,11 @@
 # journal.txt, peer.log (the requests the peer got), spu.log (the SPU calls
 # the twin got, pv_fx.c), the shots of auto.
 # The reply files are written here at run time: the sources stay ASCII,
-# the degree sign is the bytes $'\xc2\xb0'.
+# the degree sign is the bytes $'\xc2\xb0'. The reader's replies (0.3.1:
+# /news and /article, live replies of the Worker saved with curl on
+# 2026-10-14, the summary and the cut forms made from two of them) are in
+# fixtures/*.esc with every byte from 0x80 as \xNN and the backslash as
+# \\, decoded into build/fixtures at each run.
 P=${0:A:h}
 OUT=${OUT:-$P/build/out}
 DIR=dev_hdd0/tmp/couch
@@ -44,7 +48,26 @@ if len(items) < 3 or items[0] != 'couch-board 1' or items[-2:] != ['end', '']:
     sys.exit(1)
 open(sys.argv[2], 'w', encoding='utf-8', newline='').write('\n'.join(items))
 PY
+FIX=$P/build/fixtures
+mkdir -p $FIX/articles
+${PYTHON:-python3} -I - $P/fixtures $FIX <<'PY' || { print -u2 "the reader's fixtures: not decoded"; exit 1 }
+import codecs, glob, os, sys
+src, out = sys.argv[1], sys.argv[2]
+for p in sorted(glob.glob(os.path.join(src, '*.esc'))):
+    b = codecs.escape_decode(open(p, encoding='ascii').read().encode('ascii'))[0]
+    n = os.path.basename(p)[:-4]
+    dst = os.path.join(out, 'articles', n[8:] + '.txt') if n.startswith('article_') else os.path.join(out, n + '.txt')
+    open(dst, 'wb').write(b)
+PY
 body_ok() { print -rn -- "$(< $REPLY)"$'\n'; }
+news_none() {    # /news when every feed failed
+    print -rn -- "couch-news 1
+now=1792022941
+news_age=0
+news_state=none|clarin.com: HTTP 403
+end
+"
+}
 each() {   # the reply with each line through the function $1 (it prints the line, another, or nothing)
     local l
     for l in "${(@f)$(< $REPLY)}"; do $1 "$l"; done
@@ -194,7 +217,7 @@ end
 "
 }
 
-scn() {   # name script [VAR=value ...]; JOURNAL, BODY, URL, AUTO, BIN, SAFE from the caller
+scn() {   # name script [VAR=value ...]; JOURNAL, BODY, NEWS, URL, AUTO, BIN, SAFE from the caller
     local name=$1$SFX e s=()
     for e in ${=2}; do [[ $e == *SNAP=* ]] && e=$e$SFX; s+=$e; done
     shift 2
@@ -209,7 +232,13 @@ scn() {   # name script [VAR=value ...]; JOURNAL, BODY, URL, AUTO, BIN, SAFE fro
     body_${BODY:-ok} > $sbx/body.txt
     local b2=()
     [[ -n $BODY2 ]] && { body_$BODY2 > $sbx/body2.txt; b2=(PV_BOARD2=$sbx/body2.txt) }   # the second and later replies
-    env PV_ROOT=$sbx PV_OUT=$OUT PV_BOARD=$sbx/body.txt $b2 PV_SCRIPT="${(j: :)s}" "$@" $P/build/${BIN:-pv} 2>&1 | command grep -v '^snap' | head -5
+    local rd=(PV_ARTICLES=$FIX/articles)                 # the reader: /news from the fixture (NEWS=none, 404), the articles
+    case ${NEWS:-list} in
+    (list) rd+=(PV_NEWS=$FIX/news.txt);;
+    (404) ;;
+    (*) news_$NEWS > $sbx/news.txt; rd+=(PV_NEWS=$sbx/news.txt);;
+    esac
+    env PV_ROOT=$sbx PV_OUT=$OUT PV_BOARD=$sbx/body.txt $b2 $rd PV_SCRIPT="${(j: :)s}" "$@" $P/build/${BIN:-pv} 2>&1 | command grep -v '^snap' | head -5
     print -- "$name: exit ${pipestatus[1]}"
 }
 
@@ -243,9 +272,9 @@ board_none|all)    # both upstreams failed with no old data
 pages|all)         # L1 and R1: the Board, the News, the Info page, R1 wraps to the Board, L1 back to the Info page
     scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_info 182:R1 210:SNAP=pages_back 212:L1 240:SNAP=pages_l1 241:EXIT" ;|
 board_extras|all)  # the money extras none and stale, a dry forecast, the feeds failed: the News page says why
-    BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 150:SNAP=news_none 151:EXIT" ;|
-board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines (the new Couch draws what came)
-    BODY=v1 scn board_v1 "120:SNAP=board_v1 122:R1 150:SNAP=news_v1 151:EXIT" ;|
+    NEWS=none BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 150:SNAP=news_none 151:EXIT" ;|
+board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines, no /news (the new Couch draws what came)
+    NEWS=404 BODY=v1 scn board_v1 "120:SNAP=board_v1 122:R1 150:SNAP=news_v1 151:EXIT" ;|
 net_slow|all)      # the answer takes 4 s: the header says the internet is slow
     scn net_slow "400:SNAP=net_slow 402:SELECT 430:SNAP=net_slow_info 431:EXIT" PV_BOARD_FAIL=slow ;|
 net_down|all)      # a good reply, then SQUARE after 10 s and a refused connect: no internet since 09:00
@@ -361,8 +390,28 @@ start|all)         # the start (0.3.0): the loading screen from the first frame 
     print -r -- "  boot.txt: $(tr '\n' ' ' < $P/build/sbx/start$SFX/$DIR/boot.txt)" ;|
 skeleton|all)      # before the first reply (a 4 s answer): the skeleton's bars on the Board and on the News page
     scn skeleton "120:SNAP=skeleton 122:R1 150:SNAP=skeleton_news 151:EXIT" PV_BOARD_FAIL=slow ;|
-news_rain|all)     # the News page on the rainy day of the mockups (the sources' pills, the categories, the ages)
+news_rain|all)     # the News page on the rainy day of the mockups (the sources' pills, the categories, the ages): since 0.3.1 the
+                   # list of /news (the fixture)
     BODY=newsmix scn news_rain "120:R1 150:SNAP=news_rain 151:EXIT" ;|
+reader|all)        # the reader (0.3.1): R1, the News page with /news's 30 headlines, the featured card selected; DOWN four times and
+                   # RIGHT: the list scrolls (3 frames after the last press, then at rest); SQUARE 10 s later asks the list again
+    scn reader "120:R1 160:SNAP=news_list 162:DOWN 168:DOWN 174:DOWN 180:DOWN 186:RIGHT 189:SNAP=news_scrolling 240:SNAP=news_scrolled 900:SQUARE 960:SNAP=news_refresh 961:EXIT"
+    print -r -- "  requests: $(command grep -c '^GET /news' $P/build/sbx/reader$SFX/peer.log) of /news, $(command grep -c '^GET /board' $P/build/sbx/reader$SFX/peer.log) of /board; couch.txt: $(command grep -h -e '^news' -e '^stext' $P/build/sbx/reader$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+reader_article|all) # CROSS on the second headline (Ambito): the loading (a 4 s answer: the skeleton), the article with its QR code; DOWN,
+                   # then DOWN held a second: it glides; CIRCLE: the list, its selection kept
+    scn reader_article "120:R1 160:DOWN 166:CROSS 200:SNAP=article_loading 460:SNAP=article 462:DOWN 470-540:DOWN 600:SNAP=article_scrolled 602:CIRCLE 640:SNAP=article_back 641:EXIT" PV_ARTICLE_FAIL=slow
+    print -r -- "  requests: $(command grep -h '^GET /article' $P/build/sbx/reader_article$SFX/peer.log | tr -d '\r' | tr '\n' ';') couch.txt: $(command grep -h '^article' $P/build/sbx/reader_article$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+reader_states|all) # the article's other forms, each one line: the feed's summary (Clarin refused the page), a text cut at 12 KB, an
+                   # id the Worker does not know, no answer (SO_RCVTIMEO); CIRCLE back each time; then BBC's article
+    scn reader_states "120:R1 160:DOWN 164:DOWN 168:CROSS 210:SNAP=article_summary 212:CIRCLE 220:RIGHT 224:CROSS 270:SNAP=article_cut 272:CIRCLE 280:DOWN 284:LEFT 288:CROSS 330:SNAP=article_none 332:CIRCLE 340:RIGHT 344:CROSS 390:SNAP=article_error 392:CIRCLE 400:SNAP=article_error_back 402:CROSS 450:SNAP=article_bbc 451:EXIT" PV_ARTICLE_FAIL=ok,ok,ok,silent,ok
+    print -r -- "  couch.txt: $(command grep -h '^article' $P/build/sbx/reader_states$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+reader_first|all)  # the list's first 4 s (a slow /news): the Board's 8 headlines fill the page; CROSS says they open once the list is in;
+                   # then the list
+    scn reader_first "120:R1 160:SNAP=news_first 162:CROSS 170:SNAP=news_first_cross 440:SNAP=news_first_full 441:EXIT" PV_NEWS_FAIL=slow ;|
+reader_ambient|all) # an open article holds the ambient mode off for 20 min (10 without one): at 11 min still the article, at 21 min the
+                   # aurora; no list request while the article is open (not in the narrow pass: 76,000 frames, 6 min)
+    [[ $AREA != narrow ]] && scn reader_ambient "120:R1 160:DOWN 166:CROSS 39720:SNAP=reader_noambient 75720:SNAP=reader_ambient 75721:EXIT" PV_MAXFRAMES=76000
+    [[ $AREA != narrow ]] && print -r -- "  requests: $(command grep -c '^GET /news' $P/build/sbx/reader_ambient$SFX/peer.log) of /news, $(command grep -c '^GET /board' $P/build/sbx/reader_ambient$SFX/peer.log) of /board; couch.txt: $(command grep -h '^ambient' $P/build/sbx/reader_ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 esac
 py=${PYTHON:-python3}
 $py -I - $OUT <<'PY' 2>/dev/null || print "no Pillow: the snapshots stay .ppm"

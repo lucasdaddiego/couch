@@ -240,6 +240,11 @@ int http_head(const char *buf, int n, int *status, char *loc, int loc_size, int 
  * than hs - 1 or ps - 1. */
 int url_split(const char *url, char *host, int hs, int *port, char *path, int ps);
 
+/* The path of a sibling of the Board's path (0.3.1's reader: "news",
+ * "article?id=..." beside "board"): path up to its last '/' (a query cut
+ * first), then leaf, into out (n bytes). 0, or -1 when it does not fit. */
+int url_sibling(const char *path, const char *leaf, char *out, int n);
+
 /* The date and time of t (Unix seconds) in UTC fields; wday 0 is Sunday. */
 typedef struct {
     int year, month, day, wday, hour, min, sec;
@@ -285,6 +290,7 @@ int net_quality(int answered, long long total_us);
  * the page changes between the Board and the News. step counts the steps
  * since the mode began (0 at its start). */
 #define AMBIENT_SEC 600
+#define AMBIENT_READ_SEC 1200        /* 0.3.1: while an article is open (reader.h), 20 min */
 #define AMBIENT_STEP_SEC 60
 #define AMBIENT_PX 6
 #define AMBIENT_SHIFTS 9
@@ -318,5 +324,93 @@ const char *news_category(const char *source);
 /* The ticker's offset in px at t seconds for a speed of px_s px a second,
  * wrapped to [0, period): any fraction (the marquee draws it bilinear). */
 double ticker_offset(double t, double px_s, double period);
+
+/* ---- the reader (0.3.1, stage 11): the Worker's /news and /article -------------- */
+
+/* GET /news (couch/worker/README.md, "The news reader"): "couch-news 1",
+ * now=, item=id|source|category|age|title|summary (0 to 30, the newest
+ * first), news_age=, news_state=, end. At most NEWS_MAX bytes (the Worker's
+ * NEWS_BYTES). The same rules as the Board's: unknown keys and lines with
+ * no '=' skipped, nothing after "end" read, the version on line 1. */
+#define NEWS_MAX 32768
+#define NEWS_ITEMS 30                /* item lines kept, at most (the Worker's NEWS_LIST) */
+typedef struct {
+    char id[9];                      /* 8 characters 0-9a-f, "" when the line's id is not one (the item cannot open) */
+    char source[32];
+    char category[20];               /* the Worker's word ("economy"), "" for "-" or a missing field */
+    long age;                        /* seconds at the Worker's now, -1 for "-" */
+    char title[336];                 /* 110 code points of 3 bytes and the NUL */
+    char summary[848];               /* 280 code points of 3 bytes and the NUL; "" when none */
+} news_item;
+typedef struct {
+    int version;
+    long now;
+    int n;
+    news_item item[NEWS_ITEMS];
+    board_feed feed;                 /* news_age and news_state ("" when absent) */
+} news_data;
+/* The body (n bytes) into *d: BP_OK with line 1 "couch-news 1" and the end
+ * line, BP_VERSION, BP_CUT (no end line: the items so far are in *d),
+ * BP_NOT_BOARD (line 1 is not a news reply). A line with no title is not
+ * an item. fold as board_parse's. */
+int news_parse(const char *body, int n, int fold, news_data *d);
+
+/* GET /article?id=<id>: "couch-article 1", now=, id=, source=, category=,
+ * title=, date=words|age, link=, state=, p= (0 or more), end. At most
+ * ARTICLE_MAX bytes; the p= lines with "p=" and LF at most 12288 bytes. */
+#define ARTICLE_MAX 16384
+#define ART_TEXT 12288               /* the paragraphs' bytes, each with its NUL */
+#define ART_PARAS 400                /* p= lines kept, at most (a 12 KB text of 30-byte lines) */
+#define ART_LINK 1024                /* the link: at most 1024 bytes with "link=" */
+typedef struct {
+    int version;
+    long now;
+    char id[9], source[32], category[20];
+    char title[904];                 /* 300 code points of 3 bytes and the NUL */
+    char date[48];                   /* "Wed 14 Oct 12:12", "" for "-" */
+    long age;                        /* seconds, -1 for "-" */
+    char link[ART_LINK];             /* never folded: the QR code carries its bytes; "" when none */
+    char state[8];                   /* "ok", "cut", "summary" or "none"; another word is none */
+    char reason[96];                 /* the reason after '|' ("bbc.co.uk: HTTP 403") */
+    int n_para;
+    int para_off[ART_PARAS];         /* each paragraph's start in text, NUL-ended */
+    int text_cut;                    /* 1 when a p= line did not fit in text (or past ART_PARAS) */
+    char text[ART_TEXT];
+} article_data;
+/* The body into *a, with the return values of news_parse (line 1
+ * "couch-article 1"). Empty p= lines are skipped. */
+int article_parse(const char *body, int n, int fold, article_data *a);
+
+/* A word-wrapped text (the article's paragraphs, its title): the lines of
+ * s (n bytes) that fit maxw, as ps3gfx's text_wrap breaks them: at the last
+ * space that fits, a word wider than maxw at the last code point that fits
+ * (one code point at least), the spaces at a break dropped. width(s, len,
+ * ctx) measures len bytes (the reader passes ps3gfx's text_w); widths add
+ * up, so a line is measured word by word. off and len get each line's
+ * start and length (no line of len 0 but for an empty text, which gives
+ * none); at most max lines: the count (max when it is cut). */
+typedef float (*wrap_width_fn)(const char *s, int len, void *ctx);
+int wrap_lines(const char *s, int n, float maxw, wrap_width_fn width, void *ctx, int *off, int *len, int max);
+
+/* The News list's grid (stage 10's look): item 0 the featured card across
+ * the width, then rows of two cards. The move of a selection: dir 0 up, 1
+ * down, 2 left, 3 right; the new index (the same at an edge). Down from a
+ * left card whose row below has only its left card goes to it; down from
+ * a right card to a row with no right card goes to that row's left card. */
+enum { NAV_UP, NAV_DOWN, NAV_LEFT, NAV_RIGHT };
+int grid_move(int sel, int n, int dir);
+int grid_row(int i);                 /* 0 for the featured card, then 1 + (i - 1) / 2 */
+
+/* The scroll (the list's and the article's): the target that shows y0 to
+ * y1 of the content (view px tall, the content total px) with margin px
+ * around it where the content goes on, from the target now: unchanged when
+ * the span is in view. Clamped to 0 .. total - view (0 when it fits). */
+double scroll_keep(double cur, double y0, double y1, double view, double total, double margin);
+/* The scroll clamped to 0 .. total - view. */
+double scroll_clamp(double s, double view, double total);
+/* One frame of the eased scroll: from s toward target, the rest falling
+ * by e^(-dt / tau) (dt and tau in seconds), so a new target mid-way keeps
+ * the motion smooth; the target itself when within 0.02 px. */
+double scroll_follow(double s, double target, double dt, double tau);
 
 #endif

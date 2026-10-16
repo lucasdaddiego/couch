@@ -1,10 +1,11 @@
 /* Couch's pages (page.h): the frame every page shares, the header with the
- * flip clock, the slides, the ambient mode, the bottom bar, the News page.
- * Every motion is a whole pixel before a text, digits or S/M icon call
- * (design 1.12), except the icons that move (icon_rot binds them bilinear)
- * and the ticker's text (marquee.c). Every time comes from sky_time (the
- * system clock since the start: the preview's frame clock). Only the main
- * thread runs here. */
+ * flip clock, the slides, the ambient mode, the bottom bar. The News page
+ * is reader.c's since 0.3.1. Every motion is a whole pixel before a text,
+ * digits or S/M icon call (design 1.12), except the icons that move
+ * (icon_rot binds them bilinear), the ticker's text (marquee.c) and the
+ * reader's scrolls (stext.c). Every time comes from sky_time (the system
+ * clock since the start: the preview's frame clock). Only the main thread
+ * runs here. */
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -24,6 +25,7 @@
 #include "spu_fx_run.h"
 #include "sky.h"
 #include "start.h"
+#include "reader.h"
 
 #define DIM_LAYER 0x000000a8         /* RSX only: black at 66 %, the picture at a third of its light */
 #define DOT_R 7
@@ -436,13 +438,15 @@ void ambient_tick(void)
 {
     s64 now = sysGetSystemTime();
     if (!idle_since) idle_since = now;
-    if (!ambient && now - idle_since >= AMBIENT_SEC * 1000000LL) {
+    int wait = reader_reading() ? AMBIENT_READ_SEC : AMBIENT_SEC;   /* an open article: 20 min (stage 11) */
+    if (!ambient && now - idle_since >= wait * 1000000LL) {
         ambient = 1;
         amb_since = now;
         amb_saved = page;
         amb_step = -1;
         page_slide_end();
-        couch_log("ambient: on after %d min with no button (%s)", AMBIENT_SEC / 60, ambient_aurora() ? "the aurora" : "RSX only: dimmed");
+        couch_log("ambient: on after %d min with no button%s (%s)", wait / 60, wait != AMBIENT_SEC ? ", an article open" : "",
+                  ambient_aurora() ? "the aurora" : "RSX only: dimmed");
     }
     if (!ambient) return;
     long step = (long)((now - amb_since) / (AMBIENT_STEP_SEC * 1000000LL));
@@ -509,166 +513,4 @@ static void ambient_frame(void)
         text_fit(rnd(cx - w / 2), y + 52, F_BODY, DIM, mw, "%s", line);
     }
     ui_flip();
-}
-
-/* ---- the News page (design 1.5; stage 10: "the news section can have more love") ---- */
-
-/* A source's pill: the name in F_SMALL WHITE on its colour; its end x. */
-static float pill(float x, float y, float h, const char *source)
-{
-    float w = (float)text_w(F_SMALL, source) + 24;
-    if (w > 220) w = 220;
-    u32 c = source_colour(source);
-    round_rect(x, y, w, h, h / 2, c);
-    aa_corners(x, y, w, h, h / 2, c);
-    text_fit(x + 12, y + (h - (float)line_h(F_SMALL)) / 2, F_SMALL, WHITE, w - 22, "%s", source);
-    return x + w;
-}
-
-/* The height of n lines of text_wrap in font: n - 1 steps and a line. */
-static float lines_h(int font, int n) { return (float)((n - 1) * wrap_step(font) + line_h(font)); }
-
-/* The category tag (from the source: news_category), an outlined pill; its end x. */
-static float tag(float x, float y, float h, const char *source)
-{
-    const char *c = news_category(source);
-    if (!c) return x;
-    float w = (float)text_w(F_SMALL, c) + 22;
-    round_frame(x, y, w, h, h / 2, 1, 0xffffff50);
-    text(x + 11, y + (h - (float)line_h(F_SMALL)) / 2, F_SMALL, GREY, "%s", c);
-    return x + w;
-}
-
-/* The age with the clock icon, right-aligned at xr; its left x. */
-static float age(float xr, float y, float h, long a)
-{
-    char w[24];
-    if (a < 0) return xr;
-    age_words(w, sizeof w, a + board_age());
-    float x = text_r(xr, y + (h - (float)line_h(F_SMALL)) / 2, F_SMALL, GREY, "%s", w);
-    if (!icons_rc) icon_rot(IC_S_CLOCK, rnd(x - 16), rnd(y + h / 2), 0, 0.75f, GREY);
-    return x - 30;
-}
-
-/* The newest headline (design 1.5: the first card, a 3 px top edge in its
- * source's colour): large, two lines. */
-static void featured(float x, float y, float w, float h, const board_news *n)
-{
-    glass_tile(x, y, w, h);
-    u32 c = source_colour(n->source);
-    rect(x + TR, y, w - 2 * TR, 3, c);
-    if (!icons_rc) icon_rot(IC_S_NEWSPAPER, x + w - 90, y + h / 2, 0, 3.0f, 0xffffff14);   /* a large faint mark */
-    float xe = pill(x + 28, y + 22, 30, n->source);
-    xe = tag(xe + 12, y + 22, 30, n->source);
-    text(xe + 16, y + 24, F_SMALL, BLUE, "Latest");
-    age(x + w - 28, y + 22, 30, n->age);
-    float ty = y + 22 + 30 + 14, room = y + h - 12 - ty;     /* F_TITLE in two lines where they fit (the TV area), else F_MED */
-    int font = room >= lines_h(F_TITLE, 2) ? F_TITLE : room >= lines_h(F_MED, 2) ? F_MED : F_BODY;
-    text_wrap(x + 28, ty, font, WHITE, w - 56 - 120, room >= lines_h(font, 2) ? 2 : 1, n->title);
-}
-
-/* A card of the grid: the pill, the tag, the age, the title in two lines
- * (F_MED where it fits, else F_BODY). */
-static void card_news(float x, float y, float w, float h, const board_news *n)
-{
-    glass_tile(x, y, w, h);
-    int wide = page_wide();
-    float tp = wide ? 12 : 10, ph = wide ? 30 : 26;
-    float xe = pill(x + 20, y + tp, ph, n->source);
-    tag(xe + 10, y + tp, ph, n->source);
-    age(x + w - 20, y + tp, ph, n->age);
-    float ty = y + tp + ph + (wide ? 8 : 6), room = y + h - (wide ? 8 : 6) - ty;
-    int font = room >= lines_h(F_MED, 2) ? F_MED : F_BODY;
-    text_wrap(x + 20, ty, font, WHITE, w - 40, room >= lines_h(font, 2) ? 2 : 1, n->title);
-}
-
-/* The grid's last place: the count, the sources, the age. */
-static void summary(float x, float y, float w, float h)
-{
-    const board_data *b = &board_cur;
-    char src[160], a[24];
-    int k = 0, cnt = 0;
-    src[0] = 0;
-    for (int i = 0; i < b->n_news; i++) {
-        int seen = 0;
-        for (int j = 0; j < i; j++) seen |= !strcmp(b->news[j].source, b->news[i].source);
-        if (seen) continue;
-        cnt++;
-        int r = snprintf(src + k, sizeof src - (size_t)k, "%s%s", k ? ", " : "", b->news[i].source);
-        if (r < 0 || k + r >= (int)sizeof src - 1) break;
-        k += r;
-    }
-    glass_tile(x, y, w, h);
-    if (!icons_rc) icon(IC_S_NEWSPAPER, x + 40, y + 34, BLUE);
-    text(x + 66, y + 16, F_MED, WHITE, "%d headlines", b->n_news);
-    text_fit(x + 24, y + 16 + (float)line_h(F_MED) + 6, F_SMALL, GREY, w - 48, "%s", cnt ? src : "-");
-    age_words(a, sizeof a, b->news_feed.age >= 0 ? b->news_feed.age + board_age() : board_age());
-    text_fit(x + 24, y + 16 + (float)line_h(F_MED) + 6 + (float)line_h(F_SMALL) + 4, F_SMALL, DIM, w - 48, "%s old, every 5 min", a);
-}
-
-void news_body(void)
-{
-    const board_data *b = &board_cur;
-    float top = page_top(), bot = page_bar_y() - 12, x = MG, w = SW - 2 * MG, ch = bot - top;
-    float fh = rnd(ch * 0.25f), gw = (w - G) / 2, rh = (ch - fh - RG - 3 * RG) / 4;
-    int dyl = (int)rnd(SA_RISE * (1 - start_k(SA_LEFT))), dyr = (int)rnd(SA_RISE * (1 - start_k(SA_RIGHT)));
-    if (!board_have) {                                       /* before the first reply: the skeleton */
-        shift_push(0, dyl);
-        glass_tile(x, top, w, fh);
-        skel_bar(x + 28, top + 22, 130, 30);
-        skel_bar(x + 28, top + 76, w * 0.62f, 40);
-        skel_bar(x + 28, top + 130, w * 0.4f, 40);
-        shift_pop();
-        for (int i = 0; i < 8; i++) {
-            shift_push(0, i % 2 ? dyr : dyl);
-            float cx = rnd(x + (float)(i % 2) * (gw + G)), cy = rnd(top + fh + RG + (float)(i / 2) * (rh + RG));
-            glass_tile(cx, cy, rnd(gw), rnd(rh));
-            skel_bar(cx + 20, cy + 12, 110, 28);
-            skel_bar(cx + 20, cy + 54, gw * 0.8f, 26);
-            if (rh > 110) skel_bar(cx + 20, cy + 90, gw * 0.5f, 26);
-            shift_pop();
-        }
-        return;
-    }
-    if (!b->n_news) {                                        /* no headlines: one wide tile with the reason */
-        char line[200];
-        if (!b->news_feed.state[0]) snprintf(line, sizeof line, "The Board's Worker sends no news (no NEWS_FEEDS).");
-        else snprintf(line, sizeof line, "No news data: %s.", b->news_feed.reason[0] ? b->news_feed.reason : "the reply has none");
-        shift_push(0, dyl);
-        glass_tile(x, top, w, 200);
-        if (!icons_rc) icon(IC_S_NEWSPAPER, x + 46, top + 52, DIM);
-        text(x + 76, top + 34, F_MED, WHITE, "News");
-        text_wrap(x + 32, top + 100, F_BODY, YELLOW, w - 64, 2, line);
-        shift_pop();
-        return;
-    }
-    shift_push(0, dyl);
-    featured(x, top, w, fh, &b->news[0]);
-    shift_pop();
-    for (int i = 0; i < 8; i++) {
-        float cx = rnd(x + (float)(i % 2) * (gw + G)), cy = rnd(top + fh + RG + (float)(i / 2) * (rh + RG));
-        shift_push(0, i % 2 ? dyr : dyl);
-        if (i + 1 < b->n_news && i < 7) card_news(cx, cy, rnd(gw), rnd(rh), &b->news[i + 1]);
-        else if (i == 7 || i + 1 == b->n_news) summary(cx, cy, rnd(gw), rnd(rh));
-        shift_pop();
-        if (i + 1 >= b->n_news && i != 7) break;
-    }
-}
-
-void news_bar(float y)
-{
-    static const char hints[] = "L1/R1 pages  SQUARE refresh  SELECT info  START exit";
-    char line[300], a[24];
-    u32 c = GREY;
-    const board_data *b = &board_cur;
-    if (!board_have) c = board_status_words(line, sizeof line);
-    else if (!strcmp(b->news_feed.state, "stale")) {
-        age_words(a, sizeof a, b->news_feed.age + board_age());
-        snprintf(line, sizeof line, "%s. The news is %s old.", b->news_feed.reason[0] ? b->news_feed.reason : "The feeds failed", a);
-        c = YELLOW;
-    } else if (b->n_news && b->news_feed.reason[0]) {        /* a feed failed, the others answered */
-        snprintf(line, sizeof line, "%s", b->news_feed.reason);
-        c = YELLOW;
-    } else c = board_status_words(line, sizeof line);
-    bar_draw(y, line, c, board_url_note, hints);
 }

@@ -3,8 +3,9 @@
  * call, and resolve, tcp_connect and the download loop, which ran on this
  * console in Health's job thread. Couch's changes: HTTP/1.0 (no chunked
  * answer), SO_RCVTIMEO and SO_SNDTIMEO of 10 s, net_errno kept for the
- * words, a 4 KB body, the stop at the Board's end line, and the exit's
- * part: http_wake shuts the open socket down, net_end ends what the start
+ * words, a body of at most the caller's max (the Board's 4 KB, 0.3.1's
+ * /news 32 KB and /article 16 KB), the stop at the reply's end line, and
+ * the exit's part: http_wake shuts the open socket down, net_end ends what the start
  * began. */
 #include <stdio.h>
 #include <string.h>
@@ -173,7 +174,9 @@ static int tcp_connect(in_addr_t ip, int port, s32 *err, volatile int *on)
     return s;
 }
 
-static char rx[HEAD_MAX + BOARD_MAX + 1] __attribute__((aligned(128)));   /* the head and the body, the Board thread's only */
+/* the head and the body, the Board thread's only: room for the largest
+ * reply, /news's 32 KB (0.3.1's reader; the Board's is 4 KB) */
+static char rx[HEAD_MAX + NEWS_MAX + 1] __attribute__((aligned(128)));
 
 void http_get(const http_url *u, char *body, int max, http_result *r, volatile int *on)
 {
@@ -216,7 +219,7 @@ void http_get(const http_url *u, char *body, int max, http_result *r, volatile i
         r->step = H_SEND;
         return;
     }
-    int got = 0, head = 0, fail = 0, chunked = 0;
+    int got = 0, head = 0, fail = 0, chunked = 0, scanned = 0;   /* scanned: the body's bytes read for the end line */
     while (1) {
         if (!*on) {
             fail = H_STOPPED;
@@ -255,7 +258,12 @@ void http_get(const http_url *u, char *body, int max, http_result *r, volatile i
             fail = H_OVER;
             break;
         }
-        if (board_has_end(rx + head, got - head)) break;   /* the end line: no wait for the close */
+        /* the end line: no wait for the close. Only the new bytes and the 5
+         * before them (a line end and "end" that two reads split) are read:
+         * a 32 KB reply in 1460-byte reads is not read 23 times over. */
+        int from = scanned > 5 ? scanned - 5 : 0;
+        if (board_has_end(rx + head + from, got - head - from)) break;
+        scanned = got - head;
     }
     sock_close(s);
     if (!head) r->step = fail ? fail : H_CLOSED;   /* no head: the failed step, or a close before the answer */
