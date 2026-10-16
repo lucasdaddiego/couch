@@ -5,7 +5,8 @@
  * CR LF, as version 2, with long fields, at 4 KB, with too many lines, the
  * states and the missing fields; the same reply with the keys of 0.3.0
  * (argv[2]: geo, wx_fx, wx_hours, days_fx, rate_chg, extra_chg, spark) and
- * their rules; the fold; the HTTP head, the URL, the clock, the ages,
+ * their rules; the keys of 0.5.0 (wx_soon, air, futbol) and night.txt's
+ * parse; the fold; the HTTP head, the URL, the clock, the ages,
  * auto.txt; the numbers, the sky's colours, the weather codes, the wind;
  * the sun against Open-Meteo's sunrises and a table of NOAA's full
  * algorithm, the moon against the 2026 eclipses. With argv[3] "fuzz", also
@@ -52,6 +53,8 @@ static int bounded(void)
         ok = ok && IN(b.extra[i].label) && IN(b.extra[i].value) && IN(b.extra[i].when) && IN(b.extra[i].state) && IN(b.extra[i].reason);
     for (int i = 0; i < b.n_news; i++) ok = ok && IN(b.news[i].source) && IN(b.news[i].title) && b.news[i].title[0];
     ok = ok && (!b.has_geo || (b.lat >= -90 && b.lat <= 90 && b.lon >= -180 && b.lon <= 180));
+    ok = ok && IN(b.soon) && IN(b.fut_words) && RNG(b.air_aqi, 0, 999, -1) && RNG(b.air_uv, 0, 30, -1) && RNG(b.fut_live, 0, 999, -1) &&
+         RNG(b.fut_total, 0, 999, -1) && (!b.has_soon || b.soon[0]) && (!b.has_futbol || b.fut_words[0]);
     ok = ok && RNG(b.fx_code, 0, 99, -1) && RNG(b.fx_cover, 0, 100, -1) && RNG(b.fx_dir, 0, 359, -1) && RNG(b.fx_speed, 0, 500, -1) &&
          RNG(b.fx_gusts, 0, 500, -1) && (b.fx_mm == -1 || (b.fx_mm >= 0 && b.fx_mm <= 1000)) && RNG(b.hours_start, 0, 23, -1);
     ok = ok && b.n_hours >= 0 && b.n_hours <= HOURS_MAX && b.n_day_code >= 0 && b.n_day_code <= BOARD_DAYS;
@@ -140,6 +143,7 @@ static void worker_reply(const char *w, int wn)
     STR(b.news[7].title, "Talks on fishing rights resume after a short break");
     STR(b.news_feed.state, "ok");
     CHECK(b.news_feed.age == 120);
+    CHECK(!b.has_soon && !b.has_air && !b.has_futbol && b.air_aqi == -1 && b.fut_total == -1);   /* the keys of 0.5.0 are derived ones */
     CHECK(bounded());
     CHECK(board_has_end(w, wn));
     group("the Worker test's reply (the keys a minimal Worker sends), every field", f0);
@@ -558,6 +562,10 @@ static void new_reply(const char *w, int wn, const char *w2, int w2n)
     char ww[32];
     wind_words(ww, sizeof ww, b.fx_dir, b.fx_gusts);
     STR(ww, "S, gusts 23");
+    CHECK(b.has_air && b.air_aqi == 38 && b.air_uv == 1);                             /* 0.5.0 */
+    CHECK(b.has_futbol && b.fut_live == 0 && b.fut_total == 5);
+    STR(b.fut_words, "Next: Rovers\xe2\x80\x93Tegelsee 18:30");
+    CHECK(!b.has_soon);                                                               /* a dry fixture: no line */
     CHECK(bounded());
     printf("  %d bytes, %d more than the minimal reply\n", w2n, w2n - wn);
     group("the full reply: every derived field, the minimal ones as before, the chips and the series by label, the feature", f0);
@@ -1023,6 +1031,8 @@ static void fold(void)
     F("\xe2\x82\xac", 3, 0, "");
     F("  x  ", 64, 0, "x");
     F("", 64, 0, "");
+    F("A\xe2\x80\x93" "B \xe2\x80\x94 C", 64, 1, "A-B - C");   /* 0.5.0: an en or em dash folds to '-' */
+    F("A\xe2\x80\x93" "B", 64, 0, "A\xe2\x80\x93" "B");
 #undef F
     group("text_field: the fold to ASCII, the code point cut", f0);
 }
@@ -1172,6 +1182,43 @@ static void fuzz(const char *w, int wn, const char *name)
     group(g, f0);
 }
 
+/* The keys of 0.5.0: the rain of the next 2 h, the air, the futbol line;
+ * night.txt's parse and its hours. */
+static void check_050(void)
+{
+    int f0 = fails;
+    CHECK(parse("couch-board 1\nwx_soon=Rain from 18:45\nair=42|3\nfutbol=2|14|2 live\nend\n", 0) == BP_OK);
+    CHECK(b.has_soon && b.has_air && b.has_futbol && b.air_aqi == 42 && b.air_uv == 3 && b.fut_live == 2 && b.fut_total == 14);
+    STR(b.soon, "Rain from 18:45");
+    STR(b.fut_words, "2 live");
+    CHECK(parse("couch-board 1\nair=-|4.6\nend\n", 0) == BP_OK && b.has_air && b.air_aqi == -1 && b.air_uv == 5);   /* a decimal UV is rounded */
+    CHECK(parse("couch-board 1\nair=-|-\nend\n", 0) == BP_OK && !b.has_air);
+    CHECK(parse("couch-board 1\nair=1000|31\nend\n", 0) == BP_OK && !b.has_air && b.air_aqi == -1 && b.air_uv == -1);   /* out of range */
+    CHECK(parse("couch-board 1\nair=12\nend\n", 0) == BP_OK && b.has_air && b.air_aqi == 12 && b.air_uv == -1);
+    CHECK(parse("couch-board 1\nwx_soon=-\nfutbol=1|2|\nend\n", 0) == BP_OK && !b.has_soon && !b.has_futbol);
+    CHECK(parse("couch-board 1\nfutbol=x|1.5|Next: A\xe2\x80\x93" "B 21:00\nend\n", 1) == BP_OK && b.has_futbol && b.fut_live == -1 &&
+          b.fut_total == -1);
+    STR(b.fut_words, "Next: A-B 21:00");                                              /* folded: the en dash a '-' */
+    CHECK(parse("couch-board 1\nfutbol=0|3|No more games today|extra\nend\n", 0) == BP_OK);
+    STR(b.fut_words, "No more games today");                                          /* the third field ends at a '|' */
+    CHECK(bounded());
+    group("the keys of 0.5.0: wx_soon, air (missing and out of range: -1), futbol", f0);
+
+    f0 = fails;
+    int a = -1, e = -1;
+#define NP(s) night_parse((s), (int)strlen(s), &a, &e)
+    CHECK(NP("22-07") == 1 && a == 22 && e == 7);
+    CHECK(NP(" 7-22\r\n") == 1 && a == 7 && e == 22);
+    CHECK(NP("0-6") == 1 && a == 0 && e == 6);
+    CHECK(NP("off") == 0 && NP("OFF\n") == 0 && NP(" Off ") == 0);
+    CHECK(NP("") == -1 && NP("22") == -1 && NP("22-") == -1 && NP("24-07") == -1 && NP("22-7x") == -1 && NP("7-7") == -1 &&
+          NP("123-4") == -1 && NP("22:00-07:00") == -1 && NP("on") == -1);
+#undef NP
+    CHECK(night_in(22, 7, 22) && night_in(22, 7, 23) && night_in(22, 7, 0) && night_in(22, 7, 6) && !night_in(22, 7, 7) && !night_in(22, 7, 21));
+    CHECK(night_in(1, 6, 1) && night_in(1, 6, 5) && !night_in(1, 6, 6) && !night_in(1, 6, 0) && !night_in(5, 5, 5));
+    group("night.txt: off, HH-HH past midnight, the bad lines; the hours in the span", f0);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
@@ -1187,6 +1234,7 @@ int main(int argc, char **argv)
     check_032();
     new_reply(w, wn, w2, w2n);
     new_rules();
+    check_050();
     numbers();
     sky();
     sun_check();

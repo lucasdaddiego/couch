@@ -18,7 +18,12 @@
  *                       start: thread 2 puts no start report
  *   PV_FX_KAT=bad       thread 4's known-answer test gives a wrong word
  * Each SPU call but the mailbox words goes to $PV_ROOT/spu.log as "spu: <n>
- * ..."; the join adds the count of words each thread got. */
+ * ..."; the join adds the count of words each thread got. The Info page's
+ * two reads (0.5.0) come here too, as PS3 Health's preview answers them:
+ *   383 (the temperature): Cell 58 C and RSX 54 C, or PV_TEMPS=<cell>,<rsx>;
+ *                       PV_383_RC=<hex> refuses it with that rc
+ *   409 (the fan policy): speed 82 of 255 (32 %), or PV_FAN=<0..255>;
+ *                       PV_409_RC=<hex> refuses it */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -193,8 +198,6 @@ static void job(u32 i, u32 word)
 
 u64 pv_syscall(int n, u64 a, u64 b, u64 c, u64 d, u64 e, u64 f, u64 g)
 {
-    (void)d;
-    (void)e;
     (void)g;
     if (getenv("PV_SPU_FAIL") && atoi(getenv("PV_SPU_FAIL")) == n) {
         note("%d: fails (PV_SPU_FAIL)", n);
@@ -250,6 +253,20 @@ u64 pv_syscall(int n, u64 a, u64 b, u64 c, u64 d, u64 e, u64 f, u64 g)
         return 0;
     case 171:                                        /* group destroy */
         note("171 destroy");
+        return 0;
+    case 383: {                                      /* the temperature: degrees in the top byte */
+        int cell = 58, rsx = 54;
+        if (getenv("PV_383_RC")) return (u32)strtoul(getenv("PV_383_RC"), NULL, 16);
+        if (getenv("PV_TEMPS")) sscanf(getenv("PV_TEMPS"), "%d,%d", &cell, &rsx);
+        *(u32 *)(uintptr_t)b = (u32)(a ? rsx : cell) << 24;
+        return 0;
+    }
+    case 409:                                        /* the fan policy: the speed 0..255 in the third byte */
+        if (getenv("PV_409_RC")) return (u32)strtoul(getenv("PV_409_RC"), NULL, 16);
+        *(u8 *)(uintptr_t)b = 0;
+        *(u8 *)(uintptr_t)c = 1;
+        *(u8 *)(uintptr_t)d = (u8)(getenv("PV_FAN") ? atoi(getenv("PV_FAN")) : 82);
+        *(u8 *)(uintptr_t)e = 0;
         return 0;
     }
     return 0x80010003;

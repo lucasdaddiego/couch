@@ -26,7 +26,7 @@ before(async () => {
   if (!Miniflare) return;
   // Miniflare 5 (wrangler 4.149's): each Worker is { config: { name, compatibilityDate, manifest } },
   // the manifest's modules a record of paths under modulesRoot.
-  const files = ['test/extract.worker.js', 'src/article.js', 'src/news.js', 'src/board.js'];
+  const files = ['test/extract.worker.js', 'src/article.js', 'src/news.js', 'src/board.js', 'src/futbol.js'];
   const modules = Object.fromEntries(files.map((p) => [p, { type: 'esm', contents: readFileSync(join(root, p), 'utf8') }]));
   mf = new Miniflare({
     workers: [{

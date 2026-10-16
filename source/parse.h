@@ -6,7 +6,9 @@
  * of a fetch, the ambient mode's shift and page. Since 0.3.0 (the design of
  * 2026-10-13, section 5): the new keys, the change chips and the series by
  * label, the numbers in the Worker's LOCALE text, the sky's colours, the
- * weather codes' icons, the wind's words. The sun and the moon: astro.h. */
+ * weather codes' icons, the wind's words. The sun and the moon: astro.h.
+ * Since 0.5.0: the rain of the next 2 h, the air, the futbol line,
+ * night.txt and the Worker's /futbol reply. */
 #ifndef PARSE_H
 #define PARSE_H
 
@@ -141,6 +143,19 @@ typedef struct {
     int hol_year, hol_month, hol_day;/* 1 to 12, 1 to 31 */
     int hol_days;                    /* days to it, 0 (today) to 400 */
     char hol_name[96];
+    /* since 0.5.0, keys a Couch 0.4.1 skips: wx_soon=words (the rain of
+     * the next 2 h from Open-Meteo's 15-minute values: "Rain from 18:45",
+     * "Rain until 19:30"), air=aqi|uv (whole numbers, "-" missing: -1) and
+     * futbol=live|total|words (the private Worker: "2 live", "Next:
+     * Lions-Bears 21:00"); each absent from an older Worker's reply */
+    int has_soon;
+    char soon[64];
+    int has_air;
+    int air_aqi;                     /* the US AQI now, 0 to 999 */
+    int air_uv;                      /* the UV index now, 0 to 30 */
+    int has_futbol;
+    int fut_live, fut_total;         /* games live now and games today, 0 to 999 */
+    char fut_words[128];
 } board_data;
 
 enum { BP_OK, BP_NOT_BOARD, BP_VERSION, BP_CUT };
@@ -234,8 +249,9 @@ int board_has_end(const char *body, int n);
  * bytes below 0x20 and 0x7f dropped, the spaces at both ends trimmed, cut on
  * a code point boundary. With fold, the UTF-8 becomes ASCII: a Latin-1 letter
  * its base letter (U+00E1 a, U+00F1 n), the degree sign nothing (each
- * temperature has one), a no-break space a space, any other code point and
- * a byte that starts no valid sequence '?'. */
+ * temperature has one), a no-break space a space, an en or em dash a '-'
+ * (0.5.0: the futbol line's "Lions-Bears"), any other code point and a
+ * byte that starts no valid sequence '?'. */
 void text_field(char *dst, int size, const char *src, int n, int fold);
 
 /* The head of an HTTP answer in buf (n bytes): its length up to and with the
@@ -292,6 +308,15 @@ const char *net_err_words(int e, char *buf, int n);
 /* auto.txt's text: -1 for a start by hand (no file, blank or 0), 0 for text
  * that is not a number of seconds, else the seconds, 60 to 600. */
 int auto_parse(const char *s, int n);
+
+/* night.txt (0.5.0): "off" or "HH-HH", the hours of night mode, from
+ * the start to the end ("22-07": 22:00 to 07:00, past midnight). 1 and the
+ * hours (0 to 23) for a span, 0 for "off" (case not counted), -1 for
+ * anything else; a start equal to the end is no span (-1). Spaces at the
+ * ends are allowed. */
+int night_parse(const char *s, int n, int *start, int *end);
+/* 1 when hour (0 to 23) is in the span: from start, up to but not with end. */
+int night_in(int start, int end, int hour);
 
 /* The internet as one Board fetch shows it: NQ_DOWN when the fetch got no
  * answer (answered 0: DNS, the connect, the send or the recv failed),
@@ -402,6 +427,50 @@ typedef struct {
 /* The body into *a, with the return values of news_parse (line 1
  * "couch-article 1"). Empty p= lines are skipped. */
 int article_parse(const char *body, int n, int fold, article_data *a);
+
+/* ---- the futbol page (0.5.0): the private Worker's /futbol ---------------------- */
+
+/* GET /futbol?d=0 (today) or d=1 (tomorrow): "couch-futbol 1", now=,
+ * day=words ("Today, Fri 16 Oct"), league=name|country, then each game of
+ * that league as game=when|home|away|score|score|tv|kind, more=leagues|games
+ * (what the Worker's cap left out), futbol_age=, futbol_state=, end. when:
+ * "21:00", "67'", "Final", "Postponed"; a score "-" before the game; kind
+ * pre, live, end or off (another word is off). At most FUTBOL_MAX bytes
+ * (the Worker's FUTBOL_BYTES). A game before any league line is not kept;
+ * the games and leagues past the arrays count in more (a league that
+ * comes when the games' array is full too). */
+#define FUTBOL_MAX 12288
+#define FUT_LEAGUES 40
+#define FUT_GAMES 240
+enum { FK_PRE, FK_LIVE, FK_END, FK_OFF };
+typedef struct {
+    int league;                      /* its league's index */
+    int kind;                        /* FK_* */
+    char when[24];
+    char home[88], away[88];         /* 28 code points of 3 bytes and the NUL */
+    int sh, sa;                      /* the scores, 0 to 99, -1 for "-" */
+    char tv[124];                    /* 40 code points; "" for "-" */
+} fut_game;
+typedef struct {
+    char name[148];                  /* 48 code points of 3 bytes and the NUL */
+    char country[100];               /* 32 code points; "" for "-" */
+    int first, n;                    /* its games in game[] */
+} fut_league;
+typedef struct {
+    int version;
+    long now;
+    char day[48];
+    int n_league, n_game;
+    fut_league league[FUT_LEAGUES];
+    fut_game game[FUT_GAMES];
+    int more_leagues, more_games;    /* left out, 0 when none */
+    board_feed feed;                 /* futbol_age and futbol_state ("" when absent) */
+} futbol_data;
+/* The body into *d, with the return values of news_parse (line 1
+ * "couch-futbol 1"). fold as board_parse's. */
+int futbol_parse(const char *body, int n, int fold, futbol_data *d);
+/* The live games of *d. */
+int futbol_live(const futbol_data *d);
 
 /* A word-wrapped text (the article's paragraphs, its title): the lines of
  * s (n bytes) that fit maxw, as ps3gfx's text_wrap breaks them: at the last

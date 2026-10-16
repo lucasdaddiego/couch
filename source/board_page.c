@@ -2,8 +2,10 @@
  * section 1.4): dashboard tiles of frosted glass over the live sky. Left,
  * the weather: the hero tile (the icon, the temperature, the words, feels
  * and humidity, the min/max bar, the wind dial, the rain line, the 12 h
- * curve with its rain columns), the sky tile (the sun arc, the moon), the
- * three days. Right, the rates and the extras: the hero tile (the price, the change chip,
+ * curve with its rain columns; since 0.5.0 the rain of the next 2 h in
+ * place of the 12 h's when the reply has it), the sky tile (the sun arc,
+ * the moon; since 0.5.0 the air's two chips), the three days. Right, the
+ * rates and the extras: the hero tile (the price, the change chip,
  * the 30 days' sparkline and range), then a grid of small tiles (the other
  * rates, the extras). Under them the news ticker; the bottom bar is
  * page.c's.
@@ -572,9 +574,9 @@ static void hero(float x, float y, float w, float h, const board_data *b)
         text(b0 + bw + 14, by, F_BODY | TNUM, miss(hi) ? DIM : WHITE, "%s", hi);
     }
     dial(dcx, dcy, R, b);
-    /* the bottom band: the rain line, then the curve */
+    /* the bottom band: the rain line (the next 2 h's words when the reply has them, 0.5.0), then the curve */
     float band = rnd((wide ? 170 : 130) * sc), yb = rnd(y + h - band - 14);
-    int wet = board_have && b->has_rain && b->rain_wet;
+    int soon = board_have && b->has_soon, wet = soon || (board_have && b->has_rain && b->rain_wet);
     icon(IC_S_DROP, x + 42, yb + (float)line_h(F_BODY) / 2, wet ? BLUE : board_have && b->has_rain ? GREY : DIM);
     float ww = 0, xw = x + w - 32;
     if (feed_warn(warn, sizeof warn, &b->wx_feed)) {         /* the weather is stale or none: why, at the row's right */
@@ -584,11 +586,38 @@ static void hero(float x, float y, float w, float h, const board_data *b)
         text_fit(xw, yb + 3, F_SMALL, YELLOW, ww, "%s", warn);
     }
     text_fit(x + 64, yb, F_BODY, wet ? BLUE : board_have && b->has_rain ? GREY : DIM, xw - 30 - (x + 64), "%s",
-             board_have && b->has_rain ? b->rain : "Rain: -");
+             soon ? b->soon : board_have && b->has_rain ? b->rain : "Rain: -");
     curve(x + 48, x + w - 48, yb + 34, rnd(yb + band - 34), b);
 }
 
 /* ---- the sky tile -------------------------------------------------------------------- */
+
+/* The air's colours by level: the US AQI's six bands (EPA: good, moderate,
+ * unhealthy for sensitive groups, unhealthy, very unhealthy, hazardous)
+ * and the UV index's five (WHO: low, moderate, high, very high, extreme). */
+static u32 aqi_colour(int v) { return v <= 50 ? GREEN : v <= 100 ? YELLOW : v <= 150 ? 0xff9f40ff : v <= 200 ? RED : v <= 300 ? 0xb57bffff : 0xc0506aff; }
+static u32 uv_colour(int v) { return v <= 2 ? GREEN : v <= 5 ? YELLOW : v <= 7 ? 0xff9f40ff : v <= 10 ? RED : 0xb57bffff; }
+
+/* The air's two chips (0.5.0), "AQI 42" and "UV 4", right-aligned at xr
+ * in the tint of their level, a missing value's chip left out; their left
+ * x (xr for none). */
+static float air_chips(float xr, float y, const board_data *b)
+{
+    char s[16];
+    float x = xr;
+    for (int i = 1; board_have && b->has_air && i >= 0; i--) {   /* the UV chip on the right */
+        int v = i ? b->air_uv : b->air_aqi;
+        if (v < 0) continue;
+        u32 c = i ? uv_colour(v) : aqi_colour(v);
+        snprintf(s, sizeof s, "%s %d", i ? "UV" : "AQI", v);
+        float w = (float)text_w(F_SMALL, s) + 24;
+        x = rnd(x - w);
+        round_rect(x, y, w, 30, 15, (c & ~0xffu) | 0x26);
+        text(x + 12, y + 1, F_SMALL, c, "%s", s);
+        x -= 8;
+    }
+    return x < xr ? x + 8 : xr;
+}
 
 static void sky_tile(float x, float y, float w, float h, const board_data *b)
 {
@@ -615,7 +644,8 @@ static void sky_tile(float x, float y, float w, float h, const board_data *b)
     if (st == 1) snprintf(line, sizeof line, "Sunset in %s", a);
     else if (st == 0) snprintf(line, sizeof line, "Sunrise in %s", a);
     else snprintf(line, sizeof line, "Sunset in -");
-    text_fit(x + 24, y + 12, wide ? F_BODY : F_SMALL, st < 0 ? DIM : WHITE, half - 40, "%s", line);
+    float ax = air_chips(x + half - 24, y + (wide ? 14 : 10), b);   /* the air's chips at the half's top right */
+    text_fit(x + 24, y + 12, wide ? F_BODY : F_SMALL, st < 0 ? DIM : WHITE, (ax < x + half - 24 ? ax - 16 : x + half - 16) - (x + 24), "%s", line);
     float px[49], py[49];
     for (int k = 0; k <= 48; k++) {
         float an = PI_F * (float)k / 48;

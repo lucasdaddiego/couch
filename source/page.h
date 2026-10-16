@@ -1,6 +1,6 @@
 /* Couch's pages (page.c, since 0.2.0; the frame of 0.3.0's stage 10): the
- * Board, the News and the Info screen, L1 and R1 between them with a slide,
- * the dots in the header. The frame every page shares: the sky (the
+ * Board, the News, the Futbol page (0.5.0) and the Info screen, L1 and R1
+ * between the first three with a slide, the dots in the header. The frame every page shares: the sky (the
  * effects), the header (the flip clock and the date on the left; the
  * page's name and its dots, the city and the internet's state on the
  * right), the page's body, the bottom bar (the status on the left, the
@@ -14,8 +14,8 @@
 
 #include <ppu-types.h>
 
-enum { PAGE_BOARD, PAGE_NEWS, PAGE_INFO, PAGE_N };
-#define PAGE_CYCLE 2                 /* L1/R1 cycle the Board and the News; SELECT opens the Info page */
+enum { PAGE_BOARD, PAGE_NEWS, PAGE_FUTBOL, PAGE_INFO, PAGE_N };
+#define PAGE_CYCLE 3                 /* L1/R1 cycle the Board, the News and the Futbol page; SELECT opens the Info page */
 extern int page;                     /* the page on the TV (during a slide: the page that comes in) */
 extern const char *const page_name[PAGE_N];
 
@@ -77,12 +77,26 @@ void board_ambient_wx(float x, float y, float w, float h, u32 c1, u32 c2);   /* 
 int board_ambient_hours(float x, float y, float w, float h, int local_hour, u32 c1, u32 c2);   /* board_page.c: its hourly card */
 int board_hours_left(int local_hour);   /* board_page.c: the hours from local_hour on */
 
+/* Night mode (0.5.0): night.txt in the app folder, "off" or "HH-HH"
+ * (parse.h's night_parse), read at start and written by the Info page.
+ * During those hours of the console's clock the waiting screen is only a
+ * small dim clock on black that moves every AMB_MOVE_S; outside them
+ * nothing changes. night_set 0 is off (also for no file or a bad line:
+ * night_note says why). night_save writes the file: 0, or the rc. */
+extern int night_set, night_from, night_to;
+extern char night_note[80];
+void night_load(void);
+int night_save(int on, int from, int to);
+int night_now(void);                 /* 1 during the hours (night_set on) */
+
 /* The bodies and the bars of the pages (board_page.c, reader.c, info.c):
  * the body between the header and the bottom bar, the bar at y. */
 void board_body(void);
 void board_bar(float y, const char *msg, u32 msg_color);
 void news_body(void);
 void news_bar(float y);
+void futbol_body(void);
+void futbol_bar(float y);
 void info_body(void);
 void info_bar(float y);
 

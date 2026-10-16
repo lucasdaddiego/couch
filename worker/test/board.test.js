@@ -9,10 +9,11 @@ import { readFileSync } from 'node:fs';
 import {
   boardText, wmoWords, clean, localWhen, tzOffset, MAX_BYTES, fold, rainWords, sunTimes, moonPhase, dayWords, newsLines,
   NEWS_FRESH, geoLine, fxLine, hoursLine, change, addDays, localDate, shortDate, holidayLine, parseRates, fxLines,
-  numfmtLine, rateDec, currencySymbol, SPARK_DAYS,
+  numfmtLine, rateDec, currencySymbol, SPARK_DAYS, soonWords, airLine, AIR_MAX_AGE,
 } from '../src/board.js';
 import { parseFeed, parseFeeds } from '../src/news.js';
-import { get, handle, newsUpstream, RETRY_S, FX_DAYS } from '../src/index.js';
+import { get, handle, newsUpstream, RETRY_S, FX_DAYS, FUTBOL_NONE } from '../src/index.js';
+import { futbolLine, futbolText, FUTBOL_BYTES, FUT_MAX_AGE, dayName } from '../src/futbol.js';
 
 const text = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
 const fixture = (f) => JSON.parse(text(f));
@@ -39,12 +40,34 @@ const news = () => [
   { label: 'BBC', weight: 2, r: okR(parseFeed(feedXml.tech), 120) },
 ];
 
+// Made-up answers for the keys of Couch 0.5.0: Open-Meteo's air quality in its shape, and a day of
+// fictional fixtures in futbol.js's form (the template has no fútbol source: only the tests feed it).
+const airData = { current: { time: '2026-10-16T17:00', interval: 3600, us_aqi: 38, uv_index: 1.4 } };
+const at = (hm) => Date.parse(`2026-10-16T${hm}:00+02:00`) / 1000;   // a wall time in Berlin
+const game = (start, kind, status, home, away, homeShort, awayShort, sh, sa, tv) => ({ start: at(start), kind, status, home, away, homeShort, awayShort, sh, sa, tv });
+const futDay = () => ({
+  day: '2026-10-16',
+  leagues: [
+    { name: 'Spree League', country: 'Germany', games: [
+      game('15:30', 'end', 'Final', 'FC Kiezblau', 'Union Mitte', 'Kiezblau', 'Mitte', 2, 1, 'Spree TV'),
+      game('18:30', 'pre', '', 'Havel Rovers', 'SV Tegelsee', 'Rovers', 'Tegelsee', null, null, 'Spree TV, Kanal 9'),
+      game('20:30', 'pre', '', 'Borussia Wedding', 'Dynamo Pankow', 'Wedding', 'Pankow', null, null, ''),
+    ] },
+    { name: 'Cup of the North', country: 'Europe', games: [
+      game('16:00', 'end', 'Pens 4-3', 'Nordhafen', 'Ostkreuz United', 'Nordhafen', 'Ostkreuz', 1, 1, 'Kanal 9'),
+      game('17:00', 'off', 'Postponed', 'Gr\u00fcnau 04', 'M\u00fcggel SC', 'Gr\u00fcnau', 'M\u00fcggel', null, null, ''),
+    ] },
+  ],
+});
+
 // The first test's reply is the host check's (tools/hostcheck/run.zsh takes this array, line for
 // line) and the preview's body_ok: it keeps its text as UTF-8, with no escapes. REPLY_BYTES is its
 // size.
-const REPLY_BYTES = 1467;
+const REPLY_BYTES = 1517;
 test('the reply of 2026-10-16 in Berlin, every upstream, line for line', () => {
-  const t = boardText({ now: NOW, env, fx: okR(fxData, 600), wx: okR(wxData, 300), news: news(), hol: okR(holData, 3600) });
+  const t = boardText({
+    now: NOW, env, fx: okR(fxData, 600), wx: okR(wxData, 300), news: news(), hol: okR(holData, 3600), air: okR(airData, 600), fut: okR(futDay(), 120),
+  });
   assert.equal(t, [
     'couch-board 1',
     'now=1792164000',
@@ -76,7 +99,9 @@ test('the reply of 2026-10-16 in Berlin, every upstream, line for line', () => {
     'wx_hours=18|18 17 15 14 14 13 12 12 11 11 11 11|0 0 0 0 0 0 0 0 0 0 0 0|2 3 3 3 2 0 0 1 2 1 3 3',
     'wx_age=300',
     'wx_state=ok',
+    'air=38|1',
     'holiday=2026-12-25|Erster Weihnachtstag|70',
+    'futbol=0|5|Next: Rovers–Tegelsee 18:30',
     'news=BBC|600|Leaders meet to agree on a new plan for river shipping',
     'news=BBC|600|Central bank keeps its rate unchanged',
     'news=BBC|600|A phone maker shows a screen that folds three times',
@@ -215,6 +240,133 @@ test('news: NEWS_FEEDS, the share per feed by weight, the newest first, old ones
   assert.deepEqual(parseFeeds(env.NEWS_FEEDS).map((f) => [f.label, f.weight, f.category]), [['BBC', 4, 'world'], ['BBC', 2, 'business'], ['BBC', 2, 'tech']]);
 });
 
+// ---- the keys of Couch 0.5.0: the rain of the next 2 h, the air, the fútbol -------------
+
+// Open-Meteo's minutely_15 from 17:15 local (the stamp of 17:00 to 17:15), 24 steps: wet at the
+// stamps given (each the end of its 15 minutes). NOW is 17:20 in Berlin.
+const m15 = (wet, n = 24, from = '2026-10-16T17:15') => {
+  const t0 = Date.parse(`${from}:00Z`), time = [], precipitation = [];
+  for (let k = 0; k < n; k++) {
+    const t = new Date(t0 + k * 900000).toISOString().slice(0, 16);
+    time.push(t);
+    precipitation.push(wet.includes(t.slice(11)) ? 0.4 : 0);
+  }
+  return { time, precipitation };
+};
+
+test('wx_soon: rain from, rain until, rain for the next 2 h, none when dry or not covered; after wx_rain', () => {
+  assert.equal(soonWords(m15([]), NOW, env.TZ), null);
+  assert.equal(soonWords(m15(['18:45', '19:00']), NOW, env.TZ), 'Rain from 18:30');          // 18:30 to 18:45 is the first wet one
+  assert.equal(soonWords(m15(['17:30', '17:45']), NOW, env.TZ), 'Rain until 17:45');         // now's 15 minutes (17:15 to 17:30) are wet
+  assert.equal(soonWords(m15(m15([]).time.map((t) => t.slice(11))), NOW, env.TZ), 'Rain for the next 2 h');
+  assert.equal(soonWords(m15(['19:30']), NOW, env.TZ), 'Rain from 19:15');                   // starts before 19:20: in the window
+  assert.equal(soonWords(m15(['19:45']), NOW, env.TZ), null);                                // starts at 19:30, after now + 2 h
+  assert.equal(soonWords({ time: m15([]).time, precipitation: [0, 0.05, 0.1] }, NOW, env.TZ), 'Rain from 17:30');   // from 0.1 mm
+  assert.equal(soonWords(m15(['17:45'], 6), NOW, env.TZ), null);                              // the values end at 18:30: not covered
+  assert.equal(soonWords(m15(['19:00'], 24, '2026-10-16T17:45'), NOW, env.TZ), null);         // they start after now
+  assert.equal(soonWords(undefined, NOW, env.TZ), null);
+  const t = boardText({ now: NOW, env, wx: okR({ ...wxData, minutely_15: m15(['18:45']) }, 300) }).split('\n');
+  assert.equal(t[t.findIndex((l) => l.startsWith('wx_rain=')) + 1], 'wx_soon=Rain from 18:30');
+  assert.ok(!boardText({ now: NOW, env, wx: okR(wxData, 300) }).includes('wx_soon='));
+});
+
+test('air: the US AQI and the UV index, whole; "-" for one missing; none when both are missing or the data is over 3 h old', () => {
+  assert.equal(airLine(okR(airData, 600)), 'air=38|1');
+  assert.equal(airLine(okR({ current: { us_aqi: 151.6, uv_index: 7.5 } })), 'air=152|8');
+  assert.equal(airLine(okR({ current: { us_aqi: null, uv_index: 3 } })), 'air=-|3');
+  assert.equal(airLine(okR({ current: { us_aqi: 12 } })), 'air=12|-');
+  assert.equal(airLine(okR({ current: {} })), null);
+  assert.equal(airLine({ state: 'stale', reason: 'x', age: AIR_MAX_AGE, data: airData }), 'air=38|1');
+  assert.equal(airLine({ state: 'stale', reason: 'x', age: AIR_MAX_AGE + 1, data: airData }), null);
+  assert.equal(airLine(NONE), null);
+  const t = boardText({ now: NOW, env, wx: okR(wxData, 300), air: okR(airData) }).split('\n');
+  assert.equal(t[t.findIndex((l) => l.startsWith('wx_state=')) + 1], 'air=38|1');
+});
+
+test('futbol: the live games, else the next one, else no more; none for no game, old data or another day', () => {
+  assert.equal(futbolLine(okR(futDay(), 120), NOW, env.TZ), 'futbol=0|5|Next: Rovers–Tegelsee 18:30');
+  const live = futDay();
+  live.leagues[0].games[1] = { ...live.leagues[0].games[1], kind: 'live', status: "67'", sh: 0, sa: 1 };
+  live.leagues[1].games[1] = { ...live.leagues[1].games[1], kind: 'live', status: 'HT', sh: 0, sa: 0 };
+  assert.equal(futbolLine(okR(live), NOW, env.TZ), 'futbol=2|5|2 live');
+  const over = futDay();
+  over.leagues[0].games = over.leagues[0].games.slice(0, 1);
+  assert.equal(futbolLine(okR(over), NOW, env.TZ), 'futbol=0|3|No more games today');
+  const tie = futDay();                               // the same start: the first in the list
+  tie.leagues[0].games[2].start = tie.leagues[0].games[1].start;
+  assert.equal(futbolLine(okR(tie), NOW, env.TZ), 'futbol=0|5|Next: Rovers–Tegelsee 18:30');
+  assert.equal(futbolLine({ state: 'stale', reason: 'x', age: FUT_MAX_AGE, data: futDay() }, NOW, env.TZ), 'futbol=0|5|Next: Rovers–Tegelsee 18:30');
+  assert.equal(futbolLine({ state: 'stale', reason: 'x', age: FUT_MAX_AGE + 1, data: futDay() }, NOW, env.TZ), null);
+  assert.equal(futbolLine(okR({ ...futDay(), day: '2026-10-15' }), NOW, env.TZ), null);
+  assert.equal(futbolLine(okR({ day: '2026-10-16', leagues: [] }), NOW, env.TZ), null);
+  assert.equal(futbolLine(NONE, NOW, env.TZ), null);
+  assert.equal(dayName('2026-10-17'), 'Sat 17 Oct');
+});
+
+test('the /futbol reply: the day, a league line and its games, the state; line for line', () => {
+  assert.equal(futbolText({ now: NOW, tz: env.TZ, d: 0, r: okR(futDay(), 120) }), [
+    'couch-futbol 1',
+    'now=1792164000',
+    'day=Today, Fri 16 Oct',
+    'league=Spree League|Germany',
+    'game=Final|FC Kiezblau|Union Mitte|2|1|Spree TV|end',
+    'game=18:30|Havel Rovers|SV Tegelsee|-|-|Spree TV, Kanal 9|pre',
+    'game=20:30|Borussia Wedding|Dynamo Pankow|-|-|-|pre',
+    'league=Cup of the North|Europe',
+    'game=Pens 4-3|Nordhafen|Ostkreuz United|1|1|Kanal 9|end',
+    'game=Postponed|Grünau 04|Müggel SC|-|-|-|off',
+    'futbol_age=120',
+    'futbol_state=ok',
+    'end',
+    '',
+  ].join('\n'));
+  const live = futDay();
+  live.leagues[0].games[1] = { ...live.leagues[0].games[1], kind: 'live', status: "45+2'", sh: 0, sa: 1, home: 'A|B\u0000C' };
+  assert.ok(futbolText({ now: NOW, tz: env.TZ, d: 0, r: okR(live) }).includes("\ngame=45+2'|A B C|SV Tegelsee|0|1|Spree TV, Kanal 9|live\n"));
+  // tomorrow, an old entry, none
+  const tomorrow = { ...futDay(), day: '2026-10-17' };
+  assert.ok(futbolText({ now: NOW, tz: env.TZ, d: 1, r: { state: 'stale', reason: 'x.example: HTTP 503', age: 900, data: tomorrow } })
+    .startsWith('couch-futbol 1\nnow=1792164000\nday=Tomorrow, Sat 17 Oct\nleague=Spree League|Germany\n'));
+  assert.ok(futbolText({ now: NOW, tz: env.TZ, d: 1, r: { state: 'stale', reason: 'x.example: HTTP 503', age: 900, data: tomorrow } })
+    .endsWith('\nfutbol_age=900\nfutbol_state=stale|x.example: HTTP 503\nend\n'));
+  assert.equal(futbolText({ now: NOW, tz: env.TZ, d: 0, r: { state: 'none', reason: 'a | b', age: 0, data: null } }),
+    'couch-futbol 1\nnow=1792164000\nday=Today, Fri 16 Oct\nfutbol_age=0\nfutbol_state=none|a b\nend\n');
+});
+
+test('the /futbol reply\'s cap: whole leagues from the start, the rest counted in more=, UTF-8 whole', () => {
+  const long = (k) => `${'ü'.repeat(20)}€${k}${'é'.repeat(40)}`;   // cut to 28 code points
+  const big = { day: '2026-10-16', leagues: Array.from({ length: 40 }, (_, i) => ({
+    name: `League ${i} ${'ä'.repeat(60)}`, country: 'Österreich'.repeat(5),
+    games: Array.from({ length: 6 }, (_, j) => game('19:00', 'end', 'Final', long(j), long(j + 1), 'a', 'b', 3, 2, 'ñ'.repeat(50))) })) };
+  const t = futbolText({ now: NOW, tz: env.TZ, d: 0, r: okR(big) });
+  const lines = t.trimEnd().split('\n'), n = lines.filter((l) => l.startsWith('league=')).length;
+  assert.ok(new TextEncoder().encode(t).length <= FUTBOL_BYTES);
+  assert.ok(n > 5 && n < 40);
+  assert.equal(lines.filter((l) => l.startsWith('game=')).length, n * 6);              // whole leagues
+  assert.equal(lines.at(-4), `more=${40 - n}|${(40 - n) * 6}`);
+  assert.deepEqual(lines.slice(-3), ['futbol_age=0', 'futbol_state=ok', 'end']);
+  const g0 = lines.find((l) => l.startsWith('game=')).split('|');
+  assert.deepEqual([Array.from(g0[1]).length, Array.from(g0[5]).length, Array.from(lines[3].split('|')[0].slice(7)).length], [28, 40, 48]);
+  assert.ok(!t.includes('�'));
+  // a day that fits: no more= line
+  assert.ok(!futbolText({ now: NOW, tz: env.TZ, d: 0, r: okR(futDay()) }).includes('\nmore='));
+});
+
+test('the 4 KB guard with the keys of 0.5.0: the news, then the air, then the fútbol, the holiday and the series, the hours, ...', () => {
+  const groups = [['news='], ['air='], ['futbol=', 'holiday=', 'spark='], ['wx_hours='], ['rate_chg='], ['wx_rain=', 'wx_soon=', 'wx_sun=', 'wx_moon=', 'wx_fx=', 'days_fx=']];
+  const seen = new Set();
+  for (let k = 0; k <= 520; k += 4) {
+    const e = { ...env, RATES: ['USD', 'GBP', 'CHF', 'JPY'].map((c, i) => `${c}:${'LMNO'[i].repeat(k)}`).join(',') };
+    const t = boardText({ now: NOW, env: e, fx: okR(fxData), wx: okR({ ...wxData, minutely_15: m15(['18:45']) }), news: news(), hol: okR(holData),
+      air: okR(airData), fut: okR(futDay()) });
+    assert.ok(new TextEncoder().encode(t).length <= MAX_BYTES && t.endsWith('\nend\n'));
+    const gone = groups.map((keys) => !t.split('\n').some((l) => keys.some((x) => l.startsWith(x))));
+    assert.ok(gone.every((g, i) => !g || gone.slice(0, i).every(Boolean)), `k=${k}: ${gone}`);   // a group goes only after the ones before it
+    seen.add(gone.join(''));
+  }
+  assert.ok(seen.has([true, false, false, false, false, false].join('')) && seen.has([true, true, false, false, false, false].join('')));
+});
+
 // ---- the Worker with fakes --------------------------------------------------------
 
 // ops counts the calls: the Cache API shares the free plan's 50 subrequests with fetch().
@@ -248,6 +400,7 @@ function deps({ cache = fakeCache(), answers = {}, now = NOW } = {}) {
 
 const ok = {
   'api.open-meteo.com': { body: wxData },
+  'air-quality-api.open-meteo.com': { body: airData },
   'api.frankfurter.dev': { body: fxRaw },
   'date.nager.at/api/v3/PublicHolidays/2026/DE': { body: hol26 },
   'date.nager.at/api/v3/PublicHolidays/2027/DE': { body: hol27 },
@@ -328,9 +481,12 @@ test('handle: /board on a cold cache: every upstream once; the reply as the firs
   const body = await r.text();
   assert.ok(body.startsWith('couch-board 1\nnow=1792164000\noffset=7200\ncity=Berlin\nnumfmt=.,\ngeo=52.52|13.4\nrate=USD|'));
   assert.ok(body.includes('\nholiday=2026-12-25|Erster Weihnachtstag|70\n') && body.endsWith('\nnews_state=ok\nend\n'));
-  // 6 fetches (the forecast, the rates, this year's holidays, 3 feeds), 6 cache reads and 6 writes
+  assert.ok(body.includes('\nwx_state=ok\nair=38|1\n') && !body.includes('\nfutbol='));   // the template has no fútbol source
+  // 7 fetches (the forecast, the air, the rates, this year's holidays, 3 feeds), 7 cache reads and 7 writes
   await Promise.all(d.waits);
-  assert.deepEqual([d.calls.length, d.cache.ops], [6, 12]);
+  assert.deepEqual([d.calls.length, d.cache.ops], [7, 14]);
+  assert.ok(d.calls.some((u) => u.startsWith('https://api.open-meteo.com/') && u.includes('minutely_15=precipitation') && u.includes('forecast_minutely_15=24')));
+  assert.ok(d.calls.includes('https://air-quality-api.open-meteo.com/v1/air-quality?latitude=52.52&longitude=13.40&timezone=Europe%2FBerlin&current=us_aqi%2Cuv_index'));
   assert.equal((await handle(new Request('http://couch.test/'), env, d)).status, 404);
   assert.equal((await handle(new Request('http://couch.test/board', { method: 'POST' }), env, d)).status, 404);
   // a bad TZ: still 200, the states none with the error
@@ -341,4 +497,16 @@ test('handle: /board on a cold cache: every upstream once; the reply as the firs
   const t = await (await handle(new Request('http://couch.test/board'), env, one)).text();
   assert.ok(t.includes('\nnews_state=stale|feeds.bbci.co.uk: HTTP 500\n'));
   assert.ok(newsUpstream(parseFeeds(env.NEWS_FEEDS)[0]).key().startsWith('https://couch.internal/news2?u='));
+});
+
+test('handle: /futbol answers the format with no source: state none, today or tomorrow, always 200', async () => {
+  const d = deps({ answers: ok });
+  const r = await handle(new Request('http://couch.test/futbol?d=0'), env, d);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'text/plain; charset=utf-8');
+  assert.equal(await r.text(), `couch-futbol 1\nnow=1792164000\nday=Today, Fri 16 Oct\nfutbol_age=0\nfutbol_state=none|${FUTBOL_NONE}\nend\n`);
+  assert.ok((await (await handle(new Request('http://couch.test/futbol?d=1'), env, d)).text()).includes('\nday=Tomorrow, Sat 17 Oct\n'));
+  assert.ok((await (await handle(new Request('http://couch.test/futbol?d=x'), env, d)).text()).includes('\nday=Today, Fri 16 Oct\n'));
+  assert.equal(d.calls.length, 0);
+  assert.equal(FUTBOL_NONE, 'no f\u00fatbol source in this Worker');
 });

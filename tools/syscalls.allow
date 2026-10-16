@@ -22,8 +22,13 @@
 # (the group's create), 171 (its destroy), 172 (a thread's initialize), 173
 # (the group's start), 177 (its terminate), 178 (its join) and 190 (a
 # mailbox word): 48 numbers at 93 call sites, every sc resolved. The
-# image's import and close are SPRX imports (no number). Never 602, 604 or
-# 870: the script refuses them whatever this file says.
+# image's import and close are SPRX imports (no number). On 2026-10-16
+# (Couch 0.5.0: the Info page's Hardware row, info.c) two of PS3 Health's
+# read-only calls came in, made as Health makes them and journaled under
+# Health's names: 383 (sys_game_get_temperature: the Cell and the RSX,
+# "temps") and 409 (sys_sm_get_fan_policy: the fan duty, "fan_policy",
+# behind its first-run prompt as in Health). Never 602, 604 or 870: the
+# script refuses them whatever this file says.
 44
 141
 142
@@ -41,8 +46,10 @@
 330
 331
 337
+383
 402
 403
+409
 700
 701
 702

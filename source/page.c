@@ -1,6 +1,7 @@
 /* Couch's pages (page.h): the frame every page shares, the header with the
- * clock, the slides, the ambient mode, the bottom bar. The News page
- * is reader.c's since 0.3.1. Every motion is a whole pixel before a text,
+ * clock, the slides, the ambient mode and its night mode (0.5.0), the
+ * bottom bar. The News page is reader.c's since 0.3.1, the Futbol page
+ * futbol.c's since 0.5.0. Every motion is a whole pixel before a text,
  * digits or S/M icon call, except the icons that move
  * (icon_rot binds them bilinear), the ticker's text (marquee.c) and the
  * reader's scrolls (stext.c). Every time comes from sky_time (the system
@@ -16,6 +17,7 @@
 #include <ps3gfx/fx.h>
 #include <ps3gfx/digits.h>
 #include <ps3gfx/icons.h>
+#include <ps3gfx/fs.h>
 #include "couch.h"
 #include "page.h"
 #include "board.h"
@@ -36,12 +38,12 @@
 #define PI_F 3.14159265f
 
 int page = PAGE_BOARD;
-const char *const page_name[PAGE_N] = {"Board", "News", "Info"};
+const char *const page_name[PAGE_N] = {"Board", "News", "Futbol", "Info"};
 int ambient;
 int page_dx;
 
 static s64 idle_since, amb_since;
-static int amb_saved, amb_dx, amb_dy;
+static int amb_saved, amb_dx, amb_dy, amb_night;
 static long amb_step = -1;
 
 static float rnd(float x) { return floorf(x + 0.5f); }
@@ -213,6 +215,20 @@ static float header_right(float y)
     return r - (w1 > w2 ? w1 : w2);
 }
 
+#define HDR_ROT_S 8.0                /* the header's second line: the holiday and the futbol line by turns, 8 s each */
+#define HDR_FADE_S 0.5               /* out and in over 0.5 s */
+
+/* The Worker's futbol line (0.5.0) for the header: "Futbol: 2 live",
+ * "Futbol next: Lions-Bears 21:00", "Futbol: no more games today". */
+static int futbol_line(char *buf, int n)
+{
+    const char *w = board_cur.fut_words;
+    if (!board_have || !board_cur.has_futbol) return 0;
+    if (!strncmp(w, "Next: ", 6)) snprintf(buf, (size_t)n, "Futbol next: %s", w + 6);
+    else snprintf(buf, (size_t)n, "Futbol: %c%s", w[0] >= 'A' && w[0] <= 'Z' && w[1] >= 'a' && w[1] <= 'z' ? w[0] + 32 : w[0], w + 1);
+    return 1;
+}
+
 /* The clock: HH:MM in the display digits, whole (the ambient mode's
  * font too), no seconds (flip cards looked cut in half).
  * At the start it fades in with the header. */
@@ -234,9 +250,21 @@ static float big_clock(float x, float y, float right)
     if (text_w(F_MED, date) > dw) snprintf(date, sizeof date, "%d %s", c.day, month_name[c.month - 1]);   /* narrow: no weekday */
     text_fit(dx, rnd(ty), F_MED, WHITE, dw, "%s", date);
     /* the second line: the next holiday (0.3.2) while the clock is the console's own; the clock's
-     * source otherwise (the Info page always shows it) */
+     * source otherwise (the Info page always shows it); since 0.5.0 the Worker's futbol line by
+     * turns with it, HDR_ROT_S each, faded out and in */
     if (src != CLK_CONSOLE || !board_have || !holiday_words(&board_cur, clock_utc() + off, line, sizeof line)) clock_source(line, sizeof line);
-    text_fit(dx, rnd(ty + (float)line_h(F_MED) + 6), F_SMALL, src == CLK_UTC ? YELLOW : GREY, dw, "%s", line);
+    u32 lc = src == CLK_UTC ? YELLOW : GREY;
+    char fl[160];
+    if (futbol_line(fl, sizeof fl)) {
+        double ph = fmod(sky_time(), 2 * HDR_ROT_S), q = fmod(ph, HDR_ROT_S);
+        float k = q < HDR_FADE_S ? (float)(q / HDR_FADE_S) : q > HDR_ROT_S - HDR_FADE_S ? (float)((HDR_ROT_S - q) / HDR_FADE_S) : 1.0f;
+        if (ph >= HDR_ROT_S) {
+            snprintf(line, sizeof line, "%s", fl);
+            lc = board_cur.fut_live > 0 ? GREEN : GREY;
+        }
+        lc = alpha_times(lc, k);
+    }
+    text_fit(dx, rnd(ty + (float)line_h(F_MED) + 6), F_SMALL, lc, dw, "%s", line);
     return xe;
 }
 
@@ -285,6 +313,7 @@ static void body(int pg, int dx)
     shift_push(dx, 0);
     if (pg == PAGE_INFO) info_body();
     else if (pg == PAGE_NEWS) news_body();
+    else if (pg == PAGE_FUTBOL) futbol_body();
     else board_body();
     shift_pop();
 }
@@ -296,6 +325,7 @@ static void bar_of(int pg, const char *msg, u32 msg_color)
     shift_push(0, dy);
     if (pg == PAGE_INFO) info_bar(y);
     else if (pg == PAGE_NEWS) news_bar(y);
+    else if (pg == PAGE_FUTBOL) futbol_bar(y);
     else board_bar(y, msg, msg_color);
     shift_pop();
 }
@@ -314,9 +344,14 @@ static void sky(void)
 }
 
 static void ambient_frame(void);
+static void night_frame(void);
 
 static void draw_frame(const char *msg, u32 msg_color)
 {
+    if (ambient && night_now()) {                            /* 0.5.0: the night's dim clock, in either mode */
+        night_frame();
+        return;
+    }
     if (ambient_aurora()) {
         ambient_frame();
         return;
@@ -387,9 +422,14 @@ void ambient_tick(void)
         amb_step = -1;
         page_slide_end();
         couch_log("ambient: on after %d min with no button%s (%s)", wait / 60, wait != AMBIENT_SEC ? ", an article open" : "",
-                  !ambient_aurora() ? "RSX only: dimmed" : ambient_day() ? "the sky" : "the aurora");
+                  night_now() ? "night mode: the dim clock" : !ambient_aurora() ? "RSX only: dimmed" : ambient_day() ? "the sky" : "the aurora");
+        amb_night = night_now();
     }
     if (!ambient) return;
+    if (night_now() != amb_night) {          /* the night's hours begin or end while the screen waits */
+        amb_night = !amb_night;
+        couch_log("ambient: the night's hours %s", amb_night ? "begin, the dim clock" : "end, the waiting screen");
+    }
     long step = (long)((now - amb_since) / (AMBIENT_STEP_SEC * 1000000LL));
     if (step == amb_step) return;
     amb_step = step;
@@ -575,6 +615,86 @@ static void ambient_frame(void)
             aa_disc(x0 + aw - 36 - (float)(nn - 1 - d) * 18, ty + phh / 2, 4, d == i ? c1 : 0xffffff40);
         text_wrap(ix, ty + phh + 16, F_MED, alpha_times(c1, k), aw - 72, nl, n->title);
     }
+    amb_ga = 1.0f;
+    ui_flip();
+}
+
+/* ---- night mode (0.5.0) -------------------------------------------------------------- */
+
+#define NIGHT APP_DIR "/night.txt"
+#define NIGHT_SPREAD 6.0f                    /* the night clock's places: ambient_spot's, 6 times as far apart */
+#define NIGHT_C 0x5f6878ff                   /* its colour: a dim grey */
+
+int night_set, night_from = 22, night_to = 7;
+char night_note[80];
+
+void night_load(void)
+{
+    char line[32];
+    int n = fs_read_line(NIGHT, line, sizeof line), a = 0, b = 0, r = n < 0 ? 0 : night_parse(line, n, &a, &b);
+    night_note[0] = 0;
+    night_set = r > 0;
+    if (r > 0) night_from = a, night_to = b;
+    if (r < 0) snprintf(night_note, sizeof night_note, "night.txt holds no \"off\" or HH-HH line, so night mode is off");
+    if (n < 0) couch_log("night.txt: none, night mode off");
+    else if (r > 0) couch_log("night.txt: %02d:00 to %02d:00", night_from, night_to);
+    else couch_log("night.txt: %s", r == 0 ? "off" : "not \"off\" or HH-HH, night mode off");
+}
+
+int night_save(int on, int from, int to)
+{
+    char s[8];
+    if (on) snprintf(s, sizeof s, "%02d-%02d", from, to);
+    else snprintf(s, sizeof s, "off");
+    int rc = fs_ok ? fs_write_line(NIGHT, s) : -1;
+    if (rc == 0) {
+        night_set = on;
+        night_from = from;
+        night_to = to;
+        night_note[0] = 0;
+    }
+    couch_log("night.txt: \"%s\" %s (rc %d)", s, rc == 0 ? "written" : "not written", rc);
+    return rc;
+}
+
+int night_now(void)
+{
+    int off;
+    if (!night_set) return 0;
+    clock_offset(&off);
+    long t = clock_utc() + off;
+    return night_in(night_from, night_to, (int)(((t % 86400) + 86400) % 86400 / 3600));
+}
+
+/* The waiting screen in the night's hours: black, and a small dim clock
+ * (D_M, else F_LARGE) at the next place every AMB_MOVE_S (ambient_spot,
+ * NIGHT_SPREAD times as far, so its few lit pixels wander over a wider
+ * part of the panel), faded out and in as the day's block. */
+static void night_frame(void)
+{
+    int off;
+    civil_time c;
+    const char *ampm;
+    char hm[16];
+    float ox, oy, px, py;
+    begin_frame();
+    screen_origin(&ox, &oy);
+    rect(ox, oy, 1920, 1080, BLACK);
+    double t = (double)(sysGetSystemTime() - amb_since) / 1e6;
+    long span = (long)(t / AMB_MOVE_S);
+    double mt = t - (double)span * AMB_MOVE_S;
+    float ga = mt > AMB_MOVE_S - AMB_FADE_S ? (float)((AMB_MOVE_S - mt) / AMB_FADE_S) : span > 0 && mt < AMB_FADE_S ? (float)(mt / AMB_FADE_S) : 1.0f;
+    ambient_spot(span, &px, &py);
+    clock_offset(&off);
+    civil_from_unix(clock_utc() + off, &c);
+    clock_hm(hm, sizeof hm, c.hour, c.min, clock_h24(), &ampm);
+    float w = !digits_rc ? (float)digits_w(D_M, hm) : (float)text_w(F_LARGE | TNUM, hm), h = !digits_rc ? (float)digits_h(D_M) : (float)line_h(F_LARGE);
+    if (ampm) w += 10 + (float)text_w(F_SMALL, ampm);
+    float x = rnd((float)SW / 2 + px * NIGHT_SPREAD - w / 2), y = rnd((float)SH / 2 + py * NIGHT_SPREAD - h / 2), xe;
+    amb_ga = ga;                                /* fade.h: the clock's draws */
+    if (!digits_rc) xe = digits(x, y, D_M, NIGHT_C, hm);
+    else xe = text(x, y, F_LARGE | TNUM, NIGHT_C, "%s", hm);
+    if (ampm) text(xe + 10, rnd(y + h - (float)line_h(F_SMALL) - h * 0.12f), F_SMALL, NIGHT_C, "%s", ampm);
     amb_ga = 1.0f;
     ui_flip();
 }

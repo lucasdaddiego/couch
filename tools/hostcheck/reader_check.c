@@ -8,9 +8,12 @@
  * point; grid_move, the scroll's helpers, url_sibling. With
  * "fuzz" last, also 20,000 mutated replies of the live list and of a live
  * article (a sanitizer build: no crash, every field ends inside its
- * buffer). Prints PASS or FAIL per group; the exit status is the number of
- * failed checks.
- *   reader_check <news> <article ok> <article summary> <article cut> <article long> <live news> <live article> [fuzz] */
+ * buffer). Since 0.5.0 also futbol_parse against the template Worker's
+ * /futbol test reply (worker/test/board.test.js's form, made-up teams),
+ * cut at every byte, with CR LF, as version 2, past its arrays, and 20,000
+ * mutated replies. Prints PASS or FAIL per group; the exit status is the
+ * number of failed checks.
+ *   reader_check <news> <article ok> <article summary> <article cut> <article long> <live news> <live article> <futbol> [fuzz] */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +34,7 @@ static void group(const char *name, int f0) { printf("%s %s\n", fails == f0 ? "P
 
 static news_data nd;
 static article_data ad;
+static futbol_data fd;
 
 static char *read_file(const char *p, int *n)
 {
@@ -380,6 +384,116 @@ static void helpers(void)
 }
 
 /* Mutated replies: random bytes changed, '|', '=' and LF put in, cuts. */
+/* ---- the futbol reply (0.5.0) ---------------------------------------------------- */
+
+/* Every text of fd ends inside its buffer, every count and index in its range. */
+static int fut_bounded(void)
+{
+#define IN(f) (memchr((f), 0, sizeof(f)) != NULL)
+    int ok = IN(fd.day) && IN(fd.feed.state) && IN(fd.feed.reason) && fd.n_league >= 0 && fd.n_league <= FUT_LEAGUES && fd.n_game >= 0 &&
+             fd.n_game <= FUT_GAMES && fd.more_leagues >= 0 && fd.more_games >= 0;
+    int sum = 0;
+    for (int i = 0; i < fd.n_league; i++) {
+        const fut_league *g = &fd.league[i];
+        ok = ok && IN(g->name) && IN(g->country) && g->first >= 0 && g->n >= 0 && g->first + g->n <= fd.n_game && g->first == sum;
+        sum += g->n;
+    }
+    ok = ok && sum == fd.n_game;
+    for (int i = 0; i < fd.n_game; i++) {
+        const fut_game *g = &fd.game[i];
+        ok = ok && IN(g->when) && IN(g->home) && IN(g->away) && IN(g->tv) && g->league >= 0 && g->league < fd.n_league &&
+             g->kind >= FK_PRE && g->kind <= FK_OFF && g->sh >= -1 && g->sh <= 99 && g->sa >= -1 && g->sa <= 99;
+    }
+    return ok;
+#undef IN
+}
+
+static int fparse(const char *s, int fold) { return futbol_parse(s, (int)strlen(s), fold, &fd); }
+
+static void futbol_worker(const char *w, int wn)
+{
+    int f0 = fails;
+    CHECK(futbol_parse(w, wn, 0, &fd) == BP_OK && fd.version == 1 && fd.now == 1792164000L);
+    STR(fd.day, "Today, Fri 16 Oct");
+    CHECK(fd.n_league == 2 && fd.n_game == 5 && !fd.more_leagues && !fd.more_games && futbol_live(&fd) == 0);
+    STR(fd.league[0].name, "Spree League");
+    STR(fd.league[0].country, "Germany");
+    CHECK(fd.league[0].first == 0 && fd.league[0].n == 3 && fd.league[1].first == 3 && fd.league[1].n == 2);
+    const fut_game *g = &fd.game[0];
+    CHECK(g->kind == FK_END && g->sh == 2 && g->sa == 1 && g->league == 0);
+    STR(g->when, "Final");
+    STR(g->home, "FC Kiezblau");
+    STR(g->away, "Union Mitte");
+    STR(g->tv, "Spree TV");
+    g = &fd.game[1];
+    CHECK(g->kind == FK_PRE && g->sh == -1 && g->sa == -1 && hm_parse(g->when) == 18 * 60 + 30);
+    STR(g->tv, "Spree TV, Kanal 9");
+    CHECK(fd.game[2].tv[0] == 0);                                     /* "-": no channel */
+    CHECK(fd.game[3].kind == FK_END && fd.game[3].sh == 1 && fd.game[3].league == 1);
+    STR(fd.game[3].when, "Pens 4-3");
+    CHECK(fd.game[4].kind == FK_OFF);
+    STR(fd.game[4].home, "Gr\xc3\xbcnau 04");
+    STR(fd.feed.state, "ok");
+    CHECK(fd.feed.age == 120 && fut_bounded());
+    group("the futbol reply of the Worker test, every field", f0);
+
+    f0 = fails;
+    CHECK(futbol_parse(w, wn, 1, &fd) == BP_OK);
+    STR(fd.game[4].home, "Grunau 04");
+    STR(fd.game[4].away, "Muggel SC");
+    char *crlf = malloc((size_t)wn * 2 + 1);
+    int k = 0;
+    for (int i = 0; i < wn; i++) {
+        if (w[i] == '\n') crlf[k++] = '\r';
+        crlf[k++] = w[i];
+    }
+    CHECK(futbol_parse(crlf, k, 0, &fd) == BP_OK && fd.n_game == 5 && !strcmp(fd.game[0].tv, "Spree TV"));
+    free(crlf);
+    int bad = 0;
+    for (int n = 0; n < wn; n++) {                   /* every cut: only the one before the last LF is whole */
+        int rc = futbol_parse(w, n, 0, &fd);
+        if ((n == wn - 1 ? rc != BP_OK : rc == BP_OK) || !fut_bounded()) bad++;
+    }
+    CHECK(bad == 0);
+    char *v2 = strdup(w);
+    v2[13] = '2';
+    CHECK(futbol_parse(v2, wn, 0, &fd) == BP_VERSION && fd.version == 2);
+    free(v2);
+    CHECK(fparse("couch-board 1\nend\n", 0) == BP_NOT_BOARD && fparse("", 0) == BP_NOT_BOARD);
+    group("the futbol reply folded, with CR LF, cut at every byte, as version 2", f0);
+
+    f0 = fails;
+    CHECK(fparse("couch-futbol 1\ngame=1|A|B|1|0|-|end\nleague=L|-\ngame=x|A|B|-|-|-|live\ngame=y|C|D|100|-1|tv|weird\ngame=z|E\nend\n", 0) == BP_OK);
+    CHECK(fd.n_league == 1 && fd.n_game == 3 && fd.league[0].country[0] == 0);   /* the game before any league is not kept */
+    CHECK(fd.game[0].kind == FK_LIVE && futbol_live(&fd) == 1);
+    CHECK(fd.game[1].kind == FK_OFF && fd.game[1].sh == -1 && fd.game[1].sa == -1);   /* out of range, an unknown kind */
+    CHECK(fd.game[2].kind == FK_OFF && !strcmp(fd.game[2].away, "-") && fd.game[2].sh == -1);   /* a short line */
+    CHECK(fparse("couch-futbol 1\nleague=L|C\nmore=3|27\nfutbol_state=stale|x: HTTP 503\nfutbol_age=90\nend\n", 0) == BP_OK);
+    CHECK(fd.more_leagues == 3 && fd.more_games == 27 && fd.feed.age == 90 && fd.league[0].n == 0);
+    STR(fd.feed.state, "stale");
+    STR(fd.feed.reason, "x: HTTP 503");
+    static char big[65536];                          /* past the arrays: 45 leagues of 7 games */
+    int bk = snprintf(big, sizeof big, "couch-futbol 1\n");
+    for (int i = 0; i < 45; i++) {
+        bk += snprintf(big + bk, sizeof big - bk, "league=L%d|C\n", i);
+        for (int j = 0; j < 7; j++) bk += snprintf(big + bk, sizeof big - bk, "game=21:00|H%d|A%d|-|-|-|pre\n", j, j);
+    }
+    snprintf(big + bk, sizeof big - bk, "end\n");
+    CHECK(fparse(big, 0) == BP_OK && fd.n_game == FUT_GAMES && fd.n_league == 35 && fd.more_leagues == 10 && fd.more_games == 315 - FUT_GAMES);
+    CHECK(fut_bounded());
+    bk = snprintf(big, sizeof big, "couch-futbol 1\nleague=");
+    memset(big + bk, 'N', 400);
+    bk += 400;
+    bk += snprintf(big + bk, sizeof big - bk, "|C\ngame=");
+    for (int i = 0; i < 60; i++) bk += snprintf(big + bk, sizeof big - bk, "\xc3\xa9");
+    bk += snprintf(big + bk, sizeof big - bk, "|");
+    for (int i = 0; i < 60; i++) bk += snprintf(big + bk, sizeof big - bk, "\xe2\x80\x93");
+    snprintf(big + bk, sizeof big - bk, "|B|1|2|T|end\nend\n");
+    CHECK(fparse(big, 0) == BP_OK && fut_bounded() && strlen(fd.league[0].name) == sizeof fd.league[0].name - 1);
+    CHECK(strlen(fd.game[0].when) == 22 && strlen(fd.game[0].home) == 87);   /* cut on a code point boundary */
+    group("futbol rules: a game's league, the ranges, an unknown kind, more=, the states, past the arrays, long fields", f0);
+}
+
 static void fuzz(const char *w, int wn, int article, const char *name)
 {
     int f0 = fails, bad = 0;
@@ -395,7 +509,10 @@ static void fuzz(const char *w, int wn, int article, const char *name)
             s[pos] = (x >> 4) & 1 ? put[(x >> 16) % (sizeof put - 1)] : (char)(x >> 20);
         }
         if (it % 3 == 0) n = (int)((x >> 3) % (unsigned)n);
-        if (article) {
+        if (article == 2) {
+            futbol_parse(s, n, it & 1, &fd);
+            if (!fut_bounded()) bad++;
+        } else if (article) {
             article_parse(s, n, it & 1, &ad);
             if (!art_bounded()) bad++;
         } else {
@@ -412,13 +529,13 @@ static void fuzz(const char *w, int wn, int article, const char *name)
 
 int main(int argc, char **argv)
 {
-    if (argc < 8) {
-        printf("usage: reader_check <news> <article ok> <summary> <cut> <long> <live news> <live article> [fuzz]\n");
+    if (argc < 9) {
+        printf("usage: reader_check <news> <article ok> <summary> <cut> <long> <live news> <live article> <futbol> [fuzz]\n");
         return 1;
     }
-    int n[7];
-    char *f[7];
-    for (int i = 0; i < 7; i++) f[i] = read_file(argv[i + 1], &n[i]);
+    int n[8];
+    char *f[8];
+    for (int i = 0; i < 8; i++) f[i] = read_file(argv[i + 1], &n[i]);
     news_worker(f[0], n[0]);
     news_live(f[5], n[5]);
     news_rules();
@@ -426,11 +543,13 @@ int main(int argc, char **argv)
     article_live(f[6], n[6]);
     article_rules();
     helpers();
-    if (argc > 8 && !strcmp(argv[8], "fuzz")) {
+    futbol_worker(f[7], n[7]);
+    if (argc > 9 && !strcmp(argv[9], "fuzz")) {
         fuzz(f[5], n[5], 0, "the live /news");
         fuzz(f[6], n[6], 1, "a live /article");
+        fuzz(f[7], n[7], 2, "the /futbol reply");
     }
-    for (int i = 0; i < 7; i++) free(f[i]);
+    for (int i = 0; i < 8; i++) free(f[i]);
     printf("%d failed\n", fails);
     return fails > 125 ? 125 : fails;
 }

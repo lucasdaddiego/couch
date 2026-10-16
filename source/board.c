@@ -6,7 +6,8 @@
  * and joins it with no time limit, so no network call is left when net_end
  * runs. Since 0.3.1 it also writes couch.txt's queued lines (main.c's
  * couch_log_drain: file calls only, the ones the main thread made) and
- * makes the reader's requests (reader.c). */
+ * makes the reader's requests (reader.c); since 0.5.0 the Futbol page's
+ * (futbol.c). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,7 @@
 #include "page.h"
 #include "spu_fx_run.h"
 #include "reader.h"
+#include "futbol.h"
 
 #define PERIOD_US 300000000LL        /* a fetch every 5 min */
 #define RETRY_US 60000000LL          /* 60 s after a failure */
@@ -37,6 +39,7 @@ char board_url_note[160];
 static http_url url;                 /* set before the thread starts, only read after */
 static char news_path[160];          /* /news and /article?id= beside the Board's path (url_sibling) */
 static char art_base[160];
+static char fut_base[160];           /* /futbol?d= (0.5.0) */
 
 /* The handoff: the thread writes the slot only while ready is 0 and sets
  * ready after a fence; the main thread parses it and clears ready after a
@@ -46,12 +49,14 @@ static char art_base[160];
 static struct {
     int kind;                        /* REQ_* */
     char id[9];                      /* an article's id */
+    int day;                         /* the futbol day */
     char body[NEWS_MAX + 1];
     http_result r;
     s64 at, us;                      /* the reply's system time, the fetch's duration */
     int prc;
     news_data news;
     article_data art;
+    futbol_data fut;
     int qr_ok;
     u8 qr[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAX_VERSION)];
     u8 qr_tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAX_VERSION)];
@@ -66,6 +71,7 @@ static volatile int busy = -1;       /* the request in flight (REQ_*), -1 none *
  * next round (a torn id at most gives a reply that reader_take drops: its
  * id is not the one open). */
 static volatile int want_news, want_art;
+static volatile int want_fut;        /* the futbol day asked for, plus 1 (0: none) */
 static volatile char art_req[9];
 static int art_seq;
 static volatile s64 next_us, last_us;   /* the thread's schedule: the next fetch, the last one's start */
@@ -124,9 +130,13 @@ static void reader_paths(void)
     if (url_sibling(url.path, "news", news_path, sizeof news_path)) snprintf(news_path, sizeof news_path, "/news");
     if (url_sibling(url.path, "article?id=", art_base, sizeof art_base) || strlen(art_base) + 8 >= sizeof url.path)
         snprintf(art_base, sizeof art_base, "/article?id=");
+    if (url_sibling(url.path, "futbol?d=", fut_base, sizeof fut_base) || strlen(fut_base) + 2 >= sizeof url.path)
+        snprintf(fut_base, sizeof fut_base, "/futbol?d=");
 }
 
 void board_ask_news(void) { want_news = 1; }
+
+void board_ask_futbol(int day) { want_fut = (day ? 1 : 0) + 1; }
 
 void board_ask_article(const char *id)
 {
@@ -162,6 +172,10 @@ static void reader_work(void)
     if (slot.r.step != H_OK) return;
     if (slot.kind == REQ_NEWS) {
         slot.prc = news_parse(slot.body, slot.r.len, fold, &slot.news);
+        return;
+    }
+    if (slot.kind == REQ_FUTBOL) {
+        slot.prc = futbol_parse(slot.body, slot.r.len, fold, &slot.fut);
         return;
     }
     slot.prc = article_parse(slot.body, slot.r.len, fold, &slot.art);
@@ -220,6 +234,7 @@ static void board_thread(void *unused)
         if (!ready) {
             if (take_article()) kind = REQ_ARTICLE;     /* the viewer waits for it: first */
             else if (now >= next || (want && now - last_us >= GAP_US)) kind = REQ_BOARD;
+            else if (want_fut) kind = REQ_FUTBOL;   /* the page waits for it: before the news list */
             else if (want_news) kind = REQ_NEWS;
         }
         if (kind >= 0) {
@@ -233,6 +248,11 @@ static void board_thread(void *unused)
                 want_news = 0;
                 snprintf(u.path, sizeof u.path, "%s", news_path);
                 max = NEWS_MAX;
+            } else if (kind == REQ_FUTBOL) {
+                slot.day = want_fut - 1;
+                want_fut = 0;
+                snprintf(u.path, sizeof u.path, "%s%d", fut_base, slot.day);
+                max = FUTBOL_MAX;
             } else {
                 snprintf(u.path, sizeof u.path, "%s%s", art_base, slot.id);
                 max = ARTICLE_MAX;
@@ -317,10 +337,10 @@ void board_refresh(void)
  * number of a reply of another version. */
 static void fetch_words(char *w, int n, const http_result *r, int prc, int brief, int kind, int version)
 {
-    static const char *const what[3] = {"Board", "news list", "article"};
-    static const int cap_kb[3] = {BOARD_MAX / 1024, NEWS_MAX / 1024, ARTICLE_MAX / 1024};
+    static const char *const what[4] = {"Board", "news list", "article", "futbol list"};
+    static const int cap_kb[4] = {BOARD_MAX / 1024, NEWS_MAX / 1024, ARTICLE_MAX / 1024, FUTBOL_MAX / 1024};
     char e[24];
-    if (kind < REQ_BOARD || kind > REQ_ARTICLE) kind = REQ_BOARD;
+    if (kind < REQ_BOARD || kind > REQ_FUTBOL) kind = REQ_BOARD;
     switch (r->step) {
     case H_OK:
         if (prc == BP_OK) snprintf(w, (size_t)n, "ok");
@@ -351,11 +371,13 @@ static void fetch_words(char *w, int n, const http_result *r, int prc, int brief
 }
 
 /* The internet as any reply shows it (the Board's, the news list's, an
- * article's): no answer when the DNS lookup, the socket, the connect, the
- * send or the recv failed (also the 10 s timeout); any answer, also an HTTP
- * error or a bad reply, reached the Worker. An article's time is the
- * Worker's fetch of the page (up to its 8 s), not the internet's: an
- * answered article only ends a "No internet", it never says slow. */
+ * article's, a futbol list's): no answer when the DNS lookup, the socket,
+ * the connect, the send or the recv failed (also the 10 s timeout); any
+ * answer, also an HTTP error or a bad reply, reached the Worker. An
+ * article's time is the Worker's fetch of the page (up to its 8 s), not
+ * the internet's, and a futbol list's may hold the Worker's fetch of its
+ * source (up to 4 s): an answered one only ends a "No internet", it never
+ * says slow. */
 static void net_seen(const http_result *r, long utc, int article)
 {
     if (r->step == H_STOPPED) return;
@@ -373,26 +395,29 @@ static void net_seen(const http_result *r, long utc, int article)
 }
 
 /* A news or article reply: reader_take (reader.c) copies what it keeps and
- * logs it. */
+ * logs it; a futbol reply: futbol_take (futbol.c). */
 static void take_reader(void)
 {
     board_reply b;
     memset(&b, 0, sizeof b);
     b.kind = slot.kind;
     memcpy(b.id, slot.id, sizeof b.id);
+    b.day = slot.day;
     b.r = &slot.r;
     b.at = slot.at;
     b.us = slot.us;
     b.prc = slot.prc;
     b.news = &slot.news;
     b.art = &slot.art;
+    b.fut = &slot.fut;
     b.qr_ok = slot.qr_ok;
     b.qr = slot.qr;
     fetch_words(b.words, sizeof b.words, &slot.r, slot.prc, 0, slot.kind,
-                slot.kind == REQ_NEWS ? slot.news.version : slot.art.version);
-    net_seen(&slot.r, clock_utc(), slot.kind == REQ_ARTICLE);
+                slot.kind == REQ_NEWS ? slot.news.version : slot.kind == REQ_FUTBOL ? slot.fut.version : slot.art.version);
+    net_seen(&slot.r, clock_utc(), slot.kind != REQ_NEWS);
     if (net_state == NET_UP) net_addr();    /* the thread is idle while ready is set (board_take's note) */
-    reader_take(&b);
+    if (slot.kind == REQ_FUTBOL) futbol_take(&b);
+    else reader_take(&b);
 }
 
 void board_take(void)

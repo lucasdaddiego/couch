@@ -4,13 +4,16 @@
 // (Nager.Date) and the news (the RSS feeds of NEWS_FEEDS), each upstream kept in the Cache API with
 // its time, so that a failed upstream gives the old values marked stale with their real age. The
 // news reader: GET /news (the headlines of the same feeds, from the same cache) and GET
-// /article?id= (an item's text from the publisher's page, reader.js and article.js). Plain HTTP
-// on purpose: the PS3 has no usable TLS (README.md, "The Worker").
+// /article?id= (an item's text from the publisher's page, reader.js and article.js). Since Couch
+// 0.5.0 the air (Open-Meteo's air quality) and GET /futbol, the reply of the Fútbol page
+// (futbol.js), which this template answers with no source. Plain HTTP on purpose: the PS3 has no
+// usable TLS (README.md, "The Worker").
 
 import { addDays, boardText, clean, localDate, parseRates } from './board.js';
 import { FEED_ITEMS, feedItems, parseFeeds, readFeedHead } from './news.js';
 import { articleText, capParas, NEWS_LIST, newsText } from './reader.js';
 import { extractPage } from './article.js';
+import { futbolText } from './futbol.js';
 
 const TIMEOUT_MS = 4000;
 export const ARTICLE_TIMEOUT_MS = 8000;  // a publisher's page: the viewer waits for it, the Board does not
@@ -111,11 +114,25 @@ export const UPSTREAMS = {
         'cloud_cover,precipitation,wind_direction_10m,wind_gusts_10m',
       daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset',
       hourly: 'precipitation_probability,precipitation,temperature_2m,weather_code',
+      // since Couch 0.5.0: 24 steps of 15 minutes from now's, so a forecast cached for WX_TTL, or
+      // stale for 3 h, still covers the next 2 h (board.js's soonWords)
+      minutely_15: 'precipitation', forecast_minutely_15: '24',
     }),
     key: (env) => `https://couch.internal/wx?lat=${env.LAT}&lon=${env.LON}`,
     ttl: (env) => Number(env.WX_TTL) || 900,
     read: readJson,
     valid: (d) => !!(d && d.current && d.daily),
+  },
+  // Since Couch 0.5.0: the air now (board.js's airLine), Open-Meteo's air quality at the same place.
+  air: {
+    host: 'air-quality-api.open-meteo.com',
+    url: (env) => 'https://air-quality-api.open-meteo.com/v1/air-quality?' + new URLSearchParams({
+      latitude: env.LAT, longitude: env.LON, timezone: env.TZ, current: 'us_aqi,uv_index',
+    }),
+    key: (env) => `https://couch.internal/air?lat=${env.LAT}&lon=${env.LON}`,
+    ttl: (env) => Number(env.AIR_TTL) || Number(env.WX_TTL) || 900,
+    read: readJson,
+    valid: (d) => !!(d && d.current),
   },
   // The key holds today's local date, CURRENCY and the codes: a new day or a new RATES fetches.
   fx: {
@@ -208,8 +225,10 @@ async function refresh(u, env, now, deps, key, entry, bg) {
 // else the upstream (cached when valid), else the old entry marked stale, else none. An upstream
 // that failed before is not waited for (RETRY_S above): the old entry or none at once, with the
 // failure's reason, and at most once per RETRY_S a try after the reply. deps: {fetch, cache,
-// waitUntil}. Never throws.
-export async function get(name, env, now, deps) {
+// waitUntil}. opts.cacheOnly (since Couch 0.5.0): the cache entry only, never a fetch or a write
+// (an old entry is stale with BUDGET_WORDS). Never throws.
+export const BUDGET_WORDS = 'not refreshed: the subrequest budget';
+export async function get(name, env, now, deps, opts = {}) {
   const u = typeof name === 'string' ? UPSTREAMS[name] : name;
   let key, entry = null;
   try {
@@ -225,8 +244,9 @@ export async function get(name, env, now, deps) {
   }
   if (!entry || typeof entry !== 'object') entry = null;
   const has = !!entry && entry.data !== null && entry.data !== undefined && Number.isFinite(entry.at);
-  if (has && now - entry.at < u.ttl(env, entry.data)) return { state: 'ok', age: now - entry.at, data: entry.data };
+  if (has && now - entry.at < u.ttl(env, entry.data, now)) return { state: 'ok', age: now - entry.at, data: entry.data };
   const old = (reason) => (has ? { state: 'stale', reason, age: now - entry.at, data: entry.data } : { state: 'none', reason, age: 0, data: null });
+  if (opts.cacheOnly) return old(BUDGET_WORDS);
   const fail = entry && entry.fail && Number.isFinite(entry.fail.at) ? entry.fail : null;
   if (fail) {
     if (now - fail.at >= RETRY_S || now < fail.at) deps.waitUntil(refresh(u, env, now, deps, key, has ? entry : null, true));
@@ -282,12 +302,26 @@ async function articleReply(env, now, deps, id) {
   }
 }
 
+// GET /futbol?d=0|1: the Fútbol page's reply (futbol.js) for today or tomorrow. The template has no
+// source of fixtures, so its state is none: a Worker with one gives futbolText that day's data (the
+// normalized form of futbol.js) as get() gives it.
+export const FUTBOL_NONE = 'no f\u00fatbol source in this Worker';
+function futbolReply(env, now, d) {
+  const tz = env.TZ || 'UTC';
+  try {
+    return futbolText({ now, tz, d, r: { state: 'none', reason: FUTBOL_NONE, age: 0, data: null } });
+  } catch (e) {
+    return ['couch-futbol 1', `now=${now}`, 'futbol_age=0', `futbol_state=none|worker: ${clean((e && e.message) || e).slice(0, 60)}`, 'end', ''].join('\n');
+  }
+}
+
 // The request with its dependencies, for the tests; the default export wires the runtime's.
 export async function handle(request, env, deps) {
   const url = new URL(request.url);
   const route = request.method === 'GET' ? url.pathname : '';
   if (route === '/news') return textReply(await newsReply(env, deps.now(), deps));
   if (route === '/article') return textReply(await articleReply(env, deps.now(), deps, url.searchParams.get('id') || ''));
+  if (route === '/futbol') return textReply(futbolReply(env, deps.now(), url.searchParams.get('d') === '1' ? 1 : 0));
   if (route !== '/board') {
     return new Response('not found\n', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   }
@@ -295,7 +329,7 @@ export async function handle(request, env, deps) {
   // No RATES: no rate lines. No COUNTRY: no holiday. No NEWS_FEEDS: no news lines. Every
   // upstream in parallel.
   const feeds = parseFeeds(env.NEWS_FEEDS);
-  const [wx, fx, hol, ...rs] = await Promise.all([get('wx', env, now, deps),
+  const [wx, air, fx, hol, ...rs] = await Promise.all([get('wx', env, now, deps), get('air', env, now, deps),
     fxCodes(env).length ? get('fx', env, now, deps) : null, country(env) ? get('hol', env, now, deps) : null,
     ...feeds.map((f) => get(newsUpstream(f), env, now, deps))]);
   const news = feeds.map((f, i) => ({ label: f.label, weight: f.weight, r: rs[i] }));
@@ -303,7 +337,7 @@ export async function handle(request, env, deps) {
   // as none with the error, and a bad setting (TZ) the bare lines.
   let text;
   try {
-    text = boardText({ now, fx: fx || undefined, wx, news, hol: hol || undefined, env });
+    text = boardText({ now, fx: fx || undefined, wx, air, news, hol: hol || undefined, env });
   } catch (e) {
     const reason = `worker: ${clean((e && e.message) || e).slice(0, 60)}`;
     const none = { state: 'none', reason, age: 0, data: null };

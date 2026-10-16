@@ -5,7 +5,8 @@
 # worker/test/board.test.js (the expected text of its first test, line for
 # line), so a change of the Worker's format shows here: the full reply, and
 # the same without the derived keys (geo, wx_fx, wx_hours, days_fx, the
-# changes, the series, feature, numfmt), as a minimal Worker sends it.
+# changes, the series, feature, numfmt; since 0.5.0 wx_soon, air, futbol),
+# as a minimal Worker sends it.
 # Two builds of tools/hostcheck/board_check.c: the host's cc at -O2 with
 # -Wall -Wextra -Werror, and the same with AddressSanitizer and
 # UndefinedBehaviorSanitizer, which also runs 20,000 mutated replies of
@@ -48,7 +49,7 @@ if not m:
 items = re.findall(r"'((?:[^'\\]|\\.)*)'", m.group(1))
 if len(items) < 3 or items[0] != 'couch-board 1' or items[-2:] != ['end', '']:
     sys.exit(1)
-NEW = ('geo=', 'wx_fx=', 'wx_hours=', 'days_fx=', 'rate_chg=', 'extra_chg=', 'spark=', 'feature=', 'numfmt=')
+NEW = ('geo=', 'wx_fx=', 'wx_hours=', 'days_fx=', 'rate_chg=', 'extra_chg=', 'spark=', 'feature=', 'numfmt=', 'wx_soon=', 'air=', 'futbol=')
 if not any(x.startswith(NEW) for x in items):
     print("the Worker test's reply has no derived key")
     sys.exit(1)
@@ -91,15 +92,21 @@ files = {
     'r_art_summary.txt': head + 'state=summary|news.example.org: HTTP 403\np=A short summary of the story.\nend\n',
     'r_art_cut.txt': 'couch-article 1\nnow=1792000600\nid=abcdef01\nsource=L\ncategory=-\ntitle=T whole\ndate=Wed 14 Oct 17:46|600\nlink=https://x.example/a%7Cb\nstate=cut\np=one\np=two\nend\n',
     'r_art_long.txt': 'couch-article 1\nnow=1\nid=abcdef01\nsource=-\ncategory=-\ntitle=T whole\ndate=-|-\nstate=summary|x: HTTP 403\nend\n',
+    # 0.5.0: /futbol as worker/test/board.test.js makes it from its made-up teams
+    'r_futbol.txt': 'couch-futbol 1\nnow=1792164000\nday=Today, Fri 16 Oct\nleague=Spree League|Germany\n'
+                    'game=Final|FC Kiezblau|Union Mitte|2|1|Spree TV|end\ngame=18:30|Havel Rovers|SV Tegelsee|-|-|Spree TV, Kanal 9|pre\n'
+                    'game=20:30|Borussia Wedding|Dynamo Pankow|-|-|-|pre\nleague=Cup of the North|Europe\n'
+                    'game=Pens 4-3|Nordhafen|Ostkreuz United|1|1|Kanal 9|end\ngame=Postponed|Grünau 04|Müggel SC|-|-|-|off\n'
+                    'futbol_age=120\nfutbol_state=ok\nend\n',
 }
 for n, t in files.items():
     open(os.path.join(out, n), 'w', encoding='utf-8', newline='').write(t)
 for n, d in (('news', 'r_live_news.txt'), ('article_451cc556', 'r_live_article.txt')):
     b = codecs.escape_decode(open(os.path.join(fix, n + '.esc'), encoding='ascii').read().encode('ascii'))[0]
     open(os.path.join(out, d), 'wb').write(b)
-print("the reader's texts: /news 1 item, /article 4 texts; the preview's /news and one /article")
+print("the reader's texts: /news 1 item, /article 4 texts, /futbol 5 games; the preview's /news and one /article")
 PY
-RR=($B/r_news.txt $B/r_art_ok.txt $B/r_art_summary.txt $B/r_art_cut.txt $B/r_art_long.txt $B/r_live_news.txt $B/r_live_article.txt)
+RR=($B/r_news.txt $B/r_art_ok.txt $B/r_art_summary.txt $B/r_art_cut.txt $B/r_art_long.txt $B/r_live_news.txt $B/r_live_article.txt $B/r_futbol.txt)
 print -r -- "-- the reader's parsers (reader_check.c):"
 if $CC -O2 $F $H/reader_check.c $S/parse.c -lm -o $B/reader_check; then
     $B/reader_check $RR || (( fails += $? ))
@@ -110,7 +117,7 @@ if $CC -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize
     $B/reader_check_asan $RR fuzz > $B/reader_asan.out 2>&1
     rc=$?
     command grep -v -e '^PASS' $B/reader_asan.out | command grep -v '^0 failed'
-    (( $(command grep -c '^PASS 20,000 mutated' $B/reader_asan.out) == 2 )) && print -r -- "PASS the reader's parsers under the sanitizers, and 20,000 mutated replies of each"
+    (( $(command grep -c '^PASS 20,000 mutated' $B/reader_asan.out) == 3 )) && print -r -- "PASS the reader's and the futbol parsers under the sanitizers, and 20,000 mutated replies of each"
     (( fails += rc ))
 else
     print "FAIL reader_check_asan: does not build"; (( ++fails ))

@@ -9,6 +9,7 @@ API, and formats one reply of at most 4 KB.
 | `GET /board` | the Board: the place, the rates, the weather, the next holiday, 8 headlines |
 | `GET /news` | the News page: up to `NEWS_LIST` (30) headlines with their ids, categories and summaries |
 | `GET /article?id=<8 hex>` | one headline's article: its page's paragraphs (at most 12 KB), else the feed's summary |
+| `GET /futbol?d=0` or `d=1` | the Fútbol page: today's or tomorrow's fixtures by league (at most 12 KB); this template has no source, so its state is `none` |
 
 Every reply is 200 with the state in its body; any other path or method is
 404. `/article` fetches only the link of an item in a configured feed, so the
@@ -26,13 +27,17 @@ All in `wrangler.jsonc` as vars (no secrets); its comment describes each one.
 | `COUNTRY`, `HOLIDAY_NAMES` | the holidays' country (ISO 3166 alpha-2), `local` or `english` names |
 | `NEWS_FEEDS`, `NEWS_MAX`, `NEWS_LIST` | `Label*weight@category=URL` between commas, at most 6; the Board's and the News page's counts |
 | `WX_TTL`, `FX_TTL`, `NEWS_TTL`, `ARTICLE_TTL` | seconds an answer stays fresh (900, 3600, 600, 3600) |
+| `AIR_TTL` | optional: the air quality's seconds (absent: `WX_TTL`'s) |
 
 An empty `RATES`, `COUNTRY` or `NEWS_FEEDS` leaves that part out.
 
 ## The sources
 
 - **Open-Meteo** (`api.open-meteo.com`): the current weather, 4 days of daily
-  values and the hourly values, in one request.
+  values, the hourly values and 24 values of 15 minutes (the rain of the next
+  2 h), in one request.
+- **Open-Meteo's air quality** (`air-quality-api.open-meteo.com`): the US AQI
+  and the UV index now.
 - **Frankfurter** (`api.frankfurter.dev`): the ECB's reference rates, one
   time series of the last 32 days for every code of `RATES` against
   `CURRENCY`. Each value is shown as `CURRENCY` per one unit, per 100 units
@@ -56,15 +61,15 @@ once; an old one is fetched again, and when the upstream fails the old values
 go out marked `stale` with their real age and the reason. A failure is
 remembered: the next requests answer at once with the old entry, and the
 upstream is tried again after the reply at most once per 300 s. A cold
-`/board` with 3 feeds makes 6 fetches and 12 cache calls, far below the free
-plan's 50 subrequests (6 feeds and both holiday years: 28).
+`/board` with 3 feeds makes 7 fetches and 14 cache calls, far below the free
+plan's 50 subrequests (6 feeds and both holiday years: 31).
 
 ## The Board reply
 
 UTF-8 text: the line `couch-board 1`, then `key=value` lines (fields between
 `|`), then `end`. Couch skips a key it does not know. A reply over 4 KB drops
-lines from the end: the news first, then the holiday and the chart, the
-hours, the changes, the sky lines, then the rates and days.
+lines from the end: the news first, then the air, the fútbol, the holiday and
+the chart, the hours, the changes, the sky lines, then the rates and days.
 
 | Key | Fields |
 |---|---|
@@ -81,9 +86,12 @@ hours, the changes, the sky lines, then the rates and days.
 | `wx_fx` | `WMO code\|cloud cover\|mm per hour\|wind from (degrees)\|wind km/h\|gusts km/h` |
 | `day`, `days_fx` | `label\|words\|max\|min\|chance of rain`, and each day's WMO code |
 | `wx_rain`, `wx_sun`, `wx_moon` | `rain or dry\|words`, `sunrise\|sunset`, the moon's phase in words |
+| `wx_soon` | the rain of the next 2 h in words: `Rain from 18:45`, `Rain until 19:30` or `Rain for the next 2 h`; absent when dry (Couch 0.5.0) |
 | `wx_hours` | `first hour\|12 temperatures\|12 chances\|12 WMO codes` |
 | `wx_age`, `wx_state` | as the rates' |
+| `air` | `US AQI\|UV index`, whole, `-` for a missing one; absent when the data is over 3 h old (Couch 0.5.0) |
 | `holiday` | `date\|name\|days until it` |
+| `futbol` | `games live\|games today\|words` (`2 live`, `Next: Home–Away 21:00`, `No more games today`); only from a Worker with a fútbol source (Couch 0.5.0) |
 | `news`, `news_age`, `news_state` | `source\|age in seconds\|title`, as the rates' |
 
 `/news` is `couch-news 1`, then `item=id|source|category|age|title|summary`
@@ -91,6 +99,15 @@ lines, `news_age`, `news_state`, `end`. `/article` is `couch-article 1`, then
 `id`, `source`, `category`, `title`, `date` (`words|age`), `link`, `state`
 (`ok`, `cut`, `summary|reason` or `none|reason`) and one `p=` line per
 paragraph, then `end`.
+
+`/futbol` is `couch-futbol 1`, then `now`, `day` (`Today, Fri 16 Oct`), per
+league a `league=name|country` line and its `game=when|home|away|home
+goals|away goals|TV|kind` lines (`when`: the local start of a game to come,
+else its minute, `HT`, `Final`, `Pens 4-3`, `Postponed`; the goals `-` before
+the start; `kind`: `pre`, `live`, `end` or `off`), a `more=leagues|games` line
+when the 12 KB cap left whole leagues out, `futbol_age`, `futbol_state`, `end`.
+`src/futbol.js` formats it from one day in a plain form (its first comment): a
+Worker with a source of fixtures fills that form; this template has none.
 
 ## Tests and deploy
 
@@ -102,6 +119,8 @@ paragraph, then `end`.
 - `node --test test/*.test.js` runs all but the workerd tests, with no
   `npm install` (as CI does).
 - The fixtures are public answers fetched on 2026-10-16 (Open-Meteo for
-  Berlin, Frankfurter, Nager.Date for Germany) and made-up feeds and pages.
+  Berlin, Frankfurter, Nager.Date for Germany) and made-up feeds and pages;
+  the air quality and the fútbol day of the tests are made up too (fictional
+  teams).
 - Deploy: `npm ci && npx wrangler deploy`, after the routes and the plain
   HTTP setup of the main README.

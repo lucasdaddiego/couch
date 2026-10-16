@@ -60,7 +60,7 @@ void text_field(char *dst, int size, const char *src, int n, int fold)
             i += len;
             continue;
         } else {
-            one = cp == 0xa0 ? ' ' : (cp >= 0xc0 && cp <= 0xff) ? latin1_base[cp - 0xc0] : '?';
+            one = cp == 0xa0 ? ' ' : cp == 0x2013 || cp == 0x2014 ? '-' : (cp >= 0xc0 && cp <= 0xff) ? latin1_base[cp - 0xc0] : '?';
             olen = 1;
         }
         if (one) out = &one;
@@ -319,6 +319,7 @@ int board_parse(const char *body, int n, int fold, board_data *b)
     long v;
     memset(b, 0, sizeof *b);
     b->rate_feed.age = b->wx_feed.age = b->news_feed.age = -1;
+    b->air_aqi = b->air_uv = b->fut_live = b->fut_total = -1;
     fx_none(b);
     if (!next_line(&p, end, &ls, &ll) || ll <= ml || memcmp(ls, magic, (size_t)ml) || !to_long(ls + ml, ll - ml, &v) || v < 0 ||
         v > 9999)
@@ -466,6 +467,23 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             if (b->n_extra_chg < BOARD_EXTRAS) chg_line(&b->extra_chg[b->n_extra_chg++], val, vl, fold, (int)sizeof b->extra[0].label);
         } else if (key_is(k, kl, "spark")) {
             if (b->n_spark < BOARD_SPARKS) spark_line(&b->spark[b->n_spark++], val, vl, fold);
+        } else if (key_is(k, kl, "wx_soon")) {
+            text_field(b->soon, sizeof b->soon, val, vl, fold);
+            b->has_soon = b->soon[0] && strcmp(b->soon, "-");
+        } else if (key_is(k, kl, "air")) {
+            /* aqi|uv: the UV index may come with decimals (rounded) */
+            c = split(val, vl, f, fl, 2);
+            b->air_aqi = field_c(f, fl, c, 0, 0, 999, 0, -1);
+            b->air_uv = field_c(f, fl, c, 1, 0, 30, 0, -1);
+            b->has_air = b->air_aqi >= 0 || b->air_uv >= 0;
+        } else if (key_is(k, kl, "futbol")) {
+            /* live|total|words: the words end at a '|', which the Worker removes from upstream text */
+            c = split(val, vl, f, fl, 3);
+            b->fut_live = field_c(f, fl, c, 0, 0, 999, 1, -1);
+            b->fut_total = field_c(f, fl, c, 1, 0, 999, 1, -1);
+            b->fut_words[0] = 0;
+            if (c > 2) text_field(b->fut_words, sizeof b->fut_words, f[2], fl[2], fold);
+            b->has_futbol = b->fut_words[0] && strcmp(b->fut_words, "-");
         }
     }
     return BP_CUT;
@@ -684,6 +702,31 @@ int auto_parse(const char *s, int n)
 
 /* ---- the internet, the ambient mode ------------------------------------------- */
 
+int night_parse(const char *s, int n, int *start, int *end)
+{
+    int i = 0, h[2] = {0, 0};
+    while (n > 0 && blank(s[n - 1])) n--;
+    while (i < n && blank(s[i])) i++;
+    if (n - i == 3 && lower((unsigned char)s[i]) == 'o' && lower((unsigned char)s[i + 1]) == 'f' && lower((unsigned char)s[i + 2]) == 'f')
+        return 0;
+    for (int k = 0; k < 2; k++) {                    /* one or two digits each, a '-' between */
+        int d = 0;
+        if (k && (i >= n || s[i++] != '-')) return -1;
+        for (; i < n && s[i] >= '0' && s[i] <= '9' && d < 2; i++, d++) h[k] = h[k] * 10 + (s[i] - '0');
+        if (!d || h[k] > 23) return -1;
+    }
+    if (i < n || h[0] == h[1]) return -1;
+    *start = h[0];
+    *end = h[1];
+    return 1;
+}
+
+int night_in(int start, int end, int hour)
+{
+    if (start == end) return 0;
+    return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
 int net_quality(int answered, long long total_us)
 {
     if (!answered) return NQ_DOWN;
@@ -886,6 +929,83 @@ int article_parse(const char *body, int n, int fold, article_data *a)
         }
     }
     return BP_CUT;
+}
+
+int futbol_parse(const char *body, int n, int fold, futbol_data *d)
+{
+    const char *p = body, *end = body + n, *ls;
+    int ll;
+    long v;
+    int cur = 0;                                     /* the last league line: 1 kept, -1 past the array, 0 none yet */
+    memset(d, 0, sizeof *d);
+    d->feed.age = -1;
+    int rc = head_line(&p, end, "couch-futbol ", &d->version);
+    if (rc != BP_OK) return rc;
+    while (next_line(&p, end, &ls, &ll)) {
+        if (ll == 3 && !memcmp(ls, "end", 3)) return BP_OK;
+        const char *eq = memchr(ls, '=', (size_t)ll);
+        if (!eq) continue;
+        const char *k = ls, *val = eq + 1;
+        int kl = (int)(eq - ls), vl = ll - kl - 1;
+        const char *f[7];
+        int fl[7], c;
+        if (key_is(k, kl, "now")) {
+            if (to_long(val, vl, &v) && v > 0) d->now = v;
+        } else if (key_is(k, kl, "day")) {
+            text_field(d->day, sizeof d->day, val, vl, fold);
+        } else if (key_is(k, kl, "league")) {
+            if (d->n_league == FUT_LEAGUES || d->n_game == FUT_GAMES) {   /* no room for it or for its games */
+                d->more_leagues++;
+                cur = -1;
+                continue;
+            }
+            cur = 1;
+            fut_league *g = &d->league[d->n_league++];
+            c = split(val, vl, f, fl, 2);
+            put(g->name, sizeof g->name, f, fl, c, 0, fold);
+            if (c > 1) cat_field(g->country, sizeof g->country, f[1], fl[1], fold);
+            g->first = d->n_game;
+            g->n = 0;
+        } else if (key_is(k, kl, "game")) {
+            /* when|home|away|score|score|tv|kind: a game counts in its league, the last league line */
+            if (cur == 0) continue;
+            if (cur < 0 || d->n_game == FUT_GAMES) {
+                d->more_games++;
+                continue;
+            }
+            fut_game *g = &d->game[d->n_game];
+            char kind[8];
+            c = split(val, vl, f, fl, 7);
+            g->league = d->n_league - 1;
+            put(g->when, sizeof g->when, f, fl, c, 0, fold);
+            put(g->home, sizeof g->home, f, fl, c, 1, fold);
+            put(g->away, sizeof g->away, f, fl, c, 2, fold);
+            g->sh = field_c(f, fl, c, 3, 0, 99, 1, -1);
+            g->sa = field_c(f, fl, c, 4, 0, 99, 1, -1);
+            g->tv[0] = 0;
+            if (c > 5) cat_field(g->tv, sizeof g->tv, f[5], fl[5], fold);
+            put(kind, sizeof kind, f, fl, c, 6, 1);
+            g->kind = !strcmp(kind, "pre") ? FK_PRE : !strcmp(kind, "live") ? FK_LIVE : !strcmp(kind, "end") ? FK_END : FK_OFF;
+            d->n_game++;
+            d->league[d->n_league - 1].n++;
+        } else if (key_is(k, kl, "more")) {
+            c = split(val, vl, f, fl, 2);
+            d->more_leagues += field_c(f, fl, c, 0, 0, 9999, 1, 0);
+            d->more_games += field_c(f, fl, c, 1, 0, 99999, 1, 0);
+        } else if (key_is(k, kl, "futbol_age")) {
+            feed_age(&d->feed, val, vl);
+        } else if (key_is(k, kl, "futbol_state")) {
+            feed_state(&d->feed, val, vl, fold);
+        }
+    }
+    return BP_CUT;
+}
+
+int futbol_live(const futbol_data *d)
+{
+    int k = 0;
+    for (int i = 0; i < d->n_game; i++) k += d->game[i].kind == FK_LIVE;
+    return k;
 }
 
 /* The length of the UTF-8 sequence that starts with byte c (1 for a byte

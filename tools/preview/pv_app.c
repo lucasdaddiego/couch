@@ -26,7 +26,9 @@
  *   PV_ARTICLES=<dir>     GET /article?id=<id> answers <dir>/<id>.txt, and
  *                         the Worker's "state=none|unknown id" reply for
  *                         an id with no file; absent: HTTP 404
- *   PV_NEWS_FAIL, PV_ARTICLE_FAIL=<list>  per /news or /article request (in
+ *   PV_FUTBOL=<dir>       GET /futbol?d=<0 or 1> answers <dir>/d<n>.txt
+ *                         (0.5.0's Futbol page); absent, or no file: 404
+ *   PV_NEWS_FAIL, PV_ARTICLE_FAIL, PV_FUTBOL_FAIL=<list>  per /news, /article or /futbol request (in
  *                         their own counts, the last entry repeats), the
  *                         answer of PV_BOARD_FAIL's kinds but refused (a
  *                         connect cannot see its path), and 404; it takes
@@ -125,7 +127,7 @@ static struct {
     char in[2048];
     char *out;
 } sk[NSOCK];
-static int connects, news_reqs, art_reqs;
+static int connects, news_reqs, art_reqs, fut_reqs;
 static s32 err_val = NET_ENETDOWN;
 
 s32 *netErrnoLoc(void) { return &err_val; }
@@ -213,9 +215,10 @@ static char *file_text(const char *p, int *len)
     return b;
 }
 
-/* The reader's paths (0.3.1): the body of /news or /article, and the
- * request's kind from PV_NEWS_FAIL or PV_ARTICLE_FAIL when set; NULL and
- * K_404 for no body. 0 for another path (the Board's). */
+/* The reader's paths (0.3.1) and the Futbol page's (0.5.0): the body of
+ * /news, /article or /futbol, and the request's kind from PV_NEWS_FAIL,
+ * PV_ARTICLE_FAIL or PV_FUTBOL_FAIL when set; NULL and K_404 for no body. 0
+ * for another path (the Board's). */
 static int reader_body(int i, char **body, int *len)
 {
     char path[300], p[1100];
@@ -228,6 +231,18 @@ static int reader_body(int i, char **body, int *len)
         news_reqs++;
         const char *n = getenv("PV_NEWS");
         *body = n && strcmp(n, "404") ? file_text(n, len) : NULL;
+        if (!*body) sk[i].kind = K_404;
+        return 1;
+    }
+    if (!strncmp(q, "futbol?d=", 9)) {
+        const char *f = getenv("PV_FUTBOL_FAIL"), *d = getenv("PV_FUTBOL");
+        if (f) sk[i].kind = kind_of(f, fut_reqs);
+        fut_reqs++;
+        *body = NULL;
+        if (d) {
+            snprintf(p, sizeof p, "%s/d%c.txt", d, q[9] == '1' ? '1' : '0');
+            *body = file_text(p, len);
+        }
         if (!*body) sk[i].kind = K_404;
         return 1;
     }
@@ -271,6 +286,7 @@ static void answer(int i)
     else {
         if (sk[i].kind == K_V2 && blen >= 13 && !memcmp(body, "couch-board 1", 13)) body[12] = '2';
         if (sk[i].kind == K_V2 && blen >= 12 && !memcmp(body, "couch-news 1", 12)) body[11] = '2';
+        if (sk[i].kind == K_V2 && blen >= 14 && !memcmp(body, "couch-futbol 1", 14)) body[13] = '2';
         int send_len = sk[i].kind == K_CUT ? (blen > 30 ? blen - 30 : 0) : blen;
         n = snprintf(out, 512, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\n"
                                "Connection: close\r\n\r\n", blen);

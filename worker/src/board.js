@@ -3,7 +3,10 @@
 // "end" (README.md, "The Board reply"). Pure functions: the Worker (index.js) gets the upstream
 // data, this file only formats it. The weather comes from Open-Meteo, the moon from the date, the
 // rates from Frankfurter (the ECB's reference rates), the holidays from Nager.Date, the news from
-// RSS feeds (news.js). Couch skips a key it does not know.
+// RSS feeds (news.js), the air from Open-Meteo's air quality, the fútbol from futbol.js's day. Couch
+// skips a key it does not know.
+
+import { futbolLine } from './futbol.js';
 
 export const VERSION = 1;
 export const MAX_BYTES = 4096;
@@ -109,6 +112,35 @@ export function rainWords(hourly, now, tz) {
   };
 }
 
+// The rain of the next 2 h from Open-Meteo's minutely_15 values (since Couch 0.5.0): the words, or
+// null. Open-Meteo stamps each 15 minutes at its end (the value at 18:45 is the sum of 18:30 to
+// 18:45), so an interval counts when its end is after now and its start is before now + 2 h, by
+// the times (as rainWords). An interval is wet from SOON_MM. The words: "Rain until 19:30" (the
+// start of the first dry interval) when the interval of now is wet, "Rain for the next 2 h" when
+// none of them is dry; else "Rain from 18:45" (the start of the first wet one). null when every
+// interval is dry, or when the values do not cover now to now + 2 h (an old forecast).
+export const SOON_MM = 0.1;
+export const SOON_S = 7200;
+export function soonWords(m15, now, tz) {
+  if (!m15 || !Array.isArray(m15.time)) return null;
+  const mm = Array.isArray(m15.precipitation) ? m15.precipitation : [];
+  const wall = Date.parse(`${localStamp(now, tz)}:00Z`) + (now % 60) * 1000, step = 900000;   // the wall clock, as UTC
+  const win = [];
+  m15.time.forEach((t, i) => {
+    const end = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(t)) ? Date.parse(`${t}:00Z`) : NaN;
+    if (end > wall && end - step < wall + SOON_S * 1000) win.push({ start: end - step, wet: Number.isFinite(mm[i]) && mm[i] >= SOON_MM });
+  });
+  win.sort((a, b) => a.start - b.start);
+  if (!win.length || win[0].start > wall || win.at(-1).start + step < wall + SOON_S * 1000) return null;
+  const at = (ms) => new Date(ms).toISOString().slice(11, 16);
+  if (win[0].wet) {
+    const dry = win.find((x) => !x.wet);
+    return dry ? `Rain until ${at(dry.start)}` : 'Rain for the next 2 h';
+  }
+  const wet = win.find((x) => x.wet);
+  return wet ? `Rain from ${at(wet.start)}` : null;
+}
+
 // Today's sunrise and sunset ("06:24", "19:16") from Open-Meteo's daily arrays, or null.
 export function sunTimes(daily, today) {
   const d = daily;
@@ -194,6 +226,17 @@ function whole(v, lo, hi) {
 // A WMO code (0 to 99, whole), else "-".
 function wmoCode(v) {
   return Number.isInteger(v) && v >= 0 && v <= 99 ? String(v) : '-';
+}
+
+// air=aqi|uv from Open-Meteo's air quality (since Couch 0.5.0): the US AQI and the UV index now,
+// whole, "-" for a missing one. null when the data is older than AIR_MAX_AGE (3 h) or holds
+// neither value.
+export const AIR_MAX_AGE = 10800;
+export function airLine(air) {
+  const c = air && air.data && air.data.current;
+  if (!c || !(Math.max(0, air.age | 0) <= AIR_MAX_AGE)) return null;
+  const aqi = whole(c.us_aqi, 0, 999), uv = whole(c.uv_index, 0, 30);
+  return aqi === '-' && uv === '-' ? null : `air=${aqi}|${uv}`;
 }
 
 // geo=lat|lon from LAT and LON (4 decimals, about 11 m), or null when either is not a number in
@@ -371,8 +414,9 @@ export function newsLines(feeds, now, max, fresh = NEWS_FRESH) {
 // The reply. fx, wx and hol are {state: 'ok'|'stale'|'none', reason, age, data}, as index.js's
 // get() gives them: fx.data as fxLines reads it, wx.data Open-Meteo's forecast, hol.data the
 // holidays [{fecha, nombre}] sorted; news is [{label, weight, r}], one per feed of NEWS_FEEDS (none:
-// no news lines). env: the vars of wrangler.jsonc.
-export function boardText({ now, fx = NONE, wx, news = [], hol = NONE, env }) {
+// no news lines). Since Couch 0.5.0 air (air.data Open-Meteo's air quality) and fut (fut.data the
+// day of futbol.js), results too (absent: no line). env: the vars of wrangler.jsonc.
+export function boardText({ now, fx = NONE, wx, news = [], hol = NONE, air = NONE, fut = NONE, env }) {
   const tz = env.TZ || 'UTC', locale = env.LOCALE || 'en-US';
   // The offset at now, not Open-Meteo's utc_offset_seconds: a cached forecast keeps the offset of
   // its fetch, which is wrong after a DST change. The city is cut to 100 code points, the only
@@ -419,21 +463,29 @@ export function boardText({ now, fx = NONE, wx, news = [], hol = NONE, env }) {
   if (wx.data) {
     const p = parts(now, tz), rain = rainWords(wx.data.hourly, now, tz), sun = sunTimes(dy, `${p.year}-${p.month}-${p.day}`);
     if (rain) out.push(`wx_rain=${rain.wet ? 'rain' : 'dry'}|${rain.words}`);
+    const soon = soonWords(wx.data.minutely_15, now, tz);       // since Couch 0.5.0: the next 2 h by 15 minutes
+    if (soon) out.push(`wx_soon=${soon}`);
     if (sun) out.push(`wx_sun=${sun.rise}|${sun.set}`);
     hours = hoursLine(wx.data.hourly, now, tz);
   }
   out.push(`wx_moon=${moonPhase(now)}`);
   if (hours) out.push(hours);
   out.push(`wx_age=${Math.max(0, wx.age | 0)}`, `wx_state=${stateLine(wx)}`);
+  // Since Couch 0.5.0: the air now (air=aqi|uv), and after the holiday the fútbol of today
+  // (futbol=live|total|words, futbol.js).
+  const a = airLine(air);
+  if (a) out.push(a);
   const h = holidayLine(hol, now, tz);
   if (h) out.push(h);
+  const f = futbolLine(fut, now, tz);
+  if (f) out.push(f);
   out.push(...newsLines(news, now, Math.min(8, Number(env.NEWS_MAX) || 8), Number(env.NEWS_FRESH) || NEWS_FRESH), 'end');
   let text = out.join('\n') + '\n';
   // A body over MAX_BYTES would be cut by Couch (its buffer is 4 KB), so lines drop from the end
-  // until it fits: the news first, then the holiday and the series, the 12 hours, the changes, the
-  // sky lines, then the rate and day lines. city, numfmt and geo stay.
-  const drop = [['news='], ['holiday=', 'spark='], ['wx_hours='], ['rate_chg='],
-    ['wx_rain=', 'wx_sun=', 'wx_moon=', 'wx_fx=', 'days_fx='], ['rate=', 'feature=', 'day=']];
+  // until it fits: the news first, then the air, the fútbol, the holiday and the series, the 12
+  // hours, the changes, the sky lines, then the rate and day lines. city, numfmt and geo stay.
+  const drop = [['news='], ['air='], ['futbol=', 'holiday=', 'spark='], ['wx_hours='], ['rate_chg='],
+    ['wx_rain=', 'wx_soon=', 'wx_sun=', 'wx_moon=', 'wx_fx=', 'days_fx='], ['rate=', 'feature=', 'day=']];
   for (const keys of drop) {
     while (new TextEncoder().encode(text).length > MAX_BYTES) {
       const i = out.findLastIndex((l) => keys.some((k) => l.startsWith(k)));

@@ -1,9 +1,9 @@
 /* Couch: a living-room dashboard on the TV, drawn by ps3gfx. The clock in
  * the console's time zone, the rates and the extras, the weather with the
  * rain, the sun and the moon, the next holiday and the news, from the Board
- * Worker at the URL in board_url.txt. Three pages: the Board, the News, the
- * Info screen; L1 and R1 move between the Board and the News, SELECT opens
- * the Info page and CIRCLE closes it.
+ * Worker at the URL in board_url.txt. Four pages: the Board, the News, the
+ * Futbol page (0.5.0), the Info screen; L1 and R1 move between the first
+ * three, SELECT opens the Info page and CIRCLE closes it.
  * The News page is a reader since 0.3.1 (reader.h): the list of 30
  * headlines, an article and its QR code. After 10 min with no button (20
  * with an article open) the waiting screen shows (page.c).
@@ -44,6 +44,7 @@
 #include "start.h"
 #include "marquee.h"
 #include "reader.h"
+#include "futbol.h"
 #include "stext.h"
 
 #ifndef PS3GFX_COMMIT
@@ -289,25 +290,26 @@ static int board_enter(void)
 
 /* A page change by the pad. Leaving the Info page opens the Board as CIRCLE
  * did in 0.1.0 (the network start runs again after a clear of the journal):
- * -1 for a quit there. */
+ * -1 for a quit there, and for START at the Info page's fan prompt. */
 static int go(int to, int dir)
 {
     int from = page;
     if (to == from) return 0;
     page = to;
     page_slide(from, to, dir);               /* the old page out, the new one in */
-    if (to == PAGE_INFO) info_open();
+    if (to == PAGE_INFO && info_open() < 0) return -1;   /* START at the fan's first-run prompt */
     if (from == PAGE_INFO) return board_enter();
     return 0;
 }
 
 /* SQUARE on the Board: a refresh, or the network start and the thread
- * again; on the News page the list too. */
+ * again; on the News page the list too, on the Futbol page its day. */
 static int square(void)
 {
     if (net_state == NET_UP && board_running()) {
         board_refresh();
         if (page == PAGE_NEWS) reader_refresh();
+        if (page == PAGE_FUTBOL) futbol_refresh();
         return 0;
     }
     return board_enter();
@@ -356,6 +358,7 @@ int main(void)
     atexit(leave);
     board_init();
     log_start();
+    night_load();                            /* night.txt: the waiting screen's night hours (0.5.0) */
     start_log_early();
     board_load_last();                       /* the last reply: the first frame has the data */
     if (unattended == 0 || (unattended > 0 && !fs_ok)) {
@@ -393,13 +396,15 @@ int main(void)
             int r = pressed & BTN_R1 ? 1 : -1;
             if (go((page + (r > 0 ? 1 : PAGE_CYCLE - 1)) % PAGE_CYCLE, r) < 0) break;
         } else if (page == PAGE_INFO) {
-            if (lv == 0) {                   /* CIRCLE: back to the Board */
+            if (lv == 0 && !info_editing()) {   /* CIRCLE: back to the Board (in the night's edit: its cancel) */
                 if (go(PAGE_BOARD, -1) < 0) break;
-            } else info_input();
+            } else if (info_input() < 0) break;
         } else if (page == PAGE_NEWS && reader_input(lv == 0)) {
                                              /* the reader's pad: the selection, CROSS, an article's scroll, CIRCLE back */
+        } else if (page == PAGE_FUTBOL && futbol_input()) {
+                                             /* the Futbol page's pad: the scroll, the day */
         } else if (pressed & BTN_SELECT) {
-            go(PAGE_INFO, 1);
+            if (go(PAGE_INFO, 1) < 0) break;
         } else if ((pressed & BTN_SQUARE) && square() < 0) break;
         s64 t = sysGetSystemTime() - t_start;
         if (unattended > 0) {
@@ -417,9 +422,11 @@ int main(void)
         fx_tick(ambient && !ambient_day() ? FXM_AURORA : FXM_SKY);   /* 0.3.2: the ambient mode's sky by day */   /* after the last ui_flip: a picture's swap, the next picture */
         sky_tick();                          /* the moon's sphere (into the texture no frame shows), the bolts */
         marquee_tick();                      /* the ticker's text: a headline a frame into the picture no frame shows */
-        if (page == PAGE_NEWS) stext_on = 1;
-        if (stext_on) stext_tick();          /* the reader's atlases: from the first News page, a few rows a frame until built */
+        if (page == PAGE_NEWS || page == PAGE_FUTBOL) stext_on = 1;
+        if (stext_on) stext_tick();          /* the scrolls' atlases: from the first News or Futbol page, a few rows a frame until built */
         reader_tick();                       /* the reader's scrolls and the news list's schedule */
+        futbol_tick();                       /* the Futbol page's scroll and its schedule */
+        info_tick();                         /* the Info page's console temperatures, every 10 s while it shows */
         if (page != was) frame_ev |= EV_PAGE;
         page_draw();
         start_end(SS_FRAME);                 /* once: the first Board frame (boot.txt's mark) */

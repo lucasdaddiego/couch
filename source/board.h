@@ -11,7 +11,8 @@
  * those two replies itself (pure code, parse.h) and makes the article's QR
  * code, so the frame only copies them (reader.c takes them). It also
  * writes couch.txt's queued lines (couch.h's couch_log_drain) between its
- * requests. It never journals. */
+ * requests. It never journals. Since 0.5.0 also GET /futbol?d=0 or d=1
+ * (the Futbol page, futbol.h), after the Board and before the news list. */
 #ifndef BOARD_H
 #define BOARD_H
 
@@ -32,23 +33,27 @@ extern char board_url_note[160];     /* why board_url.txt was not used, or "" */
 /* The thread's requests. board_ask_news and board_ask_article (the
  * reader, the main thread) ask for one at the thread's next free moment;
  * a new article replaces one that has not started. */
-enum { REQ_BOARD, REQ_NEWS, REQ_ARTICLE };
+enum { REQ_BOARD, REQ_NEWS, REQ_ARTICLE, REQ_FUTBOL };
 void board_ask_news(void);
 void board_ask_article(const char *id);
+void board_ask_futbol(int day);      /* 0 today, 1 tomorrow; a new day replaces one that has not started */
 
-/* A news or article reply as board_take hands it to reader_take: the
- * request, the GET's result, the parse (the thread's: BP_* of parse.h, -1
- * for no 200 answer), the result in words, the QR code of the article's
- * link (qrcodegen's buffer, qr_ok 0 when none). Valid during the call. */
+/* A news or article reply as board_take hands it to reader_take (a futbol
+ * reply to futbol_take): the request, the GET's result, the parse (the
+ * thread's: BP_* of parse.h, -1 for no 200 answer), the result in words,
+ * the QR code of the article's link (qrcodegen's buffer, qr_ok 0 when
+ * none). Valid during the call. */
 #define QR_MAX_VERSION 25            /* PS3 Health's: a link of 1019 bytes fits at ECC low */
 typedef struct {
-    int kind;                        /* REQ_NEWS or REQ_ARTICLE */
+    int kind;                        /* REQ_NEWS, REQ_ARTICLE or REQ_FUTBOL */
     char id[9];                      /* the id asked for */
+    int day;                         /* the futbol day asked for */
     const http_result *r;
     s64 at, us;                      /* the reply's system time, the GET's time */
     int prc;
     const news_data *news;
     const article_data *art;
+    const futbol_data *fut;
     int qr_ok;
     const unsigned char *qr;
     char words[160];                 /* "ok", "HTTP 404", "no answer in 10 s", ... */

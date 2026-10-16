@@ -45,7 +45,8 @@ SFX= AREA_DEF='67 38 1853 1042'                          # the default visible a
 [[ $AREA == narrow ]] && { SFX=_narrow; AREA_DEF='160 90 1760 990' }
 D=$'\xc2\xb0' DASH=$'\xe2\x80\x93' NL=$'\n'           # the degree sign, an en dash (U+2013), a line end
 I_ACUTE=$'\xc3\xad'                                   # i acute (U+00ED)
-TZ_DONE=$'done tz_params rc=0x00000000 ok=1\n'        # the clock settings read before: no prompt
+TZ_DONE=$'done tz_params rc=0x00000000 ok=1\ndone fan_policy rc=0x00000000 ok=1\n'   # the clock settings and the fan read before: no prompt
+TZ_ONLY=$'done tz_params rc=0x00000000 ok=1\n'        # the clock settings only: the Info page's fan prompt (0.5.0)
 URL_LAN=http://192.168.0.3:8787/board                 # a dotted address: the fake peer needs no DNS
 
 # The Worker test's first reply (worker/test/board.test.js: Berlin on 2026-10-16, every
@@ -75,6 +76,93 @@ for p in sorted(glob.glob(os.path.join(src, '*.esc'))):
     open(dst, 'wb').write(b)
 PY
 body_ok() { print -rn -- "$(< $REPLY)"$'\n'; }
+# 0.5.0: the rain of the next 2 h, the air and the futbol line (the private Worker's key; made-up teams)
+body_soon() { each soon_line; }
+soon_line() {
+    case $1 in
+    (wx_rain=*) print -r -- "wx_rain=rain|Rain from 19:00 (60%)"; print -r -- "wx_soon=Rain from 18:45";;
+    (air=*|futbol=*) ;;
+    (wx_state=*) print -r -- "$1"; print -r -- "air=42|3"; print -r -- "futbol=2|9|2 live";;
+    (*) print -r -- "$1";;
+    esac
+}
+body_soon2() { each soon2_line; }   # raining now until 19:30, the air poor and the UV high, the next game's words
+soon2_line() {
+    case $1 in
+    (wx_fx=*) print -r -- "wx_fx=61|88|1.2|135|20|30";;
+    (wx_rain=*) print -r -- "wx_rain=rain|Rain now (80%)"; print -r -- "wx_soon=Rain until 19:30";;
+    (air=*|futbol=*) ;;
+    (wx_state=*) print -r -- "$1"; print -r -- "air=163|9"; print -r -- "futbol=0|9|Next: Northbridge${DASH}Valley Athletic 21:00";;
+    (*) print -r -- "$1";;
+    esac
+}
+# The Futbol page's replies (0.5.0, GET /futbol?d=0 and d=1): made-up leagues and teams.
+futbol_today() {
+    print -rn -- "couch-futbol 1
+now=1792164000
+day=Today, Fri 16 Oct
+league=Northern League|Freedonia
+game=67'|Riverside United|Harbour City|2|1|Sport 1|live
+game=HT|Old Town Rovers|Lakeside|0|0|Sport 2, Stream Plus|live
+game=Final|Hillcrest|Ironworks FC|1|3|-|end
+game=21:00|Northbridge|Valley Athletic|-|-|Sport 1|pre
+game=23:15|Coast Wanderers|Millbrook Town|-|-|-|pre
+league=Second Division|Freedonia
+game=Final|Pine Grove|Eastfield|2|2|-|end
+game=Final|Saint Clement Athletic Club|Port Esperanza Sporting|0|1|Sport 3|end
+game=19:30|Westport|Granite Rock|-|-|Sport 3|pre
+game=20:00|Cedar Falls|Brookhaven|-|-|-|pre
+league=Continental Cup|International
+game=Postponed|Atlas Club|Sunrise FC|-|-|-|off
+game=Pens 4-3|Blue Harbour|Red Mill|1|1|Stream Plus|end
+game=88'|Golden Coast|Silver Lake|3|2|Sport 1, Sport 1 HD, Stream Plus, Radio Freedonia|live
+league=Women's League|Freedonia
+game=Final|Lakeside Women|Harbour City Women|4|0|Sport 2|end
+game=18:00|Riverside Ladies|Ironworks Ladies|-|-|Sport 2|pre
+league=Reserve League|Sylvania
+game=Final|North Point|South Point|1|0|-|end
+game=Final|East Gate|West Gate|2|3|-|end
+game=17:00|Old Mill|New Mill|-|-|-|pre
+game=Cancelled|High Moor|Low Moor|-|-|-|off
+more=2|11
+futbol_age=30
+futbol_state=ok
+end
+"
+}
+futbol_tomorrow() {
+    print -rn -- "couch-futbol 1
+now=1792164000
+day=Tomorrow, Sat 17 Oct
+league=Northern League|Freedonia
+game=15:00|Harbour City|Hillcrest|-|-|Sport 1|pre
+game=17:30|Lakeside|Riverside United|-|-|Sport 2|pre
+game=20:00|Ironworks FC|Old Town Rovers|-|-|Sport 1, Stream Plus|pre
+league=Second Division|Freedonia
+game=16:00|Eastfield|Westport|-|-|-|pre
+futbol_age=0
+futbol_state=ok
+end
+"
+}
+futbol_empty() {
+    print -rn -- "couch-futbol 1
+now=1792164000
+day=Today, Fri 16 Oct
+futbol_age=0
+futbol_state=ok
+end
+"
+}
+futbol_none() {
+    print -rn -- "couch-futbol 1
+now=1792164000
+day=Today, Fri 16 Oct
+futbol_age=0
+futbol_state=none|the source: HTTP 503
+end
+"
+}
 news_none() {    # /news when every feed failed
     print -rn -- "couch-news 1
 now=1792164000
@@ -134,7 +222,7 @@ snow_line() { case $1 in wx_fx=*) print -r -- "wx_fx=73|90|0.4|270|10|15";; *) p
 # The night scenes put the place at longitude 165 (and offset and PV_TZ at +11 h): the preview's
 # clock is fixed at 12:00 UTC, which is 23:00 there.
 body_old() { each old_line; }     # a minimal Worker: the reply without the derived keys (the host check's first reply)
-old_line() { [[ $1 == (geo|wx_fx|wx_hours|days_fx|rate_chg|extra_chg|spark|feature|numfmt)=* ]] || print -r -- "$1"; }
+old_line() { [[ $1 == (geo|wx_fx|wx_hours|days_fx|rate_chg|extra_chg|spark|feature|numfmt|wx_soon|air|futbol)=* ]] || print -r -- "$1"; }
 body_dayrain() { each dayrain_line; }   # a rainy day: WMO 61, 88 %, 20 km/h from the SE; a chip of each kind
 dayrain_line() {
     case $1 in
@@ -244,12 +332,22 @@ scn() {   # name script [VAR=value ...]; JOURNAL, BODY, NEWS, URL, AUTO, BIN, SA
     print -rn -- "${JOURNAL-$TZ_DONE}" > $sbx/$DIR/journal.txt
     [[ ${URL-$URL_LAN} != none ]] && print -r -- "${URL-$URL_LAN}" > $sbx/$DIR/board_url.txt
     [[ -n $AUTO ]] && print -r -- "$AUTO" > $sbx/$DIR/auto.txt
+    [[ -n $NIGHT ]] && print -r -- "$NIGHT" > $sbx/$DIR/night.txt   # 0.5.0: the night's hours
     [[ -n $NOFOLDER ]] && { rm -rf $sbx/$DIR; : > $sbx/$DIR }   # the app folder is a file: no folder, no journal
     body_${BODY:-ok} > $sbx/body.txt
     [[ -n $LAST ]] && { print -r -- "couch-last 1|$(( 1791460800 - LAST ))|${LASTURL:-${URL-$URL_LAN}}"; body_ok } > $sbx/$DIR/board_last.txt   # the last reply, LAST s old
     local b2=()
     [[ -n $BODY2 ]] && { body_$BODY2 > $sbx/body2.txt; b2=(PV_BOARD2=$sbx/body2.txt) }   # the second and later replies
     local rd=(PV_ARTICLES=$FIX/articles)                 # the reader: /news from the fixture (NEWS=none, 404), the articles
+    if [[ ${FUT:-day} != 404 ]]; then                   # the Futbol page: d0 and d1 (FUT=empty, none: d0 so; 404: no /futbol)
+        mkdir -p $sbx/futbol
+        case ${FUT:-day} in
+        (day) futbol_today > $sbx/futbol/d0.txt;;
+        (*) futbol_$FUT > $sbx/futbol/d0.txt;;
+        esac
+        futbol_tomorrow > $sbx/futbol/d1.txt
+        rd+=(PV_FUTBOL=$sbx/futbol)
+    fi
     case ${NEWS:-list} in
     (list) rd+=(PV_NEWS=$FIX/news.txt);;
     (404) ;;
@@ -297,9 +395,9 @@ board_stale|all)   # the dollar upstream failed, the Worker kept its old rates: 
     BODY=stale scn board_stale "120:SNAP=board_stale 121:EXIT" ;|
 board_none|all)    # both upstreams failed with no old data
     BODY=none scn board_none "120:SNAP=board_none 121:EXIT" ;|
-pages|all)         # L1 and R1 cycle the Board and the News (0.3.1): R1 to the News, R1 wraps to the Board, L1 to the News;
-                   # SELECT opens the Info page, R1 there does nothing, CIRCLE goes back to the Board
-    scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_back 182:L1 210:SNAP=pages_l1 212:SELECT 240:SNAP=pages_info 242:R1 270:SNAP=pages_info_r1 272:CIRCLE 300:SNAP=pages_circle 301:EXIT" ;|
+pages|all)         # L1 and R1 cycle the Board, the News and the Futbol page (0.5.0): R1 to the News, R1 to the Futbol page, R1
+                   # wraps to the Board, L1 to the Futbol page; SELECT opens the Info page, R1 there does nothing, CIRCLE goes back
+    scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_futbol 182:R1 210:SNAP=pages_back 212:L1 240:SNAP=pages_l1 242:SELECT 270:SNAP=pages_info 272:R1 300:SNAP=pages_info_r1 302:CIRCLE 330:SNAP=pages_circle 331:EXIT" ;|
 board_extras|all)  # the money extras none and stale, a dry forecast, the feeds failed: the News page says why
     NEWS=none BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 150:SNAP=news_none 151:EXIT" ;|
 board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines, no /news (the new Couch draws what came)
@@ -458,6 +556,30 @@ reader_ambient|all) # an open article holds the ambient mode off for 20 min (10 
                    # still the article, at 182 s the aurora; no list request while the article is open (not in the narrow pass)
     [[ $AREA != narrow ]] && scn reader_ambient "120:R1 160:DOWN 166:CROSS 5520:SNAP=reader_noambient 10920:SNAP=reader_ambient 10921:EXIT" PV_MAXFRAMES=11000
     [[ $AREA != narrow ]] && print -r -- "  requests: $(command grep -c '^GET /news' $P/build/sbx/reader_ambient$SFX/peer.log) of /news, $(command grep -c '^GET /board' $P/build/sbx/reader_ambient$SFX/peer.log) of /board; couch.txt: $(command grep -h '^ambient' $P/build/sbx/reader_ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+board_soon|all)    # 0.5.0: the rain of the next 2 h in the hero's band, the air's chips, the futbol line in the header by turns
+                   # with the holiday (8 s each: frame 600 is the futbol line); then raining until 19:30, a poor air, the next game
+    BODY=soon scn board_soon "120:SNAP=board_soon 600:SNAP=board_soon_futbol 601:EXIT"
+    BODY=soon2 scn board_soon2 "120:SNAP=board_soon2 600:SNAP=board_soon2_futbol 601:EXIT" ;|
+futbol|all)        # 0.5.0: the Futbol page (L1 from the Board): today's leagues with live games, the list scrolled, tomorrow (RIGHT),
+                   # back to today (LEFT); a minute later the live list again (every 60 s while a game is live), before the
+                   # waiting screen (60 s after the last press in the preview's build)
+    scn futbol "120:L1 160:SNAP=futbol_today 162:DOWN 166:DOWN 170:DOWN 174:DOWN 178:DOWN 182:DOWN 186:DOWN 190:DOWN 230:SNAP=futbol_scrolled 232:RIGHT 280:SNAP=futbol_tomorrow 282:LEFT 300:SNAP=futbol_back 3840:SNAP=futbol_live 3841:EXIT" PV_MAXFRAMES=4000
+    print -r -- "  requests: $(command grep -h '^GET /futbol' $P/build/sbx/futbol$SFX/peer.log | tr -d '\r' | tr '\n' ';') couch.txt: $(command grep -h '^futbol' $P/build/sbx/futbol$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+futbol_states|all) # 0.5.0: no games today, the source failed (the Worker's state none), no /futbol (a Worker without the page: 404), the
+                   # skeleton of a slow answer
+    FUT=empty scn futbol_empty "120:L1 160:SNAP=futbol_empty 161:EXIT"
+    FUT=none scn futbol_none "120:L1 160:SNAP=futbol_none 161:EXIT"
+    FUT=404 scn futbol_404 "120:L1 160:SNAP=futbol_404 161:EXIT"
+    scn futbol_slow "120:L1 160:SNAP=futbol_skeleton 161:EXIT" PV_FUTBOL_FAIL=slow ;|
+info_console|all)  # 0.5.0: SELECT with no fan_policy in the journal: the fan's first-run prompt, CROSS; the Info page with the Hardware row;
+                   # TRIANGLE edits the night, RIGHT to the start, UP twice; CROSS saves night.txt; then SELECT on a hot console
+    JOURNAL=$TZ_ONLY scn info_console "120:SELECT 150:SNAP=info_fan_prompt 152:CROSS 180:SNAP=info_console 182:TRIANGLE 210:SNAP=info_night_edit 212:RIGHT 216:UP 220:UP 240:SNAP=info_night_changed 242:CROSS 270:SNAP=info_night_saved 271:EXIT"
+    print -r -- "  night.txt: $(< $P/build/sbx/info_console$SFX/$DIR/night.txt); journal: $(command grep -h -e temps -e fan_policy $P/build/sbx/info_console$SFX/$DIR/journal.txt | tr '\n' ';') couch.txt: $(command grep -h -e '^console' -e '^fan_policy' -e '^night' $P/build/sbx/info_console$SFX/$DIR/couch.txt | tr '\n' ';')"
+    JOURNAL=$TZ_ONLY scn info_fan_skip "120:SELECT 150:CIRCLE 180:SNAP=info_fan_skipped 181:EXIT" PV_TEMPS=74,71 ;|
+ambient_nightmode|all) # 0.5.0: night.txt 22-07 and 23:00 at the place: the waiting screen is the dim clock on black; 2 min later it
+                   # fades out (half way) and comes back at its next place
+    NIGHT=22-07 BODY=night scn ambient_nightmode "3720:SNAP=ambient_nightmode 10800:SNAP=ambient_nightmode_fade 10920:SNAP=ambient_nightmode_moved 10921:EXIT" PV_TZ=660 PV_MAXFRAMES=11000
+    print -r -- "  couch.txt: $(command grep -h -e '^ambient' -e '^night' $P/build/sbx/ambient_nightmode$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 esac
 [[ -n $PV_CHILD ]] && exit 0                 # the PNGs: the parent's, once
 py=${PYTHON:-python3}

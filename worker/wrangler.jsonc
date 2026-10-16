@@ -12,7 +12,8 @@
 // - NEWS_FEEDS: "Label*weight@category=URL" between commas, at most 6 (weight and category
 //   optional): RSS feeds; NEWS_MAX headlines on the Board (at most 8), the weight a feed's share
 //   of them; NEWS_LIST on the News page. Empty: no news.
-// - *_TTL: seconds a cached answer stays fresh.
+// - *_TTL: seconds a cached answer stays fresh (AIR_TTL, the air quality's, is optional: WX_TTL's
+//   when absent).
 {
   "name": "couch-board",
   "main": "src/index.js",
