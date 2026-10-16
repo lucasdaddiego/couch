@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   boardText, wmoWords, clean, money, localWhen, tzOffset, parseCasas, MAX_BYTES, fold, skyWords, smnNow,
-  rainWords, sunTimes, moonPhase, dayWords, moneyLines, newsLines, NEW_MOON_2000, SYNODIC_DAYS,
+  rainWords, sunTimes, moonPhase, dayWords, moneyLines, newsLines, NEWS_FRESH, NEW_MOON_2000, SYNODIC_DAYS,
   geoLine, smnCode, fxLine, hoursLine, change, usdChgLines, sparkLine, rpChgLine, addDays, localDate, shortDate, holidayLine,
 } from '../src/board.js';
 import { zipEntry, unzipFirst, latin1, obsTime, parseRow, findRow } from '../src/smn.js';
@@ -705,12 +705,21 @@ test('news: NEWS_FEEDS, the fair share per feed, the newest first, the states', 
   const a = Array.from({ length: 10 }, (_, i) => ({ title: `A${i}`, at: 109 - i }));
   const b = [{ title: 'B0', at: null }, { title: 'B1', at: 150 }, { title: ' ', at: 160 }];
   assert.deepEqual(newsLines([{ label: 'A', r: okR(a, 30) }, { label: 'B', r: { state: 'stale', reason: 'b.example: HTTP 503', age: 900, data: b } }], 200, 8), [
-    'news=B|50|B1', 'news=A|91|A0', 'news=A|92|A1', 'news=A|93|A2', 'news=A|94|A3', 'news=A|95|A4', 'news=A|96|A5', 'news=B|-|B0',
+    'news=B|50|B1', 'news=A|91|A0', 'news=A|92|A1', 'news=A|93|A2', 'news=A|94|A3', 'news=A|95|A4', 'news=A|96|A5', 'news=A|97|A6',
     'news_age=900', 'news_state=stale|b.example: HTTP 503',
   ]);
   assert.deepEqual(newsLines([{ label: 'A', r: { state: 'none', reason: 'a.example: no items', age: 0, data: null } }], 200, 8),
     ['news_age=0', 'news_state=none|a.example: no items']);
   assert.deepEqual(newsLines([], 200, 8), []);
+  // NEWS_FRESH (2026-10-16): an item older than 6 h, or with no date, only fills the places left
+  const T = 100000, W = (p, n) => Array.from({ length: n }, (_, i) => ({ title: `${p}${i}`, at: T - 60 * i }));
+  const stale = [{ title: 'S0', at: T - NEWS_FRESH - 1 }, { title: 'S1', at: null }];
+  assert.deepEqual(newsLines([{ label: 'A', r: okR(W('A', 10)) }, { label: 'S', weight: 3, r: okR(stale) }], T, 4)
+    .filter((l) => l.startsWith('news=')).map((l) => l.split('|')[2]), ['A0', 'A1', 'A2', 'A3']);
+  assert.deepEqual(newsLines([{ label: 'A', r: okR(W('A', 2)) }, { label: 'S', weight: 3, r: okR(stale) }], T, 8)
+    .filter((l) => l.startsWith('news=')).map((l) => l.split('|')[2]), ['A0', 'A1', 'S0', 'S1']);
+  assert.deepEqual(newsLines([{ label: 'S', r: okR(stale) }], T, 8, NEWS_FRESH + 10)
+    .filter((l) => l.startsWith('news=')).map((l) => l.split('|')[2]), ['S0', 'S1']);
 });
 
 // A body in chunks of size bytes, as a fetch's: pulls counts the chunks read, cancelled marks a

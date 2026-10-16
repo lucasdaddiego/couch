@@ -70,6 +70,9 @@ The keys of 2026-10-13 (Lucas's choices; a Couch 0.1.0 skips them, so the versio
   in the order of `NEWS_FEEDS`, then each feed gives one item in turn until 8 lines, so a feed
   with no items leaves its share to the others; then the lines are sorted newest first. With
   weight 1 for every feed (the old `Label=URL` form) this is the fair share in turn of before.
+  Since 2026-10-16 the shares take only items of the last `NEWS_FRESH` seconds (21600, 6 h;
+  Clarín's world feed gave an item 8 h old); older items and items with no date fill the places
+  left, newest first.
   Each feed is an upstream of its own (`https://couch.internal/news2?u=<URL>`, `news2` since
   2026-10-14), cached as its parsed items, not as XML: at most 20 (`FEED_ITEMS`, for `/news`;
   8 before), each with its id, title, whole title, date, link and summary, the cache that

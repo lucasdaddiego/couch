@@ -405,19 +405,26 @@ export function rpChgLine({ rp, list, locale }) {
 // items leaves its share to the others. Then the newest first. With weight 1 for every feed this
 // is a fair share in turn. news=source|age|title, the age in seconds at now ("-" for an item with
 // no date), then news_age (the oldest feed's) and news_state: ok when every feed is ok, else stale
-// with the first failed feed's reason while any feed has items, else none.
-export function newsLines(feeds, now, max) {
+// with the first failed feed's reason while any feed has items, else none. Since 2026-10-16 the
+// shares take only the items of the last `fresh` seconds (NEWS_FRESH, 6 h; Clarín's world feed
+// gave an item 8 h old); older items and items with no date fill the places left, newest first.
+export const NEWS_FRESH = 21600;
+export function newsLines(feeds, now, max, fresh = NEWS_FRESH) {
   if (!Array.isArray(feeds) || !feeds.length) return [];
-  const lists = feeds.map(({ label, r }) => ((r && Array.isArray(r.data) ? r.data : [])
+  const all = feeds.map(({ label, r }) => ((r && Array.isArray(r.data) ? r.data : [])
     .filter((x) => x && typeof x.title === 'string' && clean(x.title))
     .map((x) => ({ label: clean(label), title: clean(x.title), at: Number.isFinite(x.at) ? x.at : null }))
     .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity))));
+  const isFresh = (x) => x.at !== null && now - x.at <= fresh;
+  const lists = all.map((l) => l.filter(isFresh));
   const picked = [], taken = lists.map(() => 0);
   const take = (j, k) => {
     for (; k > 0 && taken[j] < lists[j].length && picked.length < max; k--) picked.push(lists[j][taken[j]++]);
   };
   feeds.forEach((f, j) => take(j, Number.isInteger(f.weight) && f.weight > 0 ? f.weight : 1));
   while (picked.length < max && lists.some((l, j) => taken[j] < l.length)) lists.forEach((_, j) => take(j, 1));
+  const old = all.flat().filter((x) => !isFresh(x)).sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity));
+  picked.push(...old.slice(0, Math.max(0, max - picked.length)));
   picked.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity));
   const out = picked.map((x) => `news=${x.label}|${x.at === null ? '-' : Math.max(0, now - x.at)}|${x.title}`);
   const rs = feeds.map((f) => f.r || NONE);
@@ -519,7 +526,7 @@ export function boardText({ now, usd, wx, smn = NONE, money: extras = {}, news =
   out.push(`wx_age=${Math.max(0, wx.age | 0)}`, `wx_state=${stateLine(wx)}`);
   const h = holidayLine(hol, now, tz);
   if (h) out.push(h);
-  out.push(...newsLines(news, now, Math.min(8, Number(env.NEWS_MAX) || 8)), 'end');
+  out.push(...newsLines(news, now, Math.min(8, Number(env.NEWS_MAX) || 8), Number(env.NEWS_FRESH) || NEWS_FRESH), 'end');
   let text = out.join('\n') + '\n';
   // A body over MAX_BYTES would be refused whole by a Couch 0.1.0 ("the reply is over 4 KB": its
   // buffer is 4 KB) and cut by a newer one, so lines drop from the end until it fits (design 5.5):
