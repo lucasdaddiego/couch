@@ -9,7 +9,7 @@
 // the same selectors.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { PAGE_BYTES, QUIET_BYTES, ENOUGH_CHARS } from '../src/article.js';
@@ -20,9 +20,10 @@ try {
   Miniflare = m.Miniflare || (m.default && m.default.Miniflare) || null;
   if (!Miniflare) why = 'miniflare has no Miniflare export';
 } catch (e) {
-  why = `no miniflare (${(e && e.code) || e}): zsh couch/worker/dev.zsh test runs these`;
+  why = `no miniflare (${(e && e.code) || e}): zsh worker/dev.zsh test runs these`;
 }
-const skip = Miniflare ? false : why;
+const skip = !Miniflare ? why : existsSync(new URL('./fixtures/article_bbc.html', import.meta.url)) ? false
+  : "the publishers' feeds and pages are not in the public repo (test/fixtures/README.md)";
 const root = fileURLToPath(new URL('..', import.meta.url));
 const page = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
 let mf = null;

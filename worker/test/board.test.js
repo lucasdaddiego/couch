@@ -17,7 +17,7 @@
 // 7,721).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   boardText, wmoWords, clean, money, localWhen, tzOffset, parseCasas, MAX_BYTES, fold, skyWords, smnNow,
   rainWords, sunTimes, moonPhase, dayWords, moneyLines, newsLines, NEWS_FRESH, NEW_MOON_2000, SYNODIC_DAYS,
@@ -31,7 +31,9 @@ import {
 import { readTail, tailEntries, TAIL_BYTES } from '../src/series.js';
 import { get, handle, newsUpstream, RETRY_S, CLOSES_MISS_TTL } from '../src/index.js';
 
-const text = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
+const text = (f) => (!existsSync(new URL(`./fixtures/${f}`, import.meta.url)) ? '' : readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8'));
+// the news fixtures (publishers' text) stay private: without them their tests are skipped
+const NO_NEWS = existsSync(new URL('./fixtures/clarin.xml', import.meta.url)) ? false : "the publishers' feeds and pages are not in the public repo (test/fixtures/README.md)";
 const fixture = (f) => JSON.parse(text(f));
 const usdData = fixture('dolares.json');
 const wxData = fixture('meteo.json');
@@ -47,7 +49,7 @@ const mix = {
   clarinPol: text('clarin_politica.xml'), clarinMundo: text('clarin_mundo.xml'), bbc: text('bbc_world.xml'),
 };
 const MIX_NOW = 1791929070; // 2026-10-13 22:04:30 UTC: the time of the NEWS_FEEDS fixtures
-// NEWS_FEEDS of 2664c55, the mix that those fixtures were fetched for (with Infobae through Google News)
+// NEWS_FEEDS of 72c44dd, the mix that those fixtures were fetched for (with Infobae through Google News)
 const MIX_FEEDS = 'Infobae*2=https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419,' +
   '\u00c1mbito=https://www.ambito.com/rss/pages/economia.xml,' +
   'Infobae*2=https://news.google.com/rss/search?q=site:infobae.com/politica+when:1d&hl=es-419&gl=AR&ceid=AR:es-419,' +
@@ -84,13 +86,13 @@ const junChg = () => ({
 // Infobae's items are from 21:32 UTC, after JUN_NOW: their age is 0, so they come first.
 const junNews = () => [{ label: 'Clar\u00edn', r: okR(parseFeed(clarinXml), 120) }, { label: 'Infobae', r: okR(parseFeed(ibXml), 300) }];
 
-// The first test's reply is the host check's (couch/tools/hostcheck/run.zsh takes this array, line
+// The first test's reply is the host check's (tools/hostcheck/run.zsh takes this array, line
 // for line) and the preview's body_ok: it keeps its text as UTF-8, with no escapes. REPLY_BYTES is
 // its size, the design's normal reply (5.5: about 2.3 KB). The keys of
 // 0.3.0 (design section 5) are in it: the dollar rates are Friday's (dolares.json), the closes of
 // Monday 12 Oct the entries dated 2026-10-13, so only Cripto moved.
-const REPLY_BYTES = 2219;
-test('the reply of 2026-10-13 in Junin, every upstream, line for line', () => {
+const REPLY_BYTES = 2215;
+test('the reply of 2026-10-13 in Junin, every upstream, line for line', { skip: NO_NEWS }, () => {
   const t = boardText({
     now: JUN_NOW, env: junEnv, usd: okR(usdData, 42), wx: okR(junData, 310), money: junMoney(), news: junNews(), chg: junChg(),
   });
@@ -674,7 +676,7 @@ test('news: entities, CDATA, tags, the cut at a word', () => {
   assert.equal(cutTitle('ñ'.repeat(20), 10), `${'ñ'.repeat(7)}...`);  // code points, not bytes
 });
 
-test('news: the live feeds of 2026-10-13', () => {
+test('news: the live feeds of 2026-10-13', { skip: NO_NEWS }, () => {
   const c = parseFeed(clarinXml), ib = parseFeed(ibXml);
   assert.equal(c.length, ITEMS_MAX);                                  // 8 of its 10 items
   assert.deepEqual(c[3], { title: 'La embajadora de EEUU en Grecia dimite ante escándalo de presunta corrupción', at: 1791912009 });
@@ -740,7 +742,7 @@ function chunked(s, size) {
 }
 const bytesOf = (s) => new TextEncoder().encode(s).length;
 
-test('news: only the head of a feed is read: the end of the 8th item, the byte cap, or the end', async () => {
+test('news: only the head of a feed is read: the end of the 8th item, the byte cap, or the end', { skip: NO_NEWS }, async () => {
   // The cut: Infobae's head (61440 bytes, 10 items) stops at the end of its 8th item, byte 50320,
   // and the rest of the body is cancelled.
   assert.equal(bytesOf(ibXml), 61440);
@@ -777,7 +779,7 @@ test('news: only the head of a feed is read: the end of the 8th item, the byte c
   assert.equal(await readHead(null), '');
 });
 
-test('get news: one cache entry per feed URL, the parsed items; a failed feed names its host', async () => {
+test('get news: one cache entry per feed URL, the parsed items; a failed feed names its host', { skip: NO_NEWS }, async () => {
   const feed = { label: 'Clarín', url: 'https://www.clarin.com/rss/lo-ultimo/' };
   const d = deps({ answers: { 'www.clarin.com': { body: clarinXml } }, now: JUN_NOW });
   const r = await get(newsUpstream(feed), junEnv, JUN_NOW, d);
@@ -820,7 +822,7 @@ test('the 4 KB guard drops the news first, then the money and the sky, then the 
   assert.ok(ul.includes('usd_state=ok') && ul.includes('news_state=ok') && ul.at(-1) === 'end');
 });
 
-test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leaves the other', async () => {
+test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leaves the other', { skip: NO_NEWS }, async () => {
   const feeds = 'Clarín=https://www.clarin.com/rss/lo-ultimo/,Infobae=https://www.infobae.com/arc/outboundfeeds/rss/';
   const e = { ...junEnv, NEWS_FEEDS: feeds };
   const all = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData },
@@ -847,7 +849,7 @@ test('handle: every upstream of 2026-10-13, two feeds, PF_BANK; a dead feed leav
 
 // ---- 2026-10-13: the mix of NEWS_FEEDS (Infobae through Google News, Ambito, Clarin, BBC) ------------
 
-test('news: the publisher that Google News appends goes; the weights of NEWS_FEEDS', () => {
+test('news: the publisher that Google News appends goes; the weights of NEWS_FEEDS', { skip: NO_NEWS }, () => {
   assert.equal(dropPublisher('Dólar hoy - Infobae', 'Infobae'), 'Dólar hoy');
   assert.equal(dropPublisher('Dólar hoy – Infobae', 'Infobae'), 'Dólar hoy');
   assert.equal(dropPublisher('Sobre Infobae - Infobae', 'Infobae'), 'Sobre Infobae');
@@ -869,7 +871,7 @@ test('news: the publisher that Google News appends goes; the weights of NEWS_FEE
   const mixed = parseFeeds(MIX_FEEDS);
   assert.deepEqual(mixed.map((f) => `${f.label}*${f.weight}`), ['Infobae*2', 'Ámbito*1', 'Infobae*2', 'Clarín*1', 'Clarín*1', 'BBC*1']);
   assert.equal(mixed[0].url, 'https://news.google.com/rss/search?q=site:infobae.com/economia+when:1d&hl=es-419&gl=AR&ceid=AR:es-419');
-  // wrangler.jsonc since 3d98a41 (Google News gave no answer to the Worker): Ambito x3, Clarin
+  // wrangler.jsonc since 0623fdc (Google News gave no answer to the Worker): Ambito x3, Clarin
   // politics x3, Clarin world, BBC world, 8 lines in all
   const live = parseFeeds(wranglerVars.NEWS_FEEDS);
   assert.deepEqual(live.map((f) => `${f.label}*${f.weight}`), ['Ámbito*3', 'Clarín*3', 'Clarín*1', 'BBC*1']);
@@ -894,7 +896,7 @@ function itemEnd(s, n) {
   return i + 7;
 }
 
-test('news: a feed that is not newest first is read further and sorted; one that is stops at its 8th item', async () => {
+test('news: a feed that is not newest first is read further and sorted; one that is stops at its 8th item', { skip: NO_NEWS }, async () => {
   // Ambito is newest first: the read stops at the end of its 8th item, byte 6702, and the rest is cancelled.
   const a = chunked(mix.ambito, 1024);
   const ah = await readFeedHead(a.body);
@@ -934,7 +936,7 @@ test('news: a feed that is not newest first is read further and sorted; one that
   assert.equal(await readHead(chunked(feed, 4096).body, { items: 2, bytes: 80, more: () => null }), feed.slice(0, itemEnd(feed, 2)));
 });
 
-test('handle: the mix of the fixtures (MIX_FEEDS): 3 economy, 3 politics, 2 world; a dead feed leaves its share to the others', async () => {
+test('handle: the mix of the fixtures (MIX_FEEDS): 3 economy, 3 politics, 2 world; a dead feed leaves its share to the others', { skip: NO_NEWS }, async () => {
   const e = { ...junEnv, NEWS_FEEDS: MIX_FEEDS, NEWS_MAX: wranglerVars.NEWS_MAX };
   const gn = (s) => `news.google.com/rss/search?q=site:infobae.com/${s}+when:1d&hl=es-419&gl=AR&ceid=AR:es-419`;
   const all = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData },
@@ -1201,7 +1203,7 @@ test('get: the negative cache: a failed upstream is not waited for, and is tried
   assert.deepEqual([h.state, h.reason, h.age, h.data, d7.calls.length], ['stale', 'dolarapi.com: HTTP 503', 360, usdData, 0]);
 });
 
-test('handle: a dead feed costs its timeout once; the next Boards answer without it', async () => {
+test('handle: a dead feed costs its timeout once; the next Boards answer without it', { skip: NO_NEWS }, async () => {
   const timeout = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
   const e = { ...junEnv, NEWS_FEEDS: 'Clarín=https://www.clarin.com/rss/lo-ultimo/,Dead=https://dead.example/rss' };
   const answers = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData }, ...dayRoutes('2026-10-13'),
@@ -1236,7 +1238,7 @@ test('the 4 KB guard with the keys of 0.3.0: 8 titles of 110 three-byte characte
   assert.deepEqual(full, [8, 1, 1, 7, 3, 5, 9]);
   // the worst case of the design (8 titles of 110 three-byte characters) fits: 4,050 bytes, nothing drops
   const w = reply(junEnv, '€'.repeat(109));
-  assert.deepEqual([new TextEncoder().encode(w).length, groups(w)], [4050, full]);
+  assert.deepEqual([new TextEncoder().encode(w).length, groups(w)], [4046, full]);
   // titles of 301 characters, 300 of them two bytes: the oldest 4 headlines go, every other line stays
   const t = reply(junEnv, 'ñ'.repeat(300));
   const got = groups(t);
@@ -1256,7 +1258,7 @@ test('the 4 KB guard with the keys of 0.3.0: 8 titles of 110 three-byte characte
   assert.ok(!u.includes('money_chg=') && u.includes('\ngeo=') && u.includes('\nusd_state=ok\n'));
 });
 
-test('handle: the vars of wrangler.jsonc on a cold cache: 19 fetches, 47 of the free plan\'s 50 subrequests; the live mix', async () => {
+test('handle: the vars of wrangler.jsonc on a cold cache: 19 fetches, 47 of the free plan\'s 50 subrequests; the live mix', { skip: NO_NEWS }, async () => {
   const e = { ...wranglerVars, NEWS_FEEDS: wranglerVars.NEWS_FEEDS };
   const answers = { ...moneyOk, 'dolarapi.com': { body: usdData }, 'api.open-meteo.com': { body: junData }, 'ssl.smn.gob.ar': { body: zipBytes },
     ...dayRoutes('2026-10-13'), ...seriesRoutes, 'www.ambito.com': { body: mix.ambito }, 'www.clarin.com/rss/politica/': { body: mix.clarinPol },

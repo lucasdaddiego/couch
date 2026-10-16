@@ -48,7 +48,7 @@ I_ACUTE=$'\xc3\xad'                                   # i acute (U+00ED)
 TZ_DONE=$'done tz_params rc=0x00000000 ok=1\n'        # the clock settings read before: no prompt
 URL_LAN=http://192.168.0.3:8787/board                 # a dotted address: the fake peer needs no DNS
 
-# The Worker test's first reply (couch/worker/test/board.test.js: Junin on 2026-10-13, every
+# The Worker test's first reply (worker/test/board.test.js: Junin on 2026-10-13, every
 # upstream, line for line), extracted once per run as the host check does: body_ok, and the
 # others derived from it line by line, so this file stays ASCII.
 REPLY=$P/build/worker_reply.txt
@@ -64,7 +64,10 @@ open(sys.argv[2], 'w', encoding='utf-8', newline='').write('\n'.join(items))
 PY
 FIX=$P/build/fixtures
 mkdir -p $FIX/articles
-[[ -n $PV_CHILD ]] || ${PYTHON:-python3} -I - $P/fixtures $FIX <<'PY' || { print -u2 "the reader's fixtures: not decoded"; exit 1 }
+FSRC=$P/fixtures                         # the reader's fixtures (publishers' text) are not in the repo:
+[[ -e $FSRC/news.esc ]] || FSRC=${COUCH_FIXTURES:-$HOME/code/ps3tools_private/apps/couch-fixtures}/preview   # COUCH_FIXTURES
+[[ -e $FSRC/news.esc ]] || { print -u2 "the reader's fixtures are private: set COUCH_FIXTURES (tools/preview/fixtures/README.md)"; exit 1 }
+[[ -n $PV_CHILD ]] || ${PYTHON:-python3} -I - $FSRC $FIX <<'PY' || { print -u2 "the reader's fixtures: not decoded"; exit 1 }
 import codecs, glob, os, sys
 src, out = sys.argv[1], sys.argv[2]
 for p in sorted(glob.glob(os.path.join(src, '*.esc'))):

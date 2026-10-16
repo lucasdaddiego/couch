@@ -1,6 +1,6 @@
 /* Couch's host check of the reader's pure code in source/parse.c (0.3.1,
  * stage 11; tools/hostcheck/run.zsh): news_parse and article_parse against
- * the Worker test's replies (couch/worker/test/reader.test.js: its /news
+ * the Worker test's replies (worker/test/reader.test.js: its /news
  * item and its /article texts, which run.zsh extracts) and the live replies
  * of 2026-10-14 (tools/preview/fixtures, decoded), each cut at every byte,
  * with CR LF, as version 2, with long fields, too many lines, a 32 KB list

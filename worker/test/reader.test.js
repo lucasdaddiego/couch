@@ -6,13 +6,15 @@
 // the real extraction are article.workerd.test.js's (in workerd, through miniflare).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { clean, MAX_BYTES } from '../src/board.js';
 import { CATEGORY_RE, decodeEntities, feedItems, FEED_ITEMS, itemId, parseFeed, parseFeeds, SUMMARY_MAX, TITLE_MAX, FULL_MAX } from '../src/news.js';
 import { articleText, ARTICLE_BYTES, capParas, dateWords, LINK_BYTES, NEWS_BYTES, NEWS_LIST, newsText, PARA_MAX, quotas, TEXT_BYTES } from '../src/reader.js';
 import { get, handle, newsUpstream, RETRY_S } from '../src/index.js';
 
-const text = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
+const text = (f) => (!existsSync(new URL(`./fixtures/${f}`, import.meta.url)) ? '' : readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8'));
+// the news fixtures (publishers' text) stay private: without them their tests are skipped
+const NO_NEWS = existsSync(new URL('./fixtures/news_bbc.xml', import.meta.url)) ? false : "the publishers' feeds and pages are not in the public repo (test/fixtures/README.md)";
 const feeds = {
   ambito: text('news_ambito.xml'), clPol: text('news_clarin_politica.xml'), clMun: text('news_clarin_mundo.xml'), bbc: text('news_bbc.xml'),
 };
@@ -86,7 +88,7 @@ const itemLines = (t) => t.split('\n').filter((l) => l.startsWith('item='));
 
 // ---- the feeds: ids, links, summaries, categories --------------------------------------------------
 
-test('feedItems: the id, the link, the whole title and the summary of each item, the newest first', () => {
+test('feedItems: the id, the link, the whole title and the summary of each item, the newest first', { skip: NO_NEWS }, () => {
   const a = feedItems(feeds.ambito), p = feedItems(feeds.clPol), w = feedItems(feeds.clMun), b = feedItems(feeds.bbc);
   assert.deepEqual([a.length, p.length, w.length, b.length], [20, 10, 10, FEED_ITEMS]);    // BBC: its 20 newest of 26
   for (const x of [...a, ...p, ...w, ...b]) {
@@ -118,7 +120,7 @@ test('feedItems: the id, the link, the whole title and the summary of each item,
   assert.deepEqual(parseFeed(feeds.ambito), a.slice(0, 8).map(({ title, at }) => ({ title, at })));
 });
 
-test('feedItems: an id stays while its item is in the feed (a new item first, the oldest gone); no link: the title', () => {
+test('feedItems: an id stays while its item is in the feed (a new item first, the oldest gone); no link: the title', { skip: NO_NEWS }, () => {
   const items = feeds.clMun.match(/<item\b[\s\S]*?<\/item>/g);
   const fresh = '<item><title>Nueva</title><link>https://www.clarin.com/mundo/nueva_0_x.html</link><pubDate>Wed, 14 Oct 2026 20:30:00 +0000</pubDate></item>';
   const later = feeds.clMun.replace(items[0], () => fresh + items[0]).replace(items.at(-1), () => '');
@@ -156,7 +158,7 @@ test('quotas: each feed\'s share by weight, largest remainder, ties to the earli
 
 // ---- GET /news ----------------------------------------------------------------------------------
 
-test('/news: 30 headlines of the four feeds, 3/8 economy, 3/8 politics, 2/8 world, the newest first', async () => {
+test('/news: 30 headlines of the four feeds, 3/8 economy, 3/8 politics, 2/8 world, the newest first', { skip: NO_NEWS }, async () => {
   const d = deps({ answers: feedRoutes });
   const t = await body(d, '/news');
   // a cold cache: 4 fetches, 4 cache reads and 4 writes, 12 of the free plan's 50 subrequests
@@ -184,7 +186,7 @@ test('/news: 30 headlines of the four feeds, 3/8 economy, 3/8 politics, 2/8 worl
   assert.equal(itemLines(again)[0], items[0].replace('|1157|', '|1217|'));
 });
 
-test('/news and /board share the feed cache: a /board after a /news fetches no feed', async () => {
+test('/news and /board share the feed cache: a /board after a /news fetches no feed', { skip: NO_NEWS }, async () => {
   const cache = fakeCache();
   await body(deps({ cache, answers: feedRoutes }), '/news');
   const d = deps({ cache, answers: feedRoutes, now: NEWS_NOW + 30 });
@@ -195,7 +197,7 @@ test('/news and /board share the feed cache: a /board after a /news fetches no f
   assert.ok(t.includes('\nnews=Ámbito|1187|Organizaciones cuestionan el acuerdo con el FMI por su impacto social y ambiental\n'));
 });
 
-test('/news: a dead feed leaves its share to the others, stale with its reason; no NEWS_FEEDS: none', async () => {
+test('/news: a dead feed leaves its share to the others, stale with its reason; no NEWS_FEEDS: none', { skip: NO_NEWS }, async () => {
   const d = deps({ answers: { ...feedRoutes, 'www.clarin.com/rss/politica/': { status: 503, body: 'x' } } });
   const t = await body(d, '/news');
   const f = itemLines(t).map((l) => l.split('|'));
@@ -207,7 +209,7 @@ test('/news: a dead feed leaves its share to the others, stale with its reason; 
   assert.ok(itemLines(dead).length === 0 && /\nnews_state=none\|ambito\.com: no route\nend\n$/.test(dead));
 });
 
-test('/news: the size cap drops the oldest items; 3-byte text stays whole UTF-8', () => {
+test('/news: the size cap drops the oldest items; 3-byte text stays whole UTF-8', { skip: NO_NEWS }, () => {
   const many = Array.from({ length: 6 }, (_, j) => ({
     label: `Fuente${j}`, category: 'world', weight: 1,
     r: { state: 'ok', age: 0, data: Array.from({ length: 20 }, (_, i) => ({
@@ -229,7 +231,7 @@ test('/news: the size cap drops the oldest items; 3-byte text stays whole UTF-8'
 
 const PAGE = '<html><body><p>Primer párrafo con acentos: económico, país.</p><div><p>Segundo | párrafo   con\n espacios.</p></div></body></html>';
 
-test('/article: the item of a feed, its page\'s paragraphs, then the cache (1 h); 15 subrequests cold', async () => {
+test('/article: the item of a feed, its page\'s paragraphs, then the cache (1 h); 15 subrequests cold', { skip: NO_NEWS }, async () => {
   const d = deps({ answers: { ...feedRoutes, [pathOf(LINKS.ambito)]: { body: PAGE } } });
   const t = await body(d, '/article?id=565500e1');
   assert.equal(t, [
@@ -262,7 +264,7 @@ test('/article: the item of a feed, its page\'s paragraphs, then the cache (1 h)
   assert.ok(ct.includes('\nsource=Clarín\ncategory=politics\n') && ct.includes('\ndate=Wed 14 Oct 15:42|4741\n'));
 });
 
-test('/article: a blocked page answers the summary at once, remembered (negative cache), tried again after RETRY_S', async () => {
+test('/article: a blocked page answers the summary at once, remembered (negative cache), tried again after RETRY_S', { skip: NO_NEWS }, async () => {
   const blocked = { ...feedRoutes, [pathOf(LINKS.bbc)]: { status: 403, body: 'Forbidden' } };
   const d = deps({ answers: blocked });
   const t = await body(d, '/article?id=2398f1f7');
@@ -299,7 +301,7 @@ test('/article: a blocked page answers the summary at once, remembered (negative
   assert.ok((await body(slow, '/article?id=f29dae8f')).includes('\nstate=summary|clarin.com: no answer in 8 s\n'));
 });
 
-test('/article: no open proxy: only an id of a cached feed item is fetched', async () => {
+test('/article: no open proxy: only an id of a cached feed item is fetched', { skip: NO_NEWS }, async () => {
   const evil = 'https://evil.example/x';
   const d = deps({ answers: { ...feedRoutes, 'evil.example': { body: PAGE } } });
   const t = await body(d, `/article?id=${itemId(evil)}`);
@@ -315,7 +317,7 @@ test('/article: no open proxy: only an id of a cached feed item is fetched', asy
   assert.equal((await handle(req('/news/'), env, deps())).status, 404);
 });
 
-test('/article: the size caps (12 KB of paragraphs, whole ones, each 1500 code points), UTF-8 whole', async () => {
+test('/article: the size caps (12 KB of paragraphs, whole ones, each 1500 code points), UTF-8 whole', { skip: NO_NEWS }, async () => {
   const big = Array.from({ length: 40 }, (_, i) => `${i} ${'€€€€€ '.repeat(400)}`);
   const d = deps({ answers: { ...feedRoutes, [pathOf(LINKS.clMun)]: { body: 'x' } }, extract: async () => ({ paras: big }) });
   const t = await body(d, '/article?id=f29dae8f');
@@ -338,7 +340,7 @@ test('articleText: the lines in order; a long link goes; the date in TZ', () => 
   assert.equal(dateWords(1792006920, 'America/Argentina/Buenos_Aires'), 'Wed 14 Oct 16:42');
 });
 
-test('get: a feed\'s cache entry holds the items /news and /article need, under news2', async () => {
+test('get: a feed\'s cache entry holds the items /news and /article need, under news2', { skip: NO_NEWS }, async () => {
   const d = deps({ answers: feedRoutes });
   const f = parseFeeds(env.NEWS_FEEDS)[3];
   const r = await get(newsUpstream(f), env, NEWS_NOW, d);

@@ -356,8 +356,8 @@ The 4 KB guard: a Couch 0.1.0 refuses a body over 4096 bytes whole, so the reply
 4096 bytes. Lines drop from the end in this order (design 5.5): the news, the Blue series, the 12
 hours, the changes (`usd_chg`, `money_chg`), the money lines, the sky lines (`wx_rain`, `wx_sun`,
 `wx_moon`, `wx_fx`, `days_fx`), then the rate and day lines. `geo` stays with `city`. The reply of
-2026-10-13 with every upstream has 2219 bytes (1618 without the keys of 0.3.0); with 8 titles of
-110 three-byte characters it has 4050 bytes and nothing drops.
+2026-10-13 with every upstream has 2215 bytes (1618 without the keys of 0.3.0); with 8 titles of
+110 three-byte characters it has 4046 bytes and nothing drops.
 
 - `src/board.js`: the reply's format, the sky, the money lines, the news lines, pure functions.
 - `src/smn.js`: SMN's zip, its Latin-1 text and its rows, pure functions.
@@ -398,12 +398,12 @@ hours, the changes (`usd_chg`, `money_chg`), the money lines, the sky lines (`wx
   pages of 2026-10-14 (`article_*.html`, trimmed: no head, scripts, styles, SVGs, images or
   comments, cut about 12 KB after the body; 36 to 53 KB each), a page in 7-byte chunks, the
   generic rule and the early stops. CI runs `node --test` with no npm install: these tests are
-  skipped there (their reason says so); `zsh couch/worker/dev.zsh test` runs them.
+  skipped there (their reason says so); `zsh worker/dev.zsh test` runs them.
 - `dev.zsh`: the tests and `wrangler dev` in a throwaway container from a git archive (commit
   first), published on the Mac's LAN address, port 8787, for the PS3 and for curl.
 
 The keys of Couch 0.3.0 and the negative cache are deployed since 2026-10-13 (version 5bb13ba4,
-commit e058547). The news reader (`/news`, `/article`) is not deployed yet (the deploy waits for
+commit 4fbe5dd). The news reader (`/news`, `/article`) is not deployed yet (the deploy waits for
 Lucas's OK), and it is not checked yet that Ambito's, Clarin's and BBC's pages answer the
 deployed Worker (a 200 from the Mac does not prove it).
 Deployed on `http://couch.daddiego.com.ar/board` (2026-10-10, Lucas's OK): `wrangler deploy

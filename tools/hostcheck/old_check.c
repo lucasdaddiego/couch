@@ -1,5 +1,5 @@
 /* Couch's host check of an old Couch (tools/hostcheck/run.zsh): the parser
- * of Couch 0.1.0 (source/parse.c at bcf4243) or 0.2.0 (at f239876), which
+ * of Couch 0.1.0 (source/parse.c at 129a6b7) or 0.2.0 (at aa3945b), which
  * run.zsh takes from git, against a reply (argv[1]: the Worker test's
  * reply, or the same with the keys of 0.3.0). The new keys must leave the
  * old Board as it was: a body within its 4 KB, the end line, every old

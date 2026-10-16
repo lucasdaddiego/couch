@@ -350,7 +350,7 @@ double ticker_offset(double t, double px_s, double period);
 
 /* ---- the reader (0.3.1, stage 11): the Worker's /news and /article -------------- */
 
-/* GET /news (couch/worker/README.md, "The news reader"): "couch-news 1",
+/* GET /news (worker/README.md, "The news reader"): "couch-news 1",
  * now=, item=id|source|category|age|title|summary (0 to 30, the newest
  * first), news_age=, news_state=, end. At most NEWS_MAX bytes (the Worker's
  * NEWS_BYTES). The same rules as the Board's: unknown keys and lines with

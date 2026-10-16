@@ -1,5 +1,43 @@
 # Couch
 
+A PS3 homebrew app for the living-room TV: a dashboard of the time, the
+weather, the dollar rates and the news for Argentina, drawn at 1920 x 1080 by
+[ps3gfx](https://github.com/lucasdaddiego/ps3gfx) on the RSX and the six SPUs.
+
+- **Board:** the clock (the console's time zone), the next holiday, the
+  weather now with a moving icon, the next 12 hours, the sun's arc and the
+  moon, three days, the Blue rate with its 30-day curve, the official, MEP,
+  CCL, crypto and card rates, the country risk, the monthly inflation and the
+  fixed-term rate, and a news ticker. The sky behind the tiles follows the
+  sun, the clouds and the rain.
+- **News:** the latest headlines of the feeds; CROSS opens one in a reader
+  with a QR code for the full article on a phone.
+- **Info:** the Board's last fetch, the console's settings, and the effects'
+  and the display's times.
+- **The waiting screen:** after 10 minutes with no button, a large clock, the
+  weather, the next hours, the next holiday and one headline at a time, over
+  the sky by day and an aurora by night. It drifts slowly to protect the TV.
+
+The data comes over plain HTTP (the console has no usable TLS) from a
+Cloudflare Worker in `worker/`, which reads the public sources (SMN,
+Open-Meteo, DolarApi, argentinadatos, argentina.gob.ar, RSS feeds) and
+answers one small text reply. The default is `http://couch.daddiego.com.ar/board`;
+`board_url.txt` in the app folder points it to another Worker.
+
+## Install
+
+A console with HEN or CFW. Download `Couch-<version>.pkg` from the
+[releases](https://github.com/lucasdaddiego/couch/releases), install it with
+Package Manager (or webMAN), and start Couch from the Game column. L1/R1 change
+the page, SELECT opens Info, START exits.
+
+## License
+
+MIT (`LICENSE`). The pkg carries the fonts of ps3gfx under the SIL Open Font
+License (`OFL.txt`) and Project Nayuki's QR Code generator (MIT).
+
+## History
+
 A PS3 homebrew app for the living-room TV, drawn by
 [ps3gfx](https://github.com/lucasdaddiego/ps3gfx). Title `Couch`, APPID
 `COUC00001`, app folder `/dev_hdd0/tmp/couch`, pkg `couch.gnpdrm.pkg`. The
@@ -1027,7 +1065,7 @@ for both areas twice (`reader_ambient` alone 6 min a pass); every snapshot
 repeated byte for byte but `net_slow_narrow` and `net_slow_info_narrow` in
 that run: `net_slow`'s reply lands 4 s of the preview's clock after the
 connect, polled in host time, and the frame it lands in moves the sky's
-scene by up to 2 levels. 0.3.0 (71fd78e, from `git archive`) gives the same
+scene by up to 2 levels. 0.3.0 (1870e85, from `git archive`) gives the same
 two pictures (the same hashes) at the same rate, about 1 run in 5, at
 either area: a race of that scenario, not of the reader. Before, an Info page after a
 fetch could differ at times (`board_cut_info`, `board_stale301_info`,
@@ -1067,12 +1105,12 @@ title skipped, the age or -1, the state, a long title cut whole);
 the 3 x 3 grid once, 6 px a step) and page; `wx_precip` (the effects'
 drops by the code and the hour's mm, the flakes); and, in the sanitizer build,
 20,000 mutated replies with every field inside its buffer. Last,
-`old_check.c` builds Couch 0.1.0's `parse.c` (commit bcf4243, read with
+`old_check.c` builds Couch 0.1.0's `parse.c` (commit 129a6b7, read with
 `git show`) and parses the same reply: within 4 KB, `BP_OK`, every old field.
 
 Since 0.3.1, `tools/hostcheck/reader_check.c` checks the reader's pure code
 in both builds: `news_parse` and `article_parse` against the Worker test's
-texts (couch/worker/test/reader.test.js: the `/news` item line and the
+texts (worker/test/reader.test.js: the `/news` item line and the
 `/article` texts, ok, summary, cut, no date and no link, which `run.zsh`
 extracts with its `NEWS_NOW` and `LINKS` put in) and the live replies of
 the preview's fixtures (30 items; a Clarin article), each cut at every byte
@@ -1090,7 +1128,7 @@ The repository's CI runs no app's C host checks, so this one is not in CI.
 
 ## The console rounds
 
-Round 1, 2026-10-11: rc1 (d6e171a), unattended, on the deployed Worker (no
+Round 1, 2026-10-11: rc1 (f1df8e9), unattended, on the deployed Worker (no
 `board_url.txt`): passed. `auto.txt` "60", then `ps3run round` (`pull/rc1`). The
 start did not take: `/play.ps3?COUC00001`, 19 s after the install, started the
 icon that had the XMB's focus (Cell Bench) instead of the new app. Cell Bench
@@ -1102,6 +1140,17 @@ TIME_FORMAT 1 (24-hour); the console's clock 27 s ahead of the Worker's; 57.3
 fps over 60 s, the 2 frames over 25 ms are the two shots (1.3 s each). Both
 shots read right: the clock, six rates and the weather with their ages, and
 the Info screen.
+
+The round of 0.3.2, 2026-10-16: rc2 ran 9 h 39 min overnight (59.94 fps, 1
+frame over 25 ms: the first; the waiting screen switched from the aurora to
+the sky after sunrise). rc4 (9d0c747, the hourly card on top of rc3's Board
+restyle; sha256 9d0e9a90deaaca69...) installed with the install routine
+(install, a quick status answer, the dialog closed, 35 s, CROSS on the icon)
+and started cleanly. Every page was checked with webMAN's virtual pad on a
+camera: the Board woke from the waiting screen, R1/L1, a News article with
+its QR and back, Info and back; the waiting screen showed the next 12 hours
+by day. Lucas: "looks very nice and works nice too". Released as 0.3.2 with
+the rc4 bytes.
 
 ## The console rounds to come
 

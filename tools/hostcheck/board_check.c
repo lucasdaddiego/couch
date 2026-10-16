@@ -1,6 +1,6 @@
 /* Couch's host check of source/parse.c and source/astro.c
  * (tools/hostcheck/run.zsh): the Board parser against the Worker test's
- * reply (argv[1], the expected text of couch/worker/test/board.test.js's
+ * reply (argv[1], the expected text of worker/test/board.test.js's
  * first test, which run.zsh extracts), that reply cut at every byte, with
  * CR LF, as version 2, with long fields, at 4 KB, with too many lines, the
  * states and the missing fields; the same reply with the keys of 0.3.0

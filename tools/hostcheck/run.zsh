@@ -2,7 +2,7 @@
 # Couch's host checks (README: "The host checks"): source/parse.c, the
 # Board parser and the pure helpers, and source/astro.c, the sun and the
 # moon, against the Worker test's reply. The reply comes from
-# couch/worker/test/board.test.js (the expected text of its first test,
+# worker/test/board.test.js (the expected text of its first test,
 # line for line), so a change of the Worker's format shows here. Since the
 # Worker's stage 6 that reply holds the keys of 0.3.0 (design 5.1: geo,
 # wx_fx, wx_hours, days_fx, usd_chg, money_chg, spark): it is the second
@@ -11,11 +11,11 @@
 # Two builds of tools/hostcheck/board_check.c: the host's cc at -O2 with
 # -Wall -Wextra -Werror, and the same with AddressSanitizer and
 # UndefinedBehaviorSanitizer, which also runs 20,000 mutated replies of
-# each; then old_check.c with the parse.c of Couch 0.1.0 (git show bcf4243)
-# and of Couch 0.2.0 (git show f239876), read only, against both replies:
+# each; then old_check.c with the parse.c of Couch 0.1.0 (git show 129a6b7)
+# and of Couch 0.2.0 (git show aa3945b), read only, against both replies:
 # an old Couch must keep its Board. Since 0.3.1 also reader_check.c, the
 # reader's parsers (news_parse, article_parse) and helpers, against the
-# Worker test's texts of couch/worker/test/reader.test.js and the preview's
+# Worker test's texts of worker/test/reader.test.js and the preview's
 # live fixtures, in both builds (the sanitizer one with 20,000 mutated
 # replies of each). Each prints PASS or FAIL per group; the exit status is
 # the number of failures.
@@ -81,10 +81,12 @@ if $CC -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize
 else
     print "FAIL board_check_asan: does not build"; (( ++fails ))
 fi
-# The reader (0.3.1): the Worker test's /news item and /article texts (couch/worker/test/reader.test.js,
+# The reader (0.3.1): the Worker test's /news item and /article texts (worker/test/reader.test.js,
 # with its NEWS_NOW and LINKS put in), and the live replies of the preview's fixtures, decoded.
 RT=${H:h:h}/worker/test/reader.test.js
-${PYTHON:-python3} -I - $RT ${H:h}/preview/fixtures $B <<'PY' || { print "FAIL the reader test's texts or the fixtures: not found"; exit 1 }
+FSRC=${H:h}/preview/fixtures
+[[ -e $FSRC/news.esc ]] || FSRC=${COUCH_FIXTURES:-$HOME/code/ps3tools_private/apps/couch-fixtures}/preview   # private (tools/preview/fixtures/README.md)
+${PYTHON:-python3} -I - $RT $FSRC $B <<'PY' || { print "FAIL the reader test's texts or the fixtures: not found"; exit 1 }
 import codecs, os, re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 fix, out = sys.argv[2], sys.argv[3]
@@ -128,12 +130,12 @@ if $CC -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize
 else
     print "FAIL reader_check_asan: does not build"; (( ++fails ))
 fi
-# The old parsers: Couch 0.1.0 (bcf4243, as before) and 0.2.0 (f239876).
-for rev ver in bcf4243 0.1.0 f239876 0.2.0; do
+# The old parsers: Couch 0.1.0 (129a6b7, as before) and 0.2.0 (aa3945b).
+for rev ver in 129a6b7 0.1.0 aa3945b 0.2.0; do
     print -r -- "-- Couch $ver's parser (source/parse.c at $rev, from git) against both replies:"
     mkdir -p $B/old_$ver
-    if git -C ${H:h:h} show ${rev}:couch/source/parse.c > $B/old_$ver/parse.c 2>/dev/null &&
-       git -C ${H:h:h} show ${rev}:couch/source/parse.h > $B/old_$ver/parse.h 2>/dev/null &&
+    if git -C ${H:h:h} show ${rev}:source/parse.c > $B/old_$ver/parse.c 2>/dev/null &&
+       git -C ${H:h:h} show ${rev}:source/parse.h > $B/old_$ver/parse.h 2>/dev/null &&
        $CC -O2 -std=c11 -Wall -Wextra -Werror -I$B/old_$ver $H/old_check.c $B/old_$ver/parse.c -o $B/old_$ver/old_check; then
         for r in $R; do $B/old_$ver/old_check $r "$ver ($rev)" || (( fails += $? )); done
     else
