@@ -7,7 +7,7 @@
 #                                             by default the cores; the outputs in the case's order)
 #   PASSES=2 zsh tools/preview/run.zsh       (twice, the second into an emptied build/out2, and the
 #                                             snapshots of the second pass that differ from the
-#                                             first's: the Board thread runs in host time)
+#                                             first's by more than 8 levels: the Board thread runs in host time)
 # Snapshots go to build/out/*.ppm, and *.png when $PYTHON (or python3) has
 # Pillow. The sandbox of each scenario stays in build/sbx/<name>: couch.txt,
 # journal.txt, peer.log (the requests the peer got), spu.log (the SPU calls
@@ -26,6 +26,17 @@ if [[ ${PASSES:-1} == 2 ]]; then
     PASSES=1 zsh $0 "$@" || exit $?
     rm -rf $P/build/out2                     # the second pass's snapshots only: no old or *_narrow files
     PASSES=1 OUT=$P/build/out2 zsh $0 "$@" > /dev/null || exit $?
+    # a pixel more than 8 levels apart counts (the sky's blur and the glass vary by 1 or 2 with the
+    # host's timing); the box of those pixels says where; without Pillow, any byte
+    ${PYTHON:-python3} -I - $P/build/out2 $OUT <<'PY' 2>/dev/null && exit 0
+import glob, os, sys
+from PIL import Image, ImageChops
+for p in sorted(glob.glob(os.path.join(sys.argv[1], '*.ppm'))):
+    q = os.path.join(sys.argv[2], os.path.basename(p))
+    a, b = Image.open(p), Image.open(q) if os.path.exists(q) else None
+    box = (ImageChops.difference(a, b).convert('L').point(lambda v: 255 if v > 8 else 0).getbbox() if b and a.size == b.size else (0, 0) + a.size)
+    if box: print(f"differs between the passes: {os.path.basename(p)[:-4]} in {box}")
+PY
     for f in $P/build/out2/*.ppm(N); do cmp -s $f $OUT/${f:t} || print "differs between the passes: ${f:t:r}"; done
     exit 0
 fi
@@ -33,6 +44,7 @@ mkdir -p $OUT
 SFX= AREA_DEF='67 38 1853 1042'                          # the default visible area (93 %)
 [[ $AREA == narrow ]] && { SFX=_narrow; AREA_DEF='160 90 1760 990' }
 D=$'\xc2\xb0' DASH=$'\xe2\x80\x93' NL=$'\n'           # the degree sign, an en dash (U+2013), a line end
+I_ACUTE=$'\xc3\xad'                                   # i acute (U+00ED)
 TZ_DONE=$'done tz_params rc=0x00000000 ok=1\n'        # the clock settings read before: no prompt
 URL_LAN=http://192.168.0.3:8787/board                 # a dotted address: the fake peer needs no DNS
 
@@ -158,6 +170,9 @@ night_line() {   # $2: the wx_now words and wx_fx of the night
     (*) print -r -- "$1";;
     esac
 }
+hol_line() { [[ $1 == end ]] && print -r -- "holiday=2026-10-12|D${I_ACUTE}a de la Raza|4"; print -r -- "$1"; }   # 0.3.2: the next holiday
+body_hol() { each hol_line; }
+body_nighthol() { local l; for l in "${(@f)$(body_night)}"; do hol_line "$l"; done; }
 body_night() { local l; for l in "${(@f)$(< $REPLY)}"; do night_line "$l" Clear "0|3|0|200|6|11"; done; }
 body_ocnight() { local l; for l in "${(@f)$(< $REPLY)}"; do night_line "$l" Overcast "3|100|0|200|8|15"; done; }
 body_storm() { each storm_line; }   # a thunderstorm by day: WMO 95, 100 %, 8.5 mm, 35 km/h from the NW
@@ -296,7 +311,7 @@ net_down|all)      # a good reply, then SQUARE after 10 s and a refused connect:
 ambient|all)       # 10 min with no button (1 min in the preview's build): the aurora with the clock, the date and the weather's line (0.3.0); a
                    # minute on, the block glided to its next place with Blue's price; then the newest headline;
                    # START wakes the screen (the Board) and does not exit; the fetches go on (every 5 min: 3 min of frames, one)
-    scn ambient "120:SNAP=ambient_before 3720:SNAP=ambient 7320:SNAP=ambient_news 10920:SNAP=ambient_board2 10940:START 10960:SNAP=ambient_awake 10970:EXIT" PV_MAXFRAMES=11000
+    BODY=hol scn ambient "120:SNAP=ambient_before 3720:SNAP=ambient 7320:SNAP=ambient_news 10920:SNAP=ambient_board2 10940:START 10960:SNAP=ambient_awake 10970:EXIT" PV_MAXFRAMES=11000
     print -r -- "  requests: $(command grep -c '^GET' $P/build/sbx/ambient$SFX/peer.log); couch.txt: $(command grep -h '^ambient' $P/build/sbx/ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 board_smn|all)     # Junin, the now line from SMN: the weather card's foot names both sources; the same folded to ASCII
     BODY=smn scn board_smn "120:SNAP=board_smn 121:EXIT"
@@ -394,6 +409,10 @@ board_fxoff|all)   # the effects off (fx_first froze before: RSX only): solid pa
     JOURNAL=$'start fx_first\n'$TZ_DONE BODY=dayrain_before BODY2=dayrain scn board_fxoff "120:SNAP=board_fxoff_first 700:SQUARE 1150:SNAP=board_fxoff 1151:EXIT" ;|
 tv|all)            # Lucas's visible area, 0 2 1920 1078 (not in the narrow pass: it sets its own area)
     [[ $AREA != narrow ]] && SAFE='0 2 1920 1078' scn tv "120:SNAP=tv_board 122:R1 150:SNAP=tv_news 152:SELECT 180:SNAP=tv_info 181:EXIT" ;|
+ambient_night|all) # 0.3.2: the waiting screen at night (the aurora) with the next holiday; 20 s later the next three headlines
+    BODY=nighthol scn ambient_night "3720:SNAP=ambient_night 4980:SNAP=ambient_night_next 4981:EXIT" PV_TZ=660 PV_MAXFRAMES=5000 ;|
+holiday|all)       # 0.3.2: the header's second line names the next holiday (the clock is the console's own)
+    BODY=hol scn holiday "120:SNAP=holiday 121:EXIT" ;|
 ambient_rsx|all)   # the ambient mode in RSX-only mode (fx_first froze before): 0.2.0's dimmed page, 6 px moves, the page each minute
     JOURNAL=$'start fx_first\n'$TZ_DONE scn ambient_rsx "3720:SNAP=ambient_rsx 7320:SNAP=ambient_rsx_news 7330:EXIT" PV_MAXFRAMES=8000 ;|
 start|all)         # the start (0.3.0): the loading screen from the first frame after ui_init (frame 3: the icons'

@@ -424,6 +424,36 @@ static void extras(void)
 
 /* 0.3.0's stage 10: the ambient block's places and lines, the News page's
  * categories, the ticker's offset. */
+/* 0.3.2: holiday= (the Worker of 2026-10-16), the header's holiday words, the ambient drift. */
+static void check_032(void)
+{
+    int f0 = fails;
+    char w[160];
+    const char *r = "couch-board 1\nnow=1791913620\nholiday=2026-11-09|Visita del Papa|27\nend\n";
+    CHECK(parse(r, 0) == BP_OK && b.has_holiday && b.hol_year == 2026 && b.hol_month == 11 && b.hol_day == 9 && b.hol_days == 27 && !strcmp(b.hol_name, "Visita del Papa"));
+    long t = days_from_civil(2026, 10, 13) * 86400 + 14 * 3600;      /* local 2026-10-13 14:00, a Tuesday */
+    CHECK(holiday_words(&b, t, w, sizeof w) && !strcmp(w, "Next holiday: Monday 9 November, Visita del Papa (in 27 days)"));
+    CHECK(holiday_words(&b, days_from_civil(2026, 11, 8) * 86400, w, sizeof w) && !strcmp(w, "Tomorrow is a holiday: Visita del Papa"));
+    CHECK(holiday_words(&b, days_from_civil(2026, 11, 9) * 86400 + 86399, w, sizeof w) && !strcmp(w, "Today is a holiday: Visita del Papa"));
+    CHECK(!holiday_words(&b, days_from_civil(2026, 11, 10) * 86400, w, sizeof w) && !w[0]);   /* a stale reply: its holiday passed */
+    const char *bad[] = {"holiday=2026-13-01|X|3", "holiday=2026-1a-01|X|3", "holiday=2026-11-09|X|-1", "holiday=2026-11-09|X|401",
+                         "holiday=2026-11-09||3", "holiday=20261109|X|3", "holiday=2026-11-09|X"};
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        char buf[200];
+        snprintf(buf, sizeof buf, "couch-board 1\nnow=1791913620\n%s\nend\n", bad[i]);
+        CHECK(parse(buf, 0) == BP_OK && !b.has_holiday);
+    }
+    float x, y, mx = 0, my = 0;
+    for (double s = 0; s < 1800; s += 0.25) {
+        ambient_drift(s, &x, &y);
+        CHECK(x == floorf(x) && y == floorf(y) && fabsf(x) <= AMBIENT_DRIFT_X && fabsf(y) <= AMBIENT_DRIFT_Y);
+        if (fabsf(x) > mx) mx = fabsf(x);
+        if (fabsf(y) > my) my = fabsf(y);
+    }
+    CHECK(mx == AMBIENT_DRIFT_X && my == AMBIENT_DRIFT_Y);
+    group("0.3.2: holiday= and its words, bad lines left out; the ambient drift (whole pixels, its range)", f0);
+}
+
 static void check_stage10(void)
 {
     int f0 = fails;
@@ -1154,6 +1184,7 @@ int main(int argc, char **argv)
     rules();
     extras();
     check_stage10();
+    check_032();
     new_reply(w, wn, w2, w2n);
     new_rules();
     numbers();

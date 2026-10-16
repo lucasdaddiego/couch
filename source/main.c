@@ -412,7 +412,7 @@ int main(void)
             }
         }
         ambient_tick();
-        fx_tick(ambient ? FXM_AURORA : FXM_SKY);   /* after the last ui_flip: a picture's swap, the next picture */
+        fx_tick(ambient && !ambient_day() ? FXM_AURORA : FXM_SKY);   /* 0.3.2: the ambient mode's sky by day */   /* after the last ui_flip: a picture's swap, the next picture */
         sky_tick();                          /* the moon's sphere (into the texture no frame shows), the bolts */
         marquee_tick();                      /* the ticker's text: a headline a frame into the picture no frame shows */
         if (page == PAGE_NEWS) stext_on = 1;

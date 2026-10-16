@@ -249,6 +249,19 @@ static void wx_icon_m(int wi, float cx, float cy, float angle, float scale)
     icon_rot(m_icon[wi] + 1, cx, cy, angle, scale, WHITE);
 }
 
+static void hero_icon(int k, int day, float cx, float cy, float box);
+
+/* The weather icon of now (the hero's) for the ambient mode: 0 when there is none. */
+int board_wx_icon(float cx, float cy, float box)
+{
+    const board_data *b = &board_cur;
+    int has = board_have && b->has_wx;
+    int k = board_have && b->has_fx ? wmo_kind(b->fx_code) : WK_NONE, day = has ? b->is_day : fx_sc.elev > 0;
+    if (k == WK_NONE) return 0;
+    hero_icon(k, day, cx, cy, box);
+    return 1;
+}
+
 /* The hero's icon (design 3.9): layers of the L set that move, by
  * fractions of a pixel (bilinear), slowly and over a wider range since the
  * round of 2026-10-14 (Lucas: "a bit bigger and more range of movement"):

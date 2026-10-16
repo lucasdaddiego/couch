@@ -70,7 +70,9 @@ void bar_draw(float y, const char *left, u32 color, const char *note, const char
 extern int ambient;                  /* 1 while the mode is on */
 int ambient_input(void);
 void ambient_tick(void);
-int ambient_aurora(void);            /* 1: the mode shows the aurora (the SPUs run), not a dimmed page */
+int ambient_aurora(void);            /* 1: the mode shows the SPUs' picture (the sky or the aurora), not a dimmed page */
+int ambient_day(void);               /* 0.3.2: 1 while the sun is up (the sky), 0 at night (the aurora) */
+int board_wx_icon(float cx, float cy, float box);   /* board_page.c: the weather icon of now; 0 when none */
 
 /* The bodies and the bars of the pages (board_page.c, reader.c, info.c):
  * the body between the header and the bottom bar, the bar at y. */

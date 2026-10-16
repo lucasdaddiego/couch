@@ -26,6 +26,7 @@
 #include "sky.h"
 #include "start.h"
 #include "reader.h"
+#include "stext.h"
 
 #define DIM_LAYER 0x000000a8         /* RSX only: black at 66 %, the picture at a third of its light */
 #define DOT_R 7
@@ -232,7 +233,9 @@ static float big_clock(float x, float y, float right)
     snprintf(date, sizeof date, "%s %d %s", weekday_name[c.wday], c.day, month_name[c.month - 1]);
     if (text_w(F_MED, date) > dw) snprintf(date, sizeof date, "%d %s", c.day, month_name[c.month - 1]);   /* narrow: no weekday */
     text_fit(dx, rnd(ty), F_MED, WHITE, dw, "%s", date);
-    clock_source(line, sizeof line);
+    /* the second line: the next holiday (0.3.2) while the clock is the console's own; the clock's
+     * source otherwise (the Info page always shows it) */
+    if (src != CLK_CONSOLE || !board_have || !holiday_words(&board_cur, clock_utc() + off, line, sizeof line)) clock_source(line, sizeof line);
     text_fit(dx, rnd(ty + (float)line_h(F_MED) + 6), F_SMALL, src == CLK_UTC ? YELLOW : GREY, dw, "%s", line);
     return xe;
 }
@@ -384,7 +387,7 @@ void ambient_tick(void)
         amb_step = -1;
         page_slide_end();
         couch_log("ambient: on after %d min with no button%s (%s)", wait / 60, wait != AMBIENT_SEC ? ", an article open" : "",
-                  ambient_aurora() ? "the aurora" : "RSX only: dimmed");
+                  !ambient_aurora() ? "RSX only: dimmed" : ambient_day() ? "the sky" : "the aurora");
     }
     if (!ambient) return;
     long step = (long)((now - amb_since) / (AMBIENT_STEP_SEC * 1000000LL));
@@ -399,56 +402,118 @@ void ambient_tick(void)
     page = ambient_page(step, board_have && board_cur.n_news > 0) ? PAGE_NEWS : PAGE_BOARD;
 }
 
-/* The aurora (design 3.12): the SPUs' picture over the screen (its mean
- * brightness at most 20 %), the rain or the snow dimmer over it, and the
- * block: the clock in D_XL GREY, the date in F_MED, a line in F_BODY that
- * changes each minute (the weather, Blue's price, the newest headline). The
- * block moves to the next of 9 places each minute, gliding there over 6 s
- * (parse.c's ambient_place). */
+/* The ambient mode's day or night (0.3.2, Lucas: "a theme that adapts to
+ * the sun"): the Board's sky while the sun is up, the aurora at night. The
+ * sun's elevation with 2 degrees of hysteresis, so a dusk does not flicker. */
+static int amb_day = -1;
+int ambient_day(void)
+{
+    double e = fx_sc.elev;
+    if (amb_day < 0) amb_day = e > -3;
+    else if (amb_day && e < -4) amb_day = 0;
+    else if (!amb_day && e > -2) amb_day = 1;
+    return amb_day;
+}
+
+#define AMB_ROT_S 20.0                       /* the headlines change every 20 s */
+#define AMB_FADE_S 0.8                       /* and fade out and in over 0.8 s */
+
+/* The waiting screen (design 3.12, centred since 0.3.2: Lucas, "center the
+ * clock on the waiting screen, add weather and more news"): the sky by day
+ * under a dim layer, the aurora by night; one block in the middle that
+ * drifts a few pixels (ambient_drift): the clock in D_XL, the date and the
+ * next holiday, the weather of now (the hero's icon, the temperature, the
+ * words, today's high and low and the rain's chance), then three headlines
+ * with their source's pill, the next three every AMB_ROT_S. */
 static void ambient_frame(void)
 {
     int off;
     civil_time c;
     const char *ampm;
-    char hm[16], date[64], line[360];
+    char hm[16], date[64], hol[160], wx[200];
     const board_data *b = &board_cur;
     begin_frame();
-    if (!fx_draw_aurora()) {                 /* no picture yet (its first frames): the night sky's colours */
-        float ox, oy;
-        screen_origin(&ox, &oy);
-        rect_v(ox, oy, 1920, 1080, 0x040814ff, 0x0a1222ff);
+    int day = ambient_day();
+    float ox, oy;
+    screen_origin(&ox, &oy);
+    if (day) {
+        fx_draw_gradient();
+        sky_behind();
+        fx_draw_clouds();
+        fx_draw_rain(0.7f);
+        sky_front();
+        rect(ox, oy, 1920, 1080, 0x00000050);   /* calmer than the Board */
+    } else {
+        if (!fx_draw_aurora()) rect_v(ox, oy, 1920, 1080, 0x040814ff, 0x0a1222ff);   /* no picture yet: the night sky's colours */
+        fx_draw_rain(0.5f);
     }
-    fx_draw_rain(0.5f);
     double t = (double)(sysGetSystemTime() - amb_since) / 1e6;
     float px, py;
-    ambient_place(t, &px, &py);
+    ambient_drift(t, &px, &py);
+    u32 c1 = day ? WHITE : GREY, c2 = day ? 0xd6dce6ff : DIM;
     clock_offset(&off);
     civil_from_unix(clock_utc() + off, &c);
     clock_hm(hm, sizeof hm, c.hour, c.min, clock_h24(), &ampm);
-    snprintf(date, sizeof date, "%s %d %s", weekday_name[c.wday], c.day, month_name[c.month - 1]);
-    unsigned has = 0;
-    const board_usd *blue = NULL;
-    for (int i = 0; board_have && i < b->n_usd; i++)
-        if (!strcmp(b->usd[i].label, "Blue")) blue = &b->usd[i];
-    if (board_have && b->has_wx) has |= 1;
-    if (blue && strcmp(blue->sell, "-")) has |= 2;
-    if (board_have && b->n_news) has |= 4;
-    int l = ambient_line((long)(t / AMBIENT_STEP_SEC), has);
-    line[0] = 0;
-    if (l == 0) snprintf(line, sizeof line, "%s, %s", b->temp, b->words);
-    else if (l == 1) snprintf(line, sizeof line, "Blue %s", blue->sell);
-    else if (l == 2) snprintf(line, sizeof line, "%s: %s", b->news[0].source, b->news[0].title);
-    float cx = rnd((float)SW / 2 + px), cy = rnd((float)SH / 2 + py);
+    snprintf(date, sizeof date, "%s %d %s%s%s", weekday_name[c.wday], c.day, month_name[c.month - 1], ampm ? "  " : "", ampm ? ampm : "");
+    int has_hol = board_have && holiday_words(b, clock_utc() + off, hol, sizeof hol);
+    int has_wx = board_have && b->has_wx;
+    wx[0] = 0;
+    if (has_wx) {
+        int n = snprintf(wx, sizeof wx, "%s", b->words);
+        if (b->n_day > 0 && !strcmp(b->day[0].label, "Today") && strcmp(b->day[0].max, "-"))
+            n += snprintf(wx + n, sizeof wx - (size_t)n, "   %s / %s", b->day[0].max, b->day[0].min);
+        if (b->n_day > 0 && !strcmp(b->day[0].label, "Today") && strcmp(b->day[0].rain, "-") && n < (int)sizeof wx)
+            snprintf(wx + n, sizeof wx - (size_t)n, "   rain %s", b->day[0].rain);
+    }
+    int nn = board_have ? b->n_news : 0, rows = nn < 3 ? nn : 3;
+    /* the block's height, then its top: centred, plus the drift */
     int big = !digits_rc ? D_XL : -1;
-    float h = big >= 0 ? (float)digits_h(D_XL) : (float)line_h(F_LARGE), y = cy - (h + 60 + 40) / 2;
-    if (big >= 0) digits(rnd(cx - (float)digits_w(D_XL, hm) / 2), y, D_XL, GREY, hm);
-    else text_c(cx, y, F_LARGE | TNUM, GREY, "%s", hm);
-    y += h + 4;
-    text_c(cx, y, F_MED, DIM, "%s%s%s", date, ampm ? "  " : "", ampm ? ampm : "");
-    if (line[0]) {
-        float w = (float)text_w(F_BODY, line), mw = 1100;
-        if (w > mw) w = mw;
-        text_fit(rnd(cx - w / 2), y + 52, F_BODY, DIM, mw, "%s", line);
+    float ch = big >= 0 ? (float)digits_h(D_XL) : (float)line_h(F_LARGE);
+    float wxh = 84, rowh = 50;
+    float hgt = ch + 6 + (float)line_h(F_MED) + (has_hol ? 4 + (float)line_h(F_SMALL) : 0) + (has_wx ? 36 + wxh : 0) + (rows ? 40 + rows * rowh : 0);
+    float cx = rnd((float)SW / 2 + px), y = rnd((float)SH / 2 - hgt / 2 + py);
+    if (big >= 0) digits(rnd(cx - (float)digits_w(D_XL, hm) / 2), y, D_XL, c1, hm);
+    else text_c(cx, y, F_LARGE | TNUM, c1, "%s", hm);
+    y += ch + 6;
+    text_c(cx, y, F_MED, c1, "%s", date);
+    y += (float)line_h(F_MED);
+    if (has_hol) {
+        y += 4;
+        text_c(cx, y, F_SMALL, c2, "%s", hol);
+        y += (float)line_h(F_SMALL);
+    }
+    if (has_wx) {
+        y += 36;
+        char temp[16];
+        snprintf(temp, sizeof temp, "%s", b->temp);
+        float ic = 84, tw = (float)text_w(F_LARGE, temp), ww = (float)text_w(F_MED, wx);
+        if (ww > 900) ww = 900;
+        float total = ic + 18 + tw + 24 + ww, x = rnd(cx - total / 2);
+        if (!icons_rc && board_wx_icon(x + ic / 2, y + wxh / 2, ic)) x += ic + 18;
+        else x += (ic + 18) / 2;
+        float xe = text(x, rnd(y + (wxh - (float)line_h(F_LARGE)) / 2), F_LARGE, c1, "%s", temp);
+        text_fit(rnd(xe + 24), rnd(y + (wxh - (float)line_h(F_MED)) / 2), F_MED, c2, 900, "%s", wx);
+        y += wxh;
+    }
+    if (rows) {
+        y += 40;
+        double ph = fmod(t, AMB_ROT_S);
+        float k = ph < AMB_FADE_S ? (float)(ph / AMB_FADE_S) : ph > AMB_ROT_S - AMB_FADE_S ? (float)((AMB_ROT_S - ph) / AMB_FADE_S) : 1.0f;
+        if (t < AMB_ROT_S) k = ph > AMB_ROT_S - AMB_FADE_S ? k : 1.0f;   /* the first three show at once */
+        int first = (int)(((long)(t / AMB_ROT_S) * 3) % nn);
+        float bw = 1280, x0 = rnd(cx - bw / 2), col = 168, ph_h = 34;
+        for (int i = 0; i < rows; i++) {
+            const board_news *n = &b->news[(first + i) % nn];
+            float ry = y + (float)i * rowh;
+            float pw = (float)text_w(F_SMALL, n->source) + 24;
+            if (pw > col - 16) pw = col - 16;
+            u32 pc = alpha_times(source_colour(n->source), k * (day ? 1.0f : 0.75f));
+            float px0 = x0 + col - 16 - pw;
+            round_rect(px0, ry + (rowh - ph_h) / 2, pw, ph_h, ph_h / 2, pc);
+            aa_corners(px0, ry + (rowh - ph_h) / 2, pw, ph_h, ph_h / 2, pc);
+            text_fit(px0 + 12, rnd(ry + (rowh - (float)line_h(F_SMALL)) / 2), F_SMALL, alpha_times(WHITE, k), pw - 22, "%s", n->source);
+            text_fit(x0 + col, rnd(ry + (rowh - (float)line_h(F_BODY)) / 2), F_BODY, alpha_times(c1, k), bw - col, "%s", n->title);
+        }
     }
     ui_flip();
 }

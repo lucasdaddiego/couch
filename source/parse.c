@@ -404,6 +404,24 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             b->has_sun = strcmp(b->sunrise, "-") && strcmp(b->sunset, "-");
         } else if (key_is(k, kl, "wx_moon")) {
             text_field(b->moon, sizeof b->moon, val, vl, fold);
+        } else if (key_is(k, kl, "holiday")) {
+            /* YYYY-MM-DD|name|days: a bad date or day count leaves no holiday */
+            c = split(val, vl, f, fl, 3);
+            b->has_holiday = 0;
+            int digits_ok = c == 3 && fl[0] == 10 && f[0][4] == '-' && f[0][7] == '-';
+            for (int i = 0; digits_ok && i < 10; i++)
+                if (i != 4 && i != 7 && (f[0][i] < '0' || f[0][i] > '9')) digits_ok = 0;
+            if (digits_ok && to_long(f[2], fl[2], &v) && v >= 0 && v <= 400) {
+                int mo = (f[0][5] - '0') * 10 + (f[0][6] - '0'), d = (f[0][8] - '0') * 10 + (f[0][9] - '0');
+                if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+                    b->hol_year = (f[0][0] - '0') * 1000 + (f[0][1] - '0') * 100 + (f[0][2] - '0') * 10 + (f[0][3] - '0');
+                    b->hol_month = mo;
+                    b->hol_day = d;
+                    b->hol_days = (int)v;
+                    put(b->hol_name, sizeof b->hol_name, f, fl, c, 1, fold);
+                    b->has_holiday = b->hol_name[0] && strcmp(b->hol_name, "-");
+                }
+            }
         } else if (key_is(k, kl, "news")) {
             /* source|age|title: the title ends at a '|', which the Worker removes from upstream text */
             if (b->n_news == BOARD_NEWS) continue;
@@ -1200,4 +1218,26 @@ void wind_words(char *buf, int n, int deg, int gusts)
     else if (c[0]) snprintf(buf, (size_t)n, "%s", c);
     else if (gusts >= 0) snprintf(buf, (size_t)n, "Gusts %d", gusts);
     else if (n > 0) buf[0] = 0;
+}
+
+int holiday_words(const board_data *b, long local_now, char *out, int n)
+{
+    civil_time c;
+    out[0] = 0;
+    if (!b->has_holiday) return 0;
+    civil_from_unix(local_now, &c);
+    long today = days_from_civil(c.year, c.month, c.day), at = days_from_civil(b->hol_year, b->hol_month, b->hol_day);
+    long d = at - today;
+    if (d < 0 || d > 400) return 0;
+    if (d == 0) snprintf(out, (size_t)n, "Today is a holiday: %s", b->hol_name);
+    else if (d == 1) snprintf(out, (size_t)n, "Tomorrow is a holiday: %s", b->hol_name);
+    else snprintf(out, (size_t)n, "Next holiday: %s %d %s, %s (in %ld days)", weekday_name[((at % 7) + 11) % 7], b->hol_day,
+                  month_name[b->hol_month - 1], b->hol_name, d);
+    return 1;
+}
+
+void ambient_drift(double t, float *x, float *y)
+{
+    *x = (float)floor(AMBIENT_DRIFT_X * sin(t * 6.283185307179586 / 420.0) + 0.5);
+    *y = (float)floor(AMBIENT_DRIFT_Y * sin(t * 6.283185307179586 / 300.0 + 1.0) + 0.5);
 }

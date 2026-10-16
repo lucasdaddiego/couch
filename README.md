@@ -718,6 +718,38 @@ page's keys; the rest of the loop is 0.3.0's (L1 and R1 slide the pages,
 also from an open article, which stays open; SELECT; START). The ambient
 mode's wake clears the press first, as before.
 
+## The waiting screen and the holidays (0.3.2)
+
+Lucas, 2026-10-15: "center the clock on the waiting screen, add weather and
+more news. but keep it aesthetic. and if you can make one day and one night
+theme, or better, a theme that adapts to the sun".
+
+- **Day and night** (`page.c`, `ambient_day`): the ambient mode shows the
+  Board's sky (the gradient, the sun or the stars, the clouds, the rain)
+  under a dim layer while the sun is up, and the aurora at night. The sun's
+  elevation (`fx_sc.elev`, from geo and the clock) switches it: day above
+  -2 degrees, night below -4, so a dusk does not flicker. The SPU job
+  follows (`fx_tick` asks for the sky by day). The Board itself already
+  follows the sun since 0.3.0: the sky's colours and the glass tint.
+- **The block**, centred: the clock in D_XL (WHITE by day, GREY at night),
+  the date, the next holiday, the weather of now (the hero's moving icon,
+  the temperature, the words, today's high and low and its rain chance),
+  then three headlines with their source's pill; every 20 s the next three,
+  with a 0.8 s fade. The block drifts at most 40 px sideways and 24 px up
+  and down, in whole pixels, on periods of 7 and 5 min (`ambient_drift`):
+  the TV's burn-in guard, instead of 0.3.0's nine places.
+- **The holidays**: the Worker's `holiday=` line (worker/README.md; the
+  official list of argentina.gob.ar). The header's second line names the
+  next one ("Next holiday: Monday 9 November, Visita de Su Santidad el Papa
+  León XIV (in 25 days)", "Tomorrow is a holiday: ...", "Today is a holiday:
+  ...") while the clock is the console's own; otherwise the clock's source,
+  as before (the Info page always shows it). A reply whose holiday passed
+  shows none.
+- Preview: `ambient` (by day, with a holiday), `ambient_night` (the aurora,
+  then the next three headlines), `holiday` (the header). PASSES=2 now
+  counts a pixel only when it moves by more than 8 levels (the sky's blur
+  varies by 1 or 2 with the host's timing) and names the box.
+
 ## Files in /dev_hdd0/tmp/couch
 
 | File | Written by | Content |

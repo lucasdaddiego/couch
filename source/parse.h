@@ -134,6 +134,11 @@ typedef struct {
     board_chg money_chg[BOARD_MONEY];/* matched to a money line by its label */
     int n_spark;
     board_spark spark[BOARD_SPARKS]; /* matched to a usd line by its label (board_spark_find) */
+    /* since 0.3.2: holiday=YYYY-MM-DD|name|days (the Worker of 2026-10-16) */
+    int has_holiday;
+    int hol_year, hol_month, hol_day;/* 1 to 12, 1 to 31 */
+    int hol_days;                    /* days to it, 0 (today) to 400 */
+    char hol_name[96];
 } board_data;
 
 enum { BP_OK, BP_NOT_BOARD, BP_VERSION, BP_CUT };
@@ -252,6 +257,12 @@ typedef struct {
 void civil_from_unix(long t, civil_time *c);
 /* The days from 1970-01-01 to a civil date (month 1 to 12). */
 long days_from_civil(long y, int m, int d);
+/* The header's and the ambient mode's holiday words (0.3.2) for the local
+ * time local_now (Unix seconds plus the offset): "Today is a holiday: X",
+ * "Tomorrow is a holiday: X" or "Next holiday: Monday 9 November, X (in 25
+ * days)". 0 and no words when b has none or its date has passed (a stale
+ * reply), or it is over 400 days away. */
+int holiday_words(const board_data *b, long local_now, char *out, int n);
 extern const char *const weekday_name[7];
 extern const char *const month_name[12];
 
@@ -315,6 +326,12 @@ int ambient_page(long step, int has_news);
 #define AMBIENT_BLOCK_Y 150
 #define AMBIENT_GLIDE_S 6.0
 void ambient_place(double t, float *x, float *y);
+/* 0.3.2's centred block: a slow drift of at most AMBIENT_DRIFT_X and
+ * AMBIENT_DRIFT_Y px from the centre, whole pixels, periods of 7 and 5 min
+ * (the TV's burn-in guard; a pixel step every few seconds). */
+#define AMBIENT_DRIFT_X 40
+#define AMBIENT_DRIFT_Y 24
+void ambient_drift(double t, float *x, float *y);
 int ambient_line(long minute, unsigned has);
 
 /* A headline's category from its source's label (0.3.0's News page): the
