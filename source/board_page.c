@@ -5,10 +5,10 @@
  * curve with its rain columns; since 0.5.0 the rain of the next 2 h in
  * place of the 12 h's when the reply has it), the sky tile (the sun arc,
  * the moon; since 0.5.0 the air's two chips), the three days. Right, the
- * rates and the extras: the hero tile (the price, the change chip,
- * the 30 days' sparkline and range), then a grid of small tiles (the other
- * rates, the extras). Under them the news ticker; the bottom bar is
- * page.c's.
+ * rates: the hero tile (the price, the change chip, the 30 days' sparkline
+ * and range), then a grid of small tiles (the other rates; 0.5.1 removed
+ * the extras, which no Worker sends). Under them the news ticker; the
+ * bottom bar is page.c's.
  *
  * The layout comes from SW and SH each frame, in two forms: wide (SH 980
  * and up: the TV area and the default area, the heights scaled by the
@@ -64,7 +64,6 @@ static float sc;                     /* wide: the content's height over 800; nar
 static double T;                     /* sky_time() of this frame */
 static const char *deg;              /* the degree sign for numbers Couch writes: UTF-8, or nothing when folded */
 
-static float clampf(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }
 static float rnd(float x) { return floorf(x + 0.5f); }
 static int miss(const char *s) { return !s[0] || !strcmp(s, "-"); }
 /* The ascent of a font or digits line: Inter's, 0.797 of the line height (the atlases' asc / line). */
@@ -113,7 +112,7 @@ typedef struct {
     board_num from, to;
     int dir;                         /* CHG_UP or CHG_DOWN */
 } change;
-static change chg[BOARD_RATES + BOARD_EXTRAS];
+static change chg[BOARD_RATES];
 static int n_chg, seen_gen;
 static double chg_t0;
 
@@ -149,9 +148,6 @@ static void changes(void)
     for (int i = 0; i < b->n_rate; i++)
         for (int j = 0; j < p->n_rate; j++)
             if (!strcmp(b->rate[i].label, p->rate[j].label)) change_add(b->rate[i].label, p->rate[j].sell, b->rate[i].sell);
-    for (int i = 0; i < b->n_extra; i++)
-        for (int j = 0; j < p->n_extra; j++)
-            if (!strcmp(b->extra[i].label, p->extra[j].label)) change_add(b->extra[i].label, p->extra[j].value, b->extra[i].value);
 }
 
 static const change *change_of(const char *label)
@@ -194,16 +190,46 @@ static void halo(float x, float y, float w, float h, const char *label)
     glow9(t, x, y, w, h, HALO, ((c->dir == CHG_UP ? UP : DOWN) & ~0xffu) | (u32)a);
 }
 
+/* ---- the reply's texts ---------------------------------------------------------------- */
+
+/* The texts that change only with a reply, made once per board_gen and
+ * drawn with "%s" (0.5.1's review: about 27 formats a frame): the dial's
+ * speed and words, each hour's label and temperature, each day's minimum. */
+static struct {
+    int gen;
+    char speed[16], wind[48];
+    char hour[HOURS_MAX][4], htemp[HOURS_MAX][12];
+    char dmin[BOARD_DAYS][20];
+} txt = {.gen = -1};
+
+static void texts(void)
+{
+    const board_data *b = &board_cur;
+    int v;
+    if (txt.gen == board_gen) return;
+    txt.gen = board_gen;
+    if (b->has_fx && b->fx_speed >= 0) snprintf(txt.speed, sizeof txt.speed, "%d", b->fx_speed);
+    else if (b->has_wx && temp_num(b->wind, &v)) snprintf(txt.speed, sizeof txt.speed, "%d", v);   /* wx_now's "10 km/h" */
+    else snprintf(txt.speed, sizeof txt.speed, "-");
+    wind_words(txt.wind, sizeof txt.wind, b->has_fx ? b->fx_dir : -1, b->has_fx ? b->fx_gusts : -1);
+    if (!txt.wind[0]) snprintf(txt.wind, sizeof txt.wind, "-");
+    for (int i = 0; i < HOURS_MAX; i++) {
+        snprintf(txt.hour[i], sizeof txt.hour[i], "%02d", ((b->hours_start + i) % 24 + 24) % 24);
+        snprintf(txt.htemp[i], sizeof txt.htemp[i], "%d%s", b->hour_temp[i], deg);
+    }
+    for (int i = 0; i < BOARD_DAYS; i++) snprintf(txt.dmin[i], sizeof txt.dmin[i], "/ %s", i < b->n_day ? b->day[i].min : "-");
+}
+
 /* ---- small pieces -------------------------------------------------------------------- */
 
-/* The change chip right-aligned at xr: caret and the change in
+/* The change chip right-aligned at xr: caret and the percent in
  * UP or DOWN, nothing for flat or none. Its left x. */
-static float chip(float xr, float y, const board_chg *c, int extra)
+static float chip(float xr, float y, const board_chg *c)
 {
     if (!c || c->dir == CHG_NONE || c->dir == CHG_FLAT) return xr;   /* 0.3.2: a chip only for a move (no grey minus) */
     u32 col = c->dir == CHG_UP ? UP : DOWN;
     int ic = c->dir == CHG_UP ? IC_S_CARET_UP : IC_S_CARET_DOWN;
-    const char *s = extra ? c->abs : c->pct;
+    const char *s = c->pct;
     if (miss(s)) s = "";
     float w = 34 + (s[0] ? (float)text_w(F_SMALL, s) + 10 : 0), x = rnd(xr - w);
     round_rect(x, y, w, 30, 15, (col & ~0xffu) | 0x26);
@@ -443,11 +469,8 @@ static void hero_icon(int k, int day, float cx, float cy, float box)
  * the words under the ring. */
 static void dial(float cx, float cy, float R, const board_data *b)
 {
-    char sp[16], words[48];
-    int dir = board_have && b->has_fx ? b->fx_dir : -1, gusts = board_have && b->has_fx ? b->fx_gusts : -1, v;
-    if (board_have && b->has_fx && b->fx_speed >= 0) snprintf(sp, sizeof sp, "%d", b->fx_speed);
-    else if (board_have && b->has_wx && temp_num(b->wind, &v)) snprintf(sp, sizeof sp, "%d", v);   /* wx_now's "10 km/h" */
-    else snprintf(sp, sizeof sp, "-");
+    static const char *const nesw[4] = {"N", "E", "S", "W"};
+    int dir = b->has_fx ? b->fx_dir : -1;
     static float tick_s[24], tick_c[24], nesw_s[4], nesw_c[4];   /* the ticks' and the letters' sines and cosines, made once */
     static int made;
     float tk[20 * 4];
@@ -476,8 +499,8 @@ static void dial(float cx, float cy, float R, const board_data *b)
         nt++;
     }
     aa_lines(tk, nt, 2, 0xffffff60);
-    const char *nesw = wide ? "NESW" : "N";
-    for (int k = 0; nesw[k]; k++) text_c(rnd(cx + nesw_s[k] * (R - 18)), rnd(cy - nesw_c[k] * (R - 18) - 14), F_SMALL, DIM, "%c", nesw[k]);
+    for (int k = 0; k < (wide ? 4 : 1); k++)
+        text_c(rnd(cx + nesw_s[k] * (R - 18)), rnd(cy - nesw_c[k] * (R - 18) - 14), F_SMALL, DIM, "%s", nesw[k]);
     if (dir >= 0) {
         float wob = fx_reduced() ? 0 : 2 * sinf((float)T * 0.5f);
         float to = ((float)dir + 180 + wob) * PI_F / 180, L = R - 4;
@@ -488,10 +511,9 @@ static void dial(float cx, float cy, float R, const board_data *b)
         aa_line(cx - sinf(to) * L, cy + cosf(to) * L, bx, by, 4, (BLUE & ~0xffu) | 0x50);
         aa_poly(hd, 3, BLUE);
     }
-    text_c(cx, rnd(cy - 26), F_MED | TNUM, WHITE, "%s", sp);
-    text_c(cx, rnd(cy + 8), F_SMALL, GREY, "km/h");
-    wind_words(words, sizeof words, dir, gusts);
-    text_c(cx, rnd(cy + R + 10), F_SMALL, GREY, "%s", words[0] ? words : "-");
+    text_c(cx, rnd(cy - 26), F_MED | TNUM, WHITE, "%s", txt.speed);
+    text_c(cx, rnd(cy + 8), F_SMALL, GREY, "%s", "km/h");
+    text_c(cx, rnd(cy + R + 10), F_SMALL, GREY, "%s", txt.wind);
 }
 
 /* The feed's warning in words (stale or none, else ""): the reason and the data's age. */
@@ -539,13 +561,13 @@ static void curve(float x0, float x1, float ytop, float ybase, const board_data 
             float h = (float)b->hour_pop[i] / 100.0f * (wide ? 40 : 30) * sc;
             rect(cx[j] - 10, rnd(ybase - h), 20, rnd(h), (BLUE & ~0xffu) | 0x90);
         }
-        text_c(cx[j], ybase + 4, F_SMALL | TNUM, DIM, "%02d", (b->hours_start + i) % 24);
+        text_c(cx[j], ybase + 4, F_SMALL | TNUM, DIM, "%s", txt.hour[i]);
         if (b->hour_temp[i] == TEMP_NONE) continue;
         float y = ybase - 12 - (ybase - 12 - top) * (float)(b->hour_temp[i] - lo + 1) / span;
         pts[2 * np] = cx[j];
         pts[2 * np + 1] = y;
         np++;
-        if (j % (wide ? 2 : 3) == 0) text_c(cx[j], rnd(y - 31), F_SMALL | TNUM, WHITE, "%d%s", b->hour_temp[i], deg);
+        if (j % (wide ? 2 : 3) == 0) text_c(cx[j], rnd(y - 31), F_SMALL | TNUM, WHITE, "%s", txt.htemp[i]);
     }
     if (np < 2) return;
     area(pts, np, ybase, 0xffd36b40, 0xffd36b00);
@@ -652,7 +674,8 @@ static float air_chips(float xr, float y, const board_data *b)
 {
     char s[16];
     float x = xr;
-    for (int i = 1; board_have && b->has_air && board_age() <= BOARD_FRESH_S && i >= 0; i--) {   /* the UV chip on the right */
+    int on = b->has_air && board_age() <= BOARD_FRESH_S;
+    for (int i = 1; on && i >= 0; i--) {                     /* the UV chip on the right */
         int v = i ? b->air_uv : b->air_aqi;
         if (v < 0) continue;
         u32 c = i ? uv_colour(v) : aqi_colour(v);
@@ -738,7 +761,14 @@ static void sky_tile(float x, float y, float w, float h, const board_data *b)
     else disc(mx + md / 2, my + md / 2, md / 2, 0x1a2234ff);
     float tx = mx + md + 28, tw = x + w - 24 - tx, cy = y + h / 2;
     text_fit(tx, rnd(cy - 50), F_MED, WHITE, tw, "%s", moon_phase_name[moon_phase(age)]);
-    text_fit(tx, rnd(cy - 8), F_BODY, GREY, tw, "%d%% lit", (int)(moon_lit(age) * 100 + 0.5));
+    static int lit = -1;                                     /* the "% lit" words, made when the percent changes */
+    static char lit_w[16];
+    int pct = (int)(moon_lit(age) * 100 + 0.5);
+    if (pct != lit) {
+        lit = pct;
+        snprintf(lit_w, sizeof lit_w, "%d%% lit", pct);
+    }
+    text_fit(tx, rnd(cy - 8), F_BODY, GREY, tw, "%s", lit_w);
     moon_next_words(nx, sizeof nx, utc, off);
     text_fit(tx, rnd(cy + 28), F_SMALL, DIM, tw, "%s", nx);
 }
@@ -773,14 +803,14 @@ static void days(float x, float y, float w, float h, const board_data *b)
         wx_icon_m(wx_icon(kind, 1), cx + cw - 66 + sway, y + h / 2 - 2 + bob, tilt, wide ? 1.25f : 1.1f);
         float yy = rnd(y + h - (wide ? 76 : 66)), xx;
         xx = text(cx + 24, yy, F_MED | TNUM, d && !miss(d->max) ? WHITE : DIM, "%s", d ? d->max : "-");
-        text(xx + 8, yy + (float)base_dy(F_MED, F_BODY), F_BODY | TNUM, GREY, "/ %s", d ? d->min : "-");
+        text(xx + 8, yy + (float)base_dy(F_MED, F_BODY), F_BODY | TNUM, GREY, "%s", d ? txt.dmin[k] : "/ -");
         int has_rain = d && !miss(d->rain);
         icon(IC_S_DROP, cx + 36, yy + 52, has_rain ? BLUE : DIM);
         text(cx + 56, yy + 38, F_SMALL | TNUM, has_rain ? BLUE : DIM, "%s", has_rain ? d->rain : "-");
     }
 }
 
-/* ---- the rates and the extras ---------------------------------------------------- */
+/* ---- the rates ------------------------------------------------------------------------ */
 
 /* The hero tile's rate: the feature line's label, else the first rate. */
 static const board_rate *feature(const board_data *b)
@@ -791,7 +821,7 @@ static const board_rate *feature(const board_data *b)
 }
 
 /* The hero tile (design 1.4; the feature line's rate since 0.4.0): the
- * price, Buy and the time, the chip, the 30 days' range and sparkline. */
+ * price and the date, the chip, the 30 days' range and sparkline. */
 static void hero_rate(float x, float y, float w, float h, const board_data *b)
 {
     char cnt[32], warn[160], r[48];
@@ -811,7 +841,7 @@ static void hero_rate(float x, float y, float w, float h, const board_data *b)
         skel_bar(x + 30, y + h - (wide ? 50 : 36), w - 60, 18);
         return;
     }
-    float cl = chip(x + w - 24, y + 20, board_chg_find(b, 0, label), 0);
+    float cl = chip(x + w - 24, y + 20, board_chg_find(b, label));
     const board_spark *sp = board_spark_find(b, label);
     int lo = 0, hi = 0, nv = sp ? spark_range(sp, &lo, &hi) : 0;
     float rr = cl < x + w - 24 ? cl - 16 : x + w - 24;
@@ -829,7 +859,6 @@ static void hero_rate(float x, float y, float w, float h, const board_data *b)
     float py0 = rnd(y + (wide ? 52 * sc : 40));
     const char *v = u && !miss(u->sell) ? shown(label, u->sell, cnt, sizeof cnt) : "-";
     value(x + 30, py0, D_M, 0, F_LARGE, v[0] == '-' && !v[1] ? DIM : WHITE, v);
-    if (u && !miss(u->buy)) text_r(x + w - 24, rnd(py0 + 18), F_BODY | TNUM, GREY, "Buy %s", u->buy);   /* a mid rate has none */
     text_r(x + w - 24, rnd(py0 + 54), F_SMALL, stale ? YELLOW : DIM, "%s", u ? u->when : "-");
     /* the sparkline: the present days, a faint area, the last value's dot */
     float sx0 = x + 30, sx1 = x + w - 30, sy1 = rnd(y + h - (wide ? 26 : 18)), sy0 = sy1 - (wide ? 56 : 36);
@@ -856,55 +885,34 @@ static void hero_rate(float x, float y, float w, float h, const board_data *b)
     aa_disc(pts[2 * np - 2], pts[2 * np - 1], 5, WHITE);
 }
 
-/* A small tile's words: the label, the foot: "buy 1.485,00, 16 Oct" for a
- * rate, the date for an extra ("TNA, 14:47" when the label ends in
- * "(TNA)"). */
+/* A small tile: a rate that is not the hero tile's (0.5.1: no extras, no
+ * buy price), its date YELLOW when the rates are stale. */
 typedef struct {
-    const char *label, *val, *when, *buy;
+    const char *label, *val, *when;
     const board_chg *chg;
-    int extra, none, stale;
-    const char *reason;
+    int stale;
 } item;
 
 static void small_tile(float x, float y, float w, float h, const item *it)
 {
-    char lab[48], foot[96], paren[24] = "", cnt[32];
-    const char *p = strstr(it->label, " (");
-    int ln = p ? (int)(p - it->label) : (int)strlen(it->label);
-    if (p) {                                                 /* "Fixed term (APR)": the label, and "APR" to the foot */
-        snprintf(paren, sizeof paren, "%s", p + 2);
-        char *e = strchr(paren, ')');
-        if (e) *e = 0;
-    }
-    snprintf(lab, sizeof lab, "%.*s", ln, it->label);
+    char cnt[32];
     tile(x, y, w, h);
-    float cl = chip(x + w - 16, y + (wide ? 12 : 8), it->chg, it->extra);
+    float cl = chip(x + w - 16, y + (wide ? 12 : 8), it->chg);
     u32 fc = it->stale ? YELLOW : DIM;
-    if (it->none) snprintf(foot, sizeof foot, "%s", it->reason[0] ? it->reason : "no data");
-    else if (!it->extra && !miss(it->buy)) snprintf(foot, sizeof foot, "buy %s, %s", it->buy, it->when);
-    else if (paren[0]) snprintf(foot, sizeof foot, "%s, %s", paren, it->when);
-    else snprintf(foot, sizeof foot, "%s", it->when);
     if (wide) {
-        /* 0.3.2: two rows, the label and, on its right, the time or the date (the chip when the value
-         * moved), then the value; a rate's buy price is the hero tile's only */
-        if (!it->extra && !it->none) snprintf(foot, sizeof foot, "%s", it->when);
-        if (cl >= x + w - 16 && text_w(F_SMALL, lab) + text_w(F_SMALL, foot) + 14 > w - 44) {   /* no room: a shorter foot */
-            char *cm = strstr(foot, ", "), *sp = strchr(foot, ' ');
-            if (!it->extra) foot[0] = 0;                                      /* a rate's date whole or none ("16 Oct", not "16") */
-            else if (cm) memmove(foot, cm + 2, strlen(cm + 2) + 1);           /* "TNA, 14:47" -> "14:47" */
-            else if (sp) *sp = 0;                                             /* "Aug 2026" -> "Aug" */
-        }
-        float fw = cl < x + w - 16 ? 0 : (float)text_w(F_SMALL, foot), lw = (cl < x + w - 16 ? cl - 10 : x + w - 22 - fw - 14) - (x + 22);
-        text_fit(x + 22, y + 14, F_SMALL, GREY, lw, "%s", lab);
-        if (fw > 0) text_fit(rnd(x + w - 22 - fw), y + 14, F_SMALL, fc, fw, "%s", foot);
+        /* 0.3.2: two rows, the label and, on its right, the date (the chip when the value moved), then
+         * the value; the date whole or not at all (0.5.1's review: "16 Oct" was cut to "16") */
+        int room = cl >= x + w - 16 && text_w(F_SMALL, it->label) + text_w(F_SMALL, it->when) + 14 <= w - 44;
+        float fw = room ? (float)text_w(F_SMALL, it->when) : 0, lw = (cl < x + w - 16 ? cl - 10 : x + w - 22 - fw - 14) - (x + 22);
+        text_fit(x + 22, y + 14, F_SMALL, GREY, lw, "%s", it->label);
+        if (fw > 0) text_fit(rnd(x + w - 22 - fw), y + 14, F_SMALL, fc, fw, "%s", it->when);
     } else {
         /* narrow (no room for a foot row): the label left of the chip, cut to its room, and the whole date
          * when it fits after it (0.5.1's review: the label's first word and the date's last, "1000 Oct") */
-        const char *t = it->none ? "" : it->when;
-        float room = cl - x - 32, lx = text_fit(x + 22, y + 10, F_SMALL, GREY, room, "%s", lab);
-        if (t[0] && lx + 10 + text_w(F_SMALL, t) <= x + 22 + room) text(lx + 10, y + 10, F_SMALL, fc, "%s", t);
+        float room = cl - x - 32, lx = text_fit(x + 22, y + 10, F_SMALL, GREY, room, "%s", it->label);
+        if (lx + 10 + text_w(F_SMALL, it->when) <= x + 22 + room) text(lx + 10, y + 10, F_SMALL, fc, "%s", it->when);
     }
-    const char *v = it->none || miss(it->val) ? "-" : shown(it->label, it->val, cnt, sizeof cnt);
+    const char *v = miss(it->val) ? "-" : shown(it->label, it->val, cnt, sizeof cnt);
     /* wide: the value centred in the room under the label row */
     float r0 = y + 14 + (float)line_h(F_SMALL), vy = wide ? rnd(r0 + (y + h - r0 - (float)line_h(F_LARGE)) / 2 - 2) : rnd(y + 36);
     value(x + 22, vy, -1, F_LARGE, F_BODY, v[0] == '-' && !v[1] ? DIM : WHITE, v);
@@ -917,29 +925,18 @@ static int items(const board_data *b, item *out, int max)
     for (int i = 0; board_have && i < b->n_rate && n < max; i++) {
         const board_rate *u = &b->rate[i];
         if (u == f) continue;
-        out[n++] = (item){u->label, u->sell, u->when, u->buy, board_chg_find(b, 0, u->label), 0, 0, stale, ""};
-    }
-    for (int i = 0; board_have && i < b->n_extra && n < max; i++) {
-        const board_extra *m = &b->extra[i];
-        out[n++] = (item){m->label, m->value, m->when, "", board_chg_find(b, 1, m->label), 1, !strcmp(m->state, "none"),
-                          !strcmp(m->state, "stale"), m->reason};
+        out[n++] = (item){u->label, u->sell, u->when, board_chg_find(b, u->label), stale};
     }
     return n;
 }
 
 static void quotes(float x, float y, float w, float h, const board_data *b)
 {
-    item it[8];
-    static int told;
+    item it[8];                                              /* the 7 rates past the hero's at most */
     int n = items(b, it, 8);
     /* the rows the tiles need (since 0.4.0: a Worker with fewer values gets taller tiles), four before a reply */
     int rows = !board_have ? 4 : n <= 2 ? 1 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
     float fh = wide ? rnd(236 * sc) : 196, rh = (h - fh - (float)rows * RG) / (float)rows, gw = (w - RG) / 2;
-    int more = board_have ? b->n_rate - (feature(b) ? 1 : 0) + b->n_extra - n : 0;
-    if (more > 0 && !told) {
-        told = 1;
-        couch_log("board: %d values do not fit the 8 tiles and are left off", more);
-    }
     /* the halos first: a neighbour's glass covers a halo's inner part */
     const board_rate *f = feature(b);
     halo(x, y, w, fh, f ? f->label : "");
@@ -1077,6 +1074,7 @@ void board_body(void)
         return;
     }
     changes();
+    texts();
     int news = board_have && b->n_news > 0;
     float top = page_top(), tick_h = wide ? 52 : 48, ty = SH - (wide ? 112 : 100);
     float bot = news ? SH - (wide ? 124 : 112) : ty + tick_h - 12, ch = bot - top;

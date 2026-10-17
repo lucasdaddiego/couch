@@ -46,4 +46,10 @@ const gfx_tex *sky_halo_tex(void);
 /* 1 while a bolt shows: the hero's lightning layer flashes with it. */
 int sky_bolt_on(void);
 
+/* A white texture of w x h (A8R8G8B8) from an alpha function of the
+ * texel's centre (0 to 1 over the texture), the alpha under 0x30 with the
+ * 4 x 4 dither, in 32-bit stores: sky.c's, and since 0.5.1 also
+ * spu_fx_run.c's cloud sprite and flake. 0 when RSX memory is short. */
+int make_tex(gfx_tex *t, u16 w, u16 h, float (*fn)(float, float));
+
 #endif

@@ -4,9 +4,10 @@
  * first test, which run.zsh extracts), that reply cut at every byte, with
  * CR LF, as version 2, with long fields, at 4 KB, with too many lines, the
  * states and the missing fields; the same reply with the keys of 0.3.0
- * (argv[2]: geo, wx_fx, wx_hours, days_fx, rate_chg, extra_chg, spark) and
- * their rules; the keys of 0.5.0 (wx_soon, air, futbol) and night.txt's
- * parse; the fold; the HTTP head, the URL, the clock, the ages,
+ * (argv[2]: geo, wx_fx, wx_hours, days_fx, rate_chg, spark) and their
+ * rules (0.5.1: the extras' keys skipped); the keys of 0.5.0 (wx_soon,
+ * air, futbol) and night.txt's parse; the fold; the HTTP head, the URL,
+ * the clock, the ages,
  * auto.txt; the numbers, the sky's colours, the weather codes, the wind;
  * the sun against Open-Meteo's sunrises and a table of NOAA's full
  * algorithm, the moon against the 2026 eclipses. With argv[3] "fuzz", also
@@ -44,13 +45,10 @@ static int bounded(void)
 #define RNG(v, lo, hi, none) ((v) == (none) || ((v) >= (lo) && (v) <= (hi)))
     int ok = IN(b.city) && IN(b.temp) && IN(b.feels) && IN(b.humidity) && IN(b.words) && IN(b.wind) && IN(b.rate_feed.state) &&
              IN(b.rate_feed.reason) && IN(b.wx_feed.state) && IN(b.wx_feed.reason) && b.n_rate <= BOARD_RATES && b.n_day <= BOARD_DAYS &&
-             IN(b.rain) && IN(b.sunrise) && IN(b.sunset) && IN(b.news_feed.state) && IN(b.news_feed.reason) &&
-             b.n_extra <= BOARD_EXTRAS && b.n_news <= BOARD_NEWS;
-    for (int i = 0; i < b.n_rate; i++) ok = ok && IN(b.rate[i].label) && IN(b.rate[i].buy) && IN(b.rate[i].sell) && IN(b.rate[i].when);
+             IN(b.rain) && IN(b.sunrise) && IN(b.sunset) && IN(b.news_feed.state) && IN(b.news_feed.reason) && b.n_news <= BOARD_NEWS;
+    for (int i = 0; i < b.n_rate; i++) ok = ok && IN(b.rate[i].label) && IN(b.rate[i].sell) && IN(b.rate[i].when);
     for (int i = 0; i < b.n_day; i++)
         ok = ok && IN(b.day[i].label) && IN(b.day[i].words) && IN(b.day[i].max) && IN(b.day[i].min) && IN(b.day[i].rain);
-    for (int i = 0; i < b.n_extra; i++)
-        ok = ok && IN(b.extra[i].label) && IN(b.extra[i].value) && IN(b.extra[i].when) && IN(b.extra[i].state) && IN(b.extra[i].reason);
     for (int i = 0; i < b.n_news; i++) ok = ok && IN(b.news[i].source) && IN(b.news[i].title) && b.news[i].title[0];
     ok = ok && (!b.has_geo || (b.lat >= -90 && b.lat <= 90 && b.lon >= -180 && b.lon <= 180));
     ok = ok && IN(b.soon) && IN(b.fut_words) && RNG(b.air_aqi, 0, 999, -1) && RNG(b.air_uv, 0, 30, -1) && RNG(b.fut_live, 0, 999, -1) &&
@@ -61,14 +59,13 @@ static int bounded(void)
     for (int i = 0; i < HOURS_MAX; i++)
         ok = ok && RNG(b.hour_temp[i], -90, 70, TEMP_NONE) && RNG(b.hour_pop[i], 0, 100, -1) && RNG(b.hour_code[i], 0, 99, -1);
     for (int i = 0; i < BOARD_DAYS; i++) ok = ok && RNG(b.day_code[i], 0, 99, -1);
-    ok = ok && b.n_rate_chg >= 0 && b.n_rate_chg <= BOARD_RATES && b.n_extra_chg >= 0 && b.n_extra_chg <= BOARD_EXTRAS && b.n_spark >= 0 &&
-         b.n_spark <= BOARD_SPARKS;
-    for (int i = 0; i < b.n_rate_chg + b.n_extra_chg; i++) {
-        const board_chg *g = i < b.n_rate_chg ? &b.rate_chg[i] : &b.extra_chg[i - b.n_rate_chg];
-        ok = ok && IN(g->label) && IN(g->pct) && IN(g->abs) && IN(g->when) && g->dir >= CHG_NONE && g->dir <= CHG_FLAT;
+    ok = ok && b.n_rate_chg >= 0 && b.n_rate_chg <= BOARD_RATES && b.n_spark >= 0 && b.n_spark <= BOARD_SPARKS;
+    for (int i = 0; i < b.n_rate_chg; i++) {
+        const board_chg *g = &b.rate_chg[i];
+        ok = ok && IN(g->label) && IN(g->pct) && g->dir >= CHG_NONE && g->dir <= CHG_FLAT;
     }
     for (int i = 0; i < b.n_spark; i++) {
-        ok = ok && IN(b.spark[i].label) && b.spark[i].n >= 0 && b.spark[i].n <= SPARK_MAX && b.spark[i].start_day >= -1;
+        ok = ok && IN(b.spark[i].label) && b.spark[i].n >= 0 && b.spark[i].n <= SPARK_MAX;
         for (int j = 0; j < SPARK_MAX; j++) ok = ok && RNG(b.spark[i].v[j], 0, 100000000, -1);
     }
     return ok;
@@ -97,13 +94,11 @@ static void worker_reply(const char *w, int wn)
     CHECK(b.version == 1 && b.now == 1792164000L && b.has_offset && b.offset == 7200);
     STR(b.city, "Berlin");
     CHECK(b.n_rate == 4);
-    static const char *const want[4][4] = {
-        {"USD", "-", "0,8887", "16 Oct"}, {"GBP", "-", "1,1850", "16 Oct"}, {"CHF", "-", "1,0785", "16 Oct"}, {"1000 JPY", "-", "5,6237", "16 Oct"}};
+    static const char *const want[4][3] = {{"USD", "0,8887", "16 Oct"}, {"GBP", "1,1850", "16 Oct"}, {"CHF", "1,0785", "16 Oct"}, {"1000 JPY", "5,6237", "16 Oct"}};
     for (int i = 0; i < 4 && i < b.n_rate; i++) {
         STR(b.rate[i].label, want[i][0]);
-        STR(b.rate[i].buy, want[i][1]);
-        STR(b.rate[i].sell, want[i][2]);
-        STR(b.rate[i].when, want[i][3]);
+        STR(b.rate[i].sell, want[i][1]);
+        STR(b.rate[i].when, want[i][2]);
     }
     STR(b.rate_feed.state, "ok");
     CHECK(b.rate_feed.age == 600 && !b.rate_feed.reason[0]);
@@ -126,13 +121,12 @@ static void worker_reply(const char *w, int wn)
     STR(b.day[2].max, "13\xc2\xb0");
     STR(b.wx_feed.state, "ok");
     CHECK(b.wx_feed.age == 300);
-    CHECK(b.n_extra == 0);
     CHECK(b.has_rain && !b.rain_wet);
     STR(b.rain, "No rain in the next 12 h");
     CHECK(b.has_sun);
     STR(b.sunrise, "07:33");
     STR(b.sunset, "18:09");
-    CHECK(b.has_holiday && b.hol_year == 2026 && b.hol_month == 12 && b.hol_day == 25 && b.hol_days == 70);
+    CHECK(b.has_holiday && b.hol_year == 2026 && b.hol_month == 12 && b.hol_day == 25);
     STR(b.hol_name, "Erster Weihnachtstag");
     CHECK(b.n_news == 8);
     STR(b.news[0].source, "BBC");
@@ -163,7 +157,7 @@ static void worker_reply(const char *w, int wn)
         crlf[k++] = w[i];
     }
     crlf[k] = 0;
-    CHECK(board_parse(crlf, k, 0, &b) == BP_OK && b.n_rate == 4 && b.n_day == 3 && b.n_extra == 0 && b.n_news == 8 && board_has_end(crlf, k));
+    CHECK(board_parse(crlf, k, 0, &b) == BP_OK && b.n_rate == 4 && b.n_day == 3 && b.n_news == 8 && board_has_end(crlf, k));
     STR(b.news[7].source, "BBC");
     STR(b.sunset, "18:09");
     STR(b.rate[0].when, "16 Oct");
@@ -236,7 +230,7 @@ static void rules(void)
     snprintf(s + k, sizeof s - k, "|x|y|z|w|day\nend\n");
     CHECK(parse(s, 0) == BP_OK && bounded());
     CHECK(strlen(b.rate[0].label) == sizeof b.rate[0].label - 1 && b.rate[0].label[0] == 'L');
-    STR(b.rate[0].buy, "1.535,00");
+    STR(b.rate[0].sell, "1.540,00");                 /* the buy field (1.535,00) is not kept */
     CHECK(strlen(b.city) == 126);                    /* 127 would split a 2-byte sequence: cut before it */
     CHECK(strlen(b.temp) == sizeof b.temp - 1 && b.is_day);
     CHECK(parse(s, 1) == BP_OK && bounded() && strlen(b.city) == 100 && b.city[0] == 'e' && b.city[99] == 'e');
@@ -279,7 +273,7 @@ static void rules(void)
     f0 = fails;
     CHECK(parse("couch-board 1\nrate=Solo\nday=Today|Rain\nwx_now=5\nrate=|||\nend\n", 0) == BP_OK);
     STR(b.rate[0].label, "Solo");
-    STR(b.rate[0].buy, "-");
+    STR(b.rate[0].sell, "-");
     STR(b.rate[0].when, "-");
     STR(b.day[0].words, "Rain");
     STR(b.day[0].max, "-");
@@ -321,27 +315,14 @@ static void rules(void)
     group("control bytes dropped, spaces trimmed, numbers checked", f0);
 }
 
-/* The keys of 2026-10-13: the extras, the sky, the news. */
-static void extras(void)
+/* The keys of 2026-10-13: the sky, the news (the extras: skipped since 0.5.1). */
+static void check_1013(void)
 {
     int f0 = fails;
-    CHECK(parse("couch-board 1\nextra=A|1|d|ok\nextra=B|-|-|none|x.com: HTTP 503\nextra=C|2|e|stale|x.com: no answer in 4 s\n"
-                "extra=D|3|f|weird\nextra=E|4|g|ok\nend\n", 0) == BP_OK);
-    CHECK(b.n_extra == BOARD_EXTRAS);
-    STR(b.extra[0].state, "ok");
-    CHECK(!b.extra[0].reason[0]);
-    STR(b.extra[1].state, "none");
-    STR(b.extra[1].value, "-");
-    STR(b.extra[1].reason, "x.com: HTTP 503");
-    STR(b.extra[2].state, "stale");
-    STR(b.extra[2].when, "e");
-    STR(b.extra[2].reason, "x.com: no answer in 4 s");
-    STR(b.extra[3].state, "none");                  /* another word is none */
-    CHECK(parse("couch-board 1\nextra=Solo\nend\n", 0) == BP_OK && b.n_extra == 1);
-    STR(b.extra[0].value, "-");
-    STR(b.extra[0].when, "-");
-    STR(b.extra[0].state, "none");
-    group("extra: label|value|date|state|reason, at most 4, another state is none", f0);
+    CHECK(parse("couch-board 1\nrate=A|-|1|d\nextra=B|-|-|none|x.com: HTTP 503\nextra_chg=B|up|+1%|+1|d\nrate_chg=A|up|+2%|+2|d\nend\n", 0) ==
+          BP_OK && b.n_rate == 1 && b.n_rate_chg == 1 && bounded());
+    CHECK(board_chg_find(&b, "A") && !board_chg_find(&b, "B"));
+    group("extra and extra_chg (no Worker sends them): skipped as unknown keys", f0);
 
     f0 = fails;
     CHECK(parse("couch-board 1\nwx_rain=dry|No rain in the next 12 h\nwx_sun=06:24|19:16\nwx_moon=Full moon\nend\n", 0) == BP_OK);
@@ -406,7 +387,7 @@ static void check_032(void)
     int f0 = fails;
     char w[160];
     const char *r = "couch-board 1\nnow=1791913620\nholiday=2026-11-09|Visita del Papa|27\nend\n";
-    CHECK(parse(r, 0) == BP_OK && b.has_holiday && b.hol_year == 2026 && b.hol_month == 11 && b.hol_day == 9 && b.hol_days == 27 && !strcmp(b.hol_name, "Visita del Papa"));
+    CHECK(parse(r, 0) == BP_OK && b.has_holiday && b.hol_year == 2026 && b.hol_month == 11 && b.hol_day == 9 && !strcmp(b.hol_name, "Visita del Papa"));
     long t = days_from_civil(2026, 10, 13) * 86400 + 14 * 3600;      /* local 2026-10-13 14:00, a Tuesday */
     CHECK(holiday_words(&b, t, w, sizeof w) && !strcmp(w, "Next holiday: Monday 9 November, Visita del Papa (in 27 days)"));
     CHECK(holiday_words(&b, days_from_civil(2026, 11, 8) * 86400, w, sizeof w) && !strcmp(w, "Tomorrow is a holiday: Visita del Papa"));
@@ -447,21 +428,19 @@ static void check_stage10(void)
 
 /* ---- the keys of 0.3.0 (design 5.1) ------------------------------------------------ */
 
-/* Each rate buy and sell, extra value, change pct and abs of b: num_parse
- * reads it and num_format writes the same text ("-" is not a number). */
+/* Each rate value and change pct of b: num_parse reads it and num_format
+ * writes the same text ("-" is not a number). */
 static int round_trips(void)
 {
     const char *t[64];
     int k = 0, bad = 0;
-    for (int i = 0; i < b.n_rate; i++) t[k++] = b.rate[i].buy, t[k++] = b.rate[i].sell;
-    for (int i = 0; i < b.n_extra; i++) t[k++] = b.extra[i].value;
-    for (int i = 0; i < b.n_rate_chg; i++) t[k++] = b.rate_chg[i].pct, t[k++] = b.rate_chg[i].abs;
-    for (int i = 0; i < b.n_extra_chg; i++) t[k++] = b.extra_chg[i].pct, t[k++] = b.extra_chg[i].abs;
+    for (int i = 0; i < b.n_rate; i++) t[k++] = b.rate[i].sell;
+    for (int i = 0; i < b.n_rate_chg; i++) t[k++] = b.rate_chg[i].pct;
     int n = 0;
     for (int i = 0; i < k; i++) {
         board_num x;
         char o[32];
-        if (!strcmp(t[i], "-")) continue;            /* a mid rate has no buy price */
+        if (!strcmp(t[i], "-")) continue;
         n++;
         if (!num_parse(t[i], &x)) {
             bad++;
@@ -478,10 +457,10 @@ static int round_trips(void)
 static int none_new(void)
 {
     int ok = !b.has_geo && !b.has_fx && b.fx_code == -1 && b.fx_cover == -1 && b.fx_mm == -1 && b.fx_dir == -1 && b.fx_speed == -1 &&
-             b.fx_gusts == -1 && !b.n_hours && b.hours_start == -1 && !b.n_day_code && !b.n_rate_chg && !b.n_extra_chg && !b.n_spark &&
+             b.fx_gusts == -1 && !b.n_hours && b.hours_start == -1 && !b.n_day_code && !b.n_rate_chg && !b.n_spark &&
              !b.feature[0] && !b.feature_sym[0];
     for (int i = 0; i < BOARD_DAYS; i++) ok = ok && b.day_code[i] == -1;
-    return ok && !board_chg_find(&b, 0, "USD") && !board_spark_find(&b, "USD");
+    return ok && !board_chg_find(&b, "USD") && !board_spark_find(&b, "USD");
 }
 
 static void new_reply(const char *w, int wn, const char *w2, int w2n)
@@ -489,7 +468,7 @@ static void new_reply(const char *w, int wn, const char *w2, int w2n)
     int f0 = fails;
     CHECK(w2n <= BOARD_MAX);
     CHECK(board_parse(w2, w2n, 0, &b) == BP_OK && board_has_end(w2, w2n));
-    CHECK(b.n_rate == 4 && b.n_day == 3 && b.n_extra == 0 && b.n_news == 8 && b.has_wx && b.has_sun);   /* the minimal fields stay */
+    CHECK(b.n_rate == 4 && b.n_day == 3 && b.n_news == 8 && b.has_wx && b.has_sun);   /* the minimal fields stay */
     STR(b.rate[1].sell, "1,1850");
     STR(b.feature, "USD");
     STR(b.feature_sym, "$");
@@ -500,21 +479,19 @@ static void new_reply(const char *w, int wn, const char *w2, int w2n)
     CHECK(b.hour_pop[0] == 0 && b.hour_pop[11] == 0);
     CHECK(b.hour_code[0] == 2 && b.hour_code[2] == 3 && b.hour_code[11] == 3);
     CHECK(b.n_day_code == 3 && b.day_code[0] == 45 && b.day_code[1] == 61 && b.day_code[2] == 3);
-    CHECK(b.n_rate_chg == 4 && b.n_extra_chg == 0);
+    CHECK(b.n_rate_chg == 4);
     int found = 0;
-    for (int i = 0; i < b.n_rate; i++) found += board_chg_find(&b, 0, b.rate[i].label) != NULL;
+    for (int i = 0; i < b.n_rate; i++) found += board_chg_find(&b, b.rate[i].label) != NULL;
     CHECK(found == 4);
-    const board_chg *g = board_chg_find(&b, 0, "USD");
-    CHECK(g && g->dir == CHG_DOWN && !strcmp(g->pct, "-0,4%") && !strcmp(g->abs, "-0,0035") && !strcmp(g->when, "15 Oct"));
-    g = board_chg_find(&b, 0, "GBP");
-    CHECK(g && g->dir == CHG_UP && !strcmp(g->pct, "+0,3%") && !strcmp(g->abs, "+0,0031"));
-    g = board_chg_find(&b, 0, "1000 JPY");
-    CHECK(g && g->dir == CHG_DOWN && !strcmp(g->abs, "-0,0241"));
-    CHECK(!board_chg_find(&b, 1, "USD"));                                             /* an extra's chip only for an extra line */
+    const board_chg *g = board_chg_find(&b, "USD");
+    CHECK(g && g->dir == CHG_DOWN && !strcmp(g->pct, "-0,4%"));
+    g = board_chg_find(&b, "GBP");
+    CHECK(g && g->dir == CHG_UP && !strcmp(g->pct, "+0,3%"));
+    g = board_chg_find(&b, "1000 JPY");
+    CHECK(g && g->dir == CHG_DOWN && !strcmp(g->pct, "-0,4%"));
     const board_spark *sp = board_spark_find(&b, "USD");
     int lo = 0, hi = 0;
-    CHECK(sp && sp->n == 30 && sp->dec == 4 && sp->v[0] == 8710 && sp->v[2] == -1 && sp->v[29] == 8887 &&
-          sp->start_day == days_from_civil(2026, 9, 17));
+    CHECK(sp && sp->n == 30 && sp->dec == 4 && sp->v[0] == 8710 && sp->v[2] == -1 && sp->v[29] == 8887);
     CHECK(sp && spark_range(sp, &lo, &hi) == 22 && lo == 8703 && hi == 8947);
     board_num a = {lo, sp ? sp->dec : 0, 0, 0, 0};
     char rs[24];
@@ -638,25 +615,24 @@ static void new_rules(void)
     f0 = fails;
     k = snprintf(s, sizeof s, "couch-board 1\n");
     for (int i = 0; i < 10; i++) k += snprintf(s + k, sizeof s - k, "rate_chg=R%d|%s|+%d,0%%|+%d|12 Oct\n", i, i % 2 ? "up" : "down", i, i);
-    for (int i = 0; i < 6; i++) k += snprintf(s + k, sizeof s - k, "extra_chg=M%d|flat|0,0%%|0|9 Oct\n", i);
     snprintf(s + k, sizeof s - k, "rate_chg=R0|up|+9,9%%|+9|1 Oct\nend\n");
-    CHECK(parse(s, 0) == BP_OK && b.n_rate_chg == BOARD_RATES && b.n_extra_chg == BOARD_EXTRAS && bounded());
-    CHECK(board_chg_find(&b, 0, "R7") && !board_chg_find(&b, 0, "R8") && board_chg_find(&b, 1, "M3") && !board_chg_find(&b, 1, "M4"));
-    CHECK(board_chg_find(&b, 0, "R0")->dir == CHG_DOWN && board_chg_find(&b, 1, "M0")->dir == CHG_FLAT);   /* the first match counts */
+    CHECK(parse(s, 0) == BP_OK && b.n_rate_chg == BOARD_RATES && bounded());
+    CHECK(board_chg_find(&b, "R7") && !board_chg_find(&b, "R8"));
+    CHECK(board_chg_find(&b, "R0")->dir == CHG_DOWN);                                  /* the first match counts */
     CHECK(parse("couch-board 1\nrate_chg=A|UP\nrate_chg=B|sideways|1|2|3\nrate_chg=C\nrate_chg=D|flat|\nend\n", 0) == BP_OK && b.n_rate_chg == 4);
     CHECK(b.rate_chg[0].dir == CHG_NONE && b.rate_chg[1].dir == CHG_NONE && b.rate_chg[2].dir == CHG_NONE && b.rate_chg[3].dir == CHG_FLAT);
     STR(b.rate_chg[0].pct, "-");
-    STR(b.rate_chg[2].when, "-");
+    STR(b.rate_chg[1].pct, "1");                                                     /* the pct ends at its '|' */
     STR(b.rate_chg[3].pct, "-");
-    CHECK(!board_chg_find(&b, 0, "E") && !board_chg_find(&b, 1, "A"));
+    CHECK(!board_chg_find(&b, "E"));
     CHECK(parse("couch-board 1\nrate=D\xc3\xb3lar de una casa con un nombre largo|1|2|3\nrate_chg=D\xc3\xb3lar de una casa con un nombre largo|up|+1%|+1|1 Oct\n"
                 "spark=D\xc3\xb3lar de una casa con un nombre largo|2026-09-14|1\nend\n", 0) == BP_OK);
-    CHECK(strlen(b.rate[0].label) < 24 && board_chg_find(&b, 0, b.rate[0].label) && board_spark_find(&b, b.rate[0].label));   /* cut alike */
-    group("rate_chg and extra_chg: label|dir|pct|abs|date, at most 8 and 4, up/down/flat else no chip, missing fields \"-\"", f0);
+    CHECK(strlen(b.rate[0].label) < 24 && board_chg_find(&b, b.rate[0].label) && board_spark_find(&b, b.rate[0].label));   /* cut alike */
+    group("rate_chg: label|dir|pct|abs|date (the pct kept), at most 8, up/down/flat else no chip, missing fields \"-\"", f0);
 
     f0 = fails;
     CHECK(parse("couch-board 1\nspark=USD|2026-02-30|1 - 3 1.6 x -5\nend\n", 0) == BP_OK && b.n_spark == 1);
-    CHECK(b.spark[0].start_day == -1 && b.spark[0].n == 6 && b.spark[0].v[0] == 1 && b.spark[0].v[1] == -1 && b.spark[0].v[2] == 3 &&
+    CHECK(b.spark[0].n == 6 && b.spark[0].v[0] == 1 && b.spark[0].v[1] == -1 && b.spark[0].v[2] == 3 &&
           b.spark[0].v[3] == 2 && b.spark[0].v[4] == -1 && b.spark[0].v[5] == -1 && b.spark[0].v[6] == -1);
     int lo = 0, hi = 0;
     CHECK(spark_range(&b.spark[0], &lo, &hi) == 3 && lo == 1 && hi == 3);
@@ -664,13 +640,13 @@ static void new_rules(void)
     for (int i = 0; i < 40; i++) k += snprintf(s + k, sizeof s - k, "%d ", 1000 + i);
     snprintf(s + k, sizeof s - k, "\nspark=B|2023-02-29|- -\nspark=C|x|1\nspark=D\nend\n");
     CHECK(parse(s, 0) == BP_OK && b.n_spark == BOARD_SPARKS && bounded());
-    CHECK(b.spark[0].n == SPARK_MAX && b.spark[0].v[SPARK_MAX - 1] == 1000 + SPARK_MAX - 1 && b.spark[0].start_day == days_from_civil(2024, 2, 29));
-    CHECK(b.spark[1].start_day == -1 && b.spark[1].n == 2 && spark_range(&b.spark[1], &lo, &hi) == 0 && !board_spark_find(&b, "C"));
-    CHECK(parse("couch-board 1\nspark=D\nend\n", 0) == BP_OK && b.spark[0].n == 0 && b.spark[0].start_day == -1);
+    CHECK(b.spark[0].n == SPARK_MAX && b.spark[0].v[SPARK_MAX - 1] == 1000 + SPARK_MAX - 1);
+    CHECK(b.spark[1].n == 2 && spark_range(&b.spark[1], &lo, &hi) == 0 && !board_spark_find(&b, "C"));
+    CHECK(parse("couch-board 1\nspark=D\nend\n", 0) == BP_OK && b.spark[0].n == 0);
     civil_time ct;
     civil_from_unix(days_from_civil(2026, 9, 14) * 86400L, &ct);
     CHECK(ct.year == 2026 && ct.month == 9 && ct.day == 14 && days_from_civil(1970, 1, 1) == 0 && days_from_civil(2000, 3, 1) == 11017);
-    group("spark: label|date|values, at most 2 lines of 31, \"-\" or a bad word missing, a bad date -1; spark_range", f0);
+    group("spark: label|date|values (the date not kept), at most 2 lines of 31, \"-\" or a bad word missing; spark_range", f0);
 
     f0 = fails;
     CHECK(parse("couch-board 1\nspark=USD|2026-09-14|1540\nrate_chg=USD|up|+1%|+1|12 Oct\nwx_hours=1|2\ngeo=1|2\nwx_fx=3\ndays_fx=4\n"
@@ -1192,7 +1168,7 @@ int main(int argc, char **argv)
     char *w = read_file(argv[1], &wn), *w2 = read_file(argv[2], &w2n);
     worker_reply(w, wn);
     rules();
-    extras();
+    check_1013();
     check_stage10();
     check_032();
     new_reply(w, wn, w2, w2n);

@@ -1,38 +1,31 @@
 /* Text and glass that scroll by fractions of a pixel (stext.h). The atlases
- * are read as marquee.c reads them (ps3gfx's archive members fonts.bin and
- * latin.bin, the block layout of art/make_font.py); a byte or a code point
- * finds its glyph as ui.c's glyph and glyph_utf8 find it (marquee.c's
- * lmap: text_utf8.c's map). One texture per font: the font's ASCII cells,
- * then its Latin cells, 16 to a row, each cell one texel larger on every
- * side than the biggest of the two atlases' cells, its texels at (1, 1) of
- * its place: a bilinear sample at a cell's edge mixes in a clear texel,
- * never a neighbour's ink. A4R4G4B4, white also where the alpha is 0 (no
- * black at an edge). */
+ * are fontarch.h's (ps3gfx's archive members fonts.bin and latin.bin, read
+ * as marquee.c reads them); a byte or a code point finds its glyph as
+ * ui.c's glyph and glyph_utf8 find it (fa_glyph). One texture per font: the
+ * font's ASCII cells, then its Latin cells, 16 to a row, each cell one
+ * texel larger on every side than the biggest of the two atlases' cells,
+ * its texels at (1, 1) of its place: a bilinear sample at a cell's edge
+ * mixes in a clear texel, never a neighbour's ink. A4R4G4B4, white also
+ * where the alpha is 0 (no black at an edge). */
 #include <string.h>
 #include <math.h>
 #include <ps3gfx/ui.h>
 #include <ps3gfx/gfx.h>
 #include <ps3gfx/fx.h>
 #include "couch.h"
+#include "fontarch.h"
 #include "spu_fx_run.h"
 #include "stext.h"
 
-extern const u8 fonts_bin[];                 /* ps3gfx's archive members (bin2s) */
-extern const u32 fonts_bin_size;
-extern const u8 latin_bin[];
-extern const u32 latin_bin_size;
-
 #define NF 4                                 /* the fonts kept: F_SMALL, F_BODY, F_MED, F_TITLE */
 #define COLS 16
-#define LATIN_MAX 128
 #define BANDS_A_FRAME 4                      /* rows of cells built a frame (about 1 ms) */
 static const int font_of[NF] = {F_SMALL, F_BODY, F_MED, F_TITLE};
 
 typedef struct {
-    int cw, ch, base, pad, asc, aw, count;
-    const u8 *adv, *px;                      /* the advances, the 4-bit alphas */
+    fa_font f;                               /* the cell, the advances, the 4-bit alphas */
     float fpad, fcw, fch, ftop, du, dv;      /* the quad's numbers as floats (glyph_tables) */
-    float fadv[LATIN_MAX];                   /* the advances as floats */
+    float fadv[FA_LATIN_MAX];                /* the advances as floats */
 } atlas;
 
 static struct {
@@ -40,136 +33,37 @@ static struct {
     int cellw, cellh, rows;
     gfx_tex tex;
     u16 *dst;                                /* the texture in RSX memory */
-    float u0[112 + LATIN_MAX], v0[112 + LATIN_MAX];   /* each cell's texel origin in the texture */
+    float u0[112 + FA_LATIN_MAX], v0[112 + FA_LATIN_MAX];   /* each cell's texel origin in the texture */
 } F[NF];
 
-static int first_char, have_latin, ncp, square = -1;
-static u16 cps[LATIN_MAX];
+static int have_latin;
 static int state;                            /* 0 not started, 1 building, 2 ready, -1 off */
 static int b_font, b_row;                    /* the next row of cells to build */
 static u16 row_buf[16 * 60 * 64];            /* one row of cells: at most 16 x 60 texels wide, 64 rows */
 
-static unsigned rd16(const u8 *p) { return (unsigned)p[0] << 8 | p[1]; }
-static const u8 *al4(const u8 *base, const u8 *p) { return p + (4 - (p - base) % 4) % 4; }
-
-/* The font blocks of a file: font k's fields into *a. 0 when the file is short. */
-static int font_block(const u8 *base, const u8 *end, const u8 *p, int nfonts, int count, int want, atlas *a)
-{
-    for (int k = 0; k < nfonts; k++) {
-        if (end - p < 16 + count) return 0;
-        atlas f = {(int)rd16(p), (int)rd16(p + 2), (int)rd16(p + 4), (int)rd16(p + 6), (int)rd16(p + 8), (int)rd16(p + 12), count,
-                   p + 16, NULL};
-        int ah = (int)rd16(p + 14);
-        p = al4(base, p + 16 + count);
-        long npx = (long)f.aw * ah;
-        if (!npx || (npx & 1) || end - p < npx / 2) return 0;
-        f.px = p;
-        p = al4(base, p + npx / 2);
-        if (k == want) {
-            *a = f;
-            return 1;
-        }
-    }
-    return 0;
-}
-
+/* The four fonts of both files (latin.bin's only when it has all four),
+ * 16 columns each, and the cells' sizes. 0 when fonts.bin is short or
+ * another size. */
 static int parse(void)
 {
-    const u8 *p = fonts_bin, *end = fonts_bin + fonts_bin_size;
-    if (fonts_bin_size < 12 || memcmp(p, "PHF1", 4)) return 0;
-    int n = (int)rd16(p + 4), count = (int)rd16(p + 8), cols = (int)rd16(p + 10);
-    first_char = (int)rd16(p + 6);
-    if (n <= F_TITLE || cols != COLS || count > 112) return 0;
+    if (fa_parse() <= 0) return 0;
     for (int i = 0; i < NF; i++)
-        if (!font_block(fonts_bin, end, p + 12, n, count, font_of[i], &F[i].a[0])) return 0;
-    p = latin_bin;
-    end = latin_bin + latin_bin_size;
-    if (utf8_rc == 0 && latin_bin_size >= 12 && !memcmp(p, "PHL1", 4)) {
-        int ln = (int)rd16(p + 4), lc = (int)rd16(p + 6), lcols = (int)rd16(p + 8);
-        if (ln > F_TITLE && lc >= 1 && lc <= LATIN_MAX && lcols == COLS && end - (p + 12) >= 2 * lc) {
-            for (int i = 0; i < lc; i++) cps[i] = (u16)rd16(p + 12 + 2 * i);
-            ncp = lc;
-            have_latin = 1;
-            for (int i = 0; i < NF && have_latin; i++)
-                have_latin = font_block(latin_bin, end, al4(latin_bin, p + 12 + 2 * lc), ln, lc, font_of[i], &F[i].a[1]);
-        }
-    }
+        if (!fa_get(0, font_of[i], &F[i].a[0].f) || F[i].a[0].f.cols != COLS) return 0;
+    have_latin = fa_latin;
+    for (int i = 0; i < NF && have_latin; i++)
+        have_latin = fa_get(1, font_of[i], &F[i].a[1].f) && F[i].a[1].f.cols == COLS;
     for (int i = 0; i < NF; i++) {
-        int cw = F[i].a[0].cw, ch = F[i].a[0].ch, g = F[i].a[0].count;
+        int cw = F[i].a[0].f.cw, ch = F[i].a[0].f.ch, g = F[i].a[0].f.count;
         if (have_latin) {
-            if (F[i].a[1].cw > cw) cw = F[i].a[1].cw;
-            if (F[i].a[1].ch > ch) ch = F[i].a[1].ch;
-            g += F[i].a[1].count;
+            if (F[i].a[1].f.cw > cw) cw = F[i].a[1].f.cw;
+            if (F[i].a[1].f.ch > ch) ch = F[i].a[1].f.ch;
+            g += F[i].a[1].f.count;
         }
         F[i].cellw = cw + 2;
         F[i].cellh = ch + 2;
         F[i].rows = (g + COLS - 1) / COLS;
         if (F[i].cellw * COLS > 16 * 60 || F[i].cellh > 64) return 0;
     }
-    return 1;
-}
-
-/* text_utf8.c's map (marquee.c's lmap): a code point from U+0080 as its
- * slot in latin.bin, 0x100 + an ASCII base letter, or -1 */
-static const char base_a[] = "AaAaAaCcCcCcCcDdDdEeEeEeEeEeGgGgGgGgHhHhIiIiIiIiIiIiJjKkkLlLlLlL"
-                             "lLlNnNnNnnNnOoOoOoOoRrRrRrSsSsSsSsTtTtTtUuUuUuUuUuUuWwYyYZzZzZzs";
-static int lmap(unsigned cp)
-{
-    int lo = 0, hi = ncp - 1;
-    while (lo <= hi) {
-        int m = (lo + hi) / 2;
-        if (cps[m] == cp) return m;
-        if (cps[m] < cp) lo = m + 1;
-        else hi = m - 1;
-    }
-    if ((cp >= 0x300 && cp < 0x370) || (cp >= 0x200b && cp <= 0x200f) || cp == 0x2060 || (cp >= 0xfe00 && cp <= 0xfe0f) || cp == 0xfeff)
-        return -1;
-    if (cp >= 0x100 && cp < 0x180) return 0x100 + base_a[cp - 0x100];
-    return square;
-}
-
-/* ui.c's utf8_at: the code point at s[i] (n bytes), its length */
-static unsigned utf8_at(const char *s, int n, int i, int *len)
-{
-    const unsigned char *p = (const unsigned char *)s + i;
-    unsigned c = p[0], cp;
-    int k = c >= 0xf5 ? 0 : c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : c >= 0xc2 ? 2 : 0;
-    *len = 1;
-    if (c < 0x80) return c;
-    if (!k) return 0xfffd;
-    cp = c & (0x7f >> k);
-    for (int j = 1; j < k; j++) {
-        if (i + j >= n || !p[j]) {
-            *len = j;
-            return 0;
-        }
-        if ((p[j] & 0xc0) != 0x80) return 0xfffd;
-        cp = cp << 6 | (p[j] & 0x3f);
-    }
-    if ((k == 3 && cp < 0x800) || (k == 4 && (cp < 0x10000 || cp > 0x10ffff)) || (cp >= 0xd800 && cp < 0xe000)) return 0xfffd;
-    *len = k;
-    return cp;
-}
-
-/* The glyph at s[i]: its atlas (0, 1; -1 for none), its slot, its length. */
-static int glyph_at(const char *s, int n, int i, int *len, int *slot)
-{
-    unsigned c = (unsigned char)s[i];
-    int m;
-    if (have_latin) {
-        unsigned cp = utf8_at(s, n, i, len);
-        m = !cp ? -1 : cp < 0x80 ? 0x100 + (int)cp : lmap(cp);
-    } else {
-        *len = 1;
-        m = 0x100 + (int)c;                  /* bytes: ui.c's glyph() ('?' for a byte with no slot) */
-    }
-    if (m < 0) return -1;
-    if (m >= 0x100) {
-        int k = (m - 0x100) - first_char;
-        *slot = k < 0 || k >= F[0].a[0].count ? '?' - first_char : k;
-        return 0;
-    }
-    *slot = m;
     return 1;
 }
 
@@ -182,16 +76,16 @@ static int glyph_at(const char *s, int n, int i, int *len, int *slot)
 static void glyph_tables(int i)
 {
     float W = (float)F[i].tex.w, H = (float)F[i].tex.h;
-    int total = F[i].a[0].count + (have_latin ? F[i].a[1].count : 0);
+    int total = F[i].a[0].f.count + (have_latin ? F[i].a[1].f.count : 0);
     for (int j = 0; j < 2; j++) {
         atlas *a = &F[i].a[j];
-        a->fpad = (float)a->pad;
-        a->fcw = (float)a->cw;
-        a->fch = (float)a->ch;
-        a->ftop = (float)(a->asc - a->base);
-        a->du = (float)a->cw / W;
-        a->dv = (float)a->ch / H;
-        for (int k = 0; k < a->count; k++) a->fadv[k] = (float)a->adv[k];
+        a->fpad = (float)a->f.pad;
+        a->fcw = (float)a->f.cw;
+        a->fch = (float)a->f.ch;
+        a->ftop = (float)(a->f.asc - a->f.base);
+        a->du = (float)a->f.cw / W;
+        a->dv = (float)a->f.ch / H;
+        for (int k = 0; k < a->f.count; k++) a->fadv[k] = (float)a->f.adv[k];
     }
     for (int g = 0; g < total; g++) {
         F[i].u0[g] = (float)(g % COLS * F[i].cellw + 1) / W;
@@ -202,12 +96,12 @@ static void glyph_tables(int i)
 /* Row r of cells of font i into the texture: the clear texels, then each cell's alphas. */
 static void build_row(int i, int r)
 {
-    int W = F[i].cellw * COLS, H = F[i].cellh, nascii = F[i].a[0].count, total = nascii + (have_latin ? F[i].a[1].count : 0);
+    int W = F[i].cellw * COLS, H = F[i].cellh, nascii = F[i].a[0].f.count, total = nascii + (have_latin ? F[i].a[1].f.count : 0);
     for (int k = 0; k < W * H; k++) row_buf[k] = 0x0fff;
     for (int c = 0; c < COLS; c++) {
         int g = r * COLS + c;
         if (g >= total) break;
-        const atlas *a = g < nascii ? &F[i].a[0] : &F[i].a[1];
+        const fa_font *a = g < nascii ? &F[i].a[0].f : &F[i].a[1].f;
         int slot = g < nascii ? g : g - nascii;
         int sx = slot % COLS * a->cw, sy = slot / COLS * a->ch;
         for (int y = 0; y < a->ch; y++) {
@@ -241,7 +135,6 @@ int stext_tick(void)
             couch_log("stext: the atlases did not parse, the reader's text moves by whole pixels");
             return 0;
         }
-        if (have_latin) square = lmap(0x25a1) >= 0 && lmap(0x25a1) < ncp ? lmap(0x25a1) : -1;
         u32 bytes = 0;
         for (int i = 0; i < NF; i++) {
             F[i].dst = gfx_tex_new(&F[i].tex, (u16)(F[i].cellw * COLS), (u16)(F[i].cellh * F[i].rows), GFX_TEX_A4R4G4B4, 1);
@@ -346,10 +239,10 @@ float stext(float x, float y, int font, u32 rgba, const char *s, int n)
     if (fi < 0 || state != 2) return plain(x, y, font, rgba, s, n);
     float px = floorf(x + 0.5f), lo = band_on ? bt : -1e9f, hi = band_on ? bb : 1e9f;
     if (y + 80 < lo || y - 80 > hi) return px + stext_w(font, s, n);   /* far outside: the pen only */
-    int nascii = F[fi].a[0].count;
+    int nascii = F[fi].a[0].f.count;
     gfx_texture(&F[fi].tex);
     for (int i = 0, len = 1; i < n && s[i]; i += len) {
-        int slot = 0, which = glyph_at(s, n, i, &len, &slot);
+        int slot = 0, which = fa_glyph(s, n, i, have_latin, &len, &slot);
         if (which < 0) continue;
         const atlas *a = &F[fi].a[which];
         int g = which ? nascii + slot : slot;
@@ -388,18 +281,17 @@ float stext_fit(float x, float y, int font, u32 rgba, float maxw, const char *s)
     if (stext_w(font, s, n) <= maxw) return stext(x, y, font, rgba, s, n);
     float ell = (float)text_w(font, "...");
     char b[330];
-    int k = 0, ascii = 1, w = 0;
-    for (int i = 0; i < n && i < 300 && ascii; i++) ascii = !(s[i] & 0x80);
+    int k = 0, w = 0;
     for (int i = 0, len; i < n && i < 300; i += len) {     /* whole code points that fit with the dots */
         len = 1;
         unsigned char c = (unsigned char)s[i];
         if (c >= 0xc2 && c <= 0xf4) len = c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : 2;
         if (i + len > n) break;
-        if (ascii) {                                         /* ASCII widths add up: the prefix's width a byte at a time, not each prefix again */
-            char one[2] = {s[i], 0};
-            w += text_w(font, one);
-            if ((float)w + ell > maxw) break;
-        } else if (stext_w(font, s, i + len) + ell > maxw) break;
+        char one[5];                                         /* the prefix's width a code point at a time: text_w adds whole */
+        memcpy(one, s + i, (size_t)len);                     /* advances per code point in its byte and UTF-8 paths alike */
+        one[len] = 0;
+        w += text_w(font, one);
+        if ((float)w + ell > maxw) break;
         k = i + len;
     }
     memcpy(b, s, (size_t)k);
@@ -477,15 +369,27 @@ static void poly(const float *p, int n, const gfx_tex *t, const float *uv, u32 r
 static int outline(float x, float y, float w, float h, float r, float *p)
 {
     static const float cx[4] = {0, 1, 1, 0}, cy[4] = {0, 0, 1, 1};
+    static float uc[4 * (ARC + 1)], us[4 * (ARC + 1)];     /* the 28 points on the unit circle, made once (mglass draws */
+    static int made;                                       /* two outlines a card at the band's edge) */
     int n = 0;
+    if (!made) {
+        for (int c = 0, m = 0; c < 4; c++) {
+            float a0 = 3.14159265f * (1.0f + 0.5f * (float)c);
+            for (int k = 0; k <= ARC; k++, m++) {
+                float a = a0 + 1.5707963f * (float)k / ARC;
+                uc[m] = cosf(a);
+                us[m] = sinf(a);
+            }
+        }
+        made = 1;
+    }
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
     for (int c = 0; c < 4; c++) {
-        float ox = x + (cx[c] ? w - r : r), oy = y + (cy[c] ? h - r : r), a0 = 3.14159265f * (1.0f + 0.5f * (float)c);
+        float ox = x + (cx[c] ? w - r : r), oy = y + (cy[c] ? h - r : r);
         for (int k = 0; k <= ARC; k++) {
-            float a = a0 + 1.5707963f * (float)k / ARC;
-            p[2 * n] = ox + r * cosf(a);
-            p[2 * n + 1] = oy + r * sinf(a);
+            p[2 * n] = ox + r * uc[n];
+            p[2 * n + 1] = oy + r * us[n];
             n++;
         }
     }

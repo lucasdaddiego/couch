@@ -1,7 +1,7 @@
 /* Couch: a living-room dashboard on the TV, drawn by ps3gfx. The clock in
- * the console's time zone, the rates and the extras, the weather with the
- * rain, the sun and the moon, the next holiday and the news, from the Board
- * Worker at the URL in board_url.txt. Four pages: the Board, the News, the
+ * the console's time zone, the rates, the weather with the rain, the sun
+ * and the moon, the next holiday and the news, from the Board Worker at
+ * the URL in board_url.txt. Four pages: the Board, the News, the
  * Futbol page (0.5.0), the Info screen; L1 and R1 move between the first
  * three, SELECT opens the Info page and CIRCLE closes it.
  * The News page is a reader since 0.3.1 (reader.h): the list of 30

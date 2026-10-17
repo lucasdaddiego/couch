@@ -15,23 +15,17 @@
 #define BOARD_MAX 4096               /* the reply's body, at most (the Worker's MAX_BYTES) */
 #define BOARD_RATES 8                  /* rate lines kept, at most */
 #define BOARD_DAYS 3                 /* day lines kept, at most */
-#define BOARD_EXTRAS 4                /* extra lines kept, at most (the Worker sends 3) */
 #define BOARD_NEWS 8                 /* news lines kept, at most (the Worker's NEWS_MAX) */
 
+/* rate=label|buy|value|date: the buy price is not kept (0.5.1: the
+ * Worker writes "-", and the Board shows the value only). */
 typedef struct {
-    char label[24], buy[16], sell[16], when[16];
+    char label[24], sell[16], when[16];
 } board_rate;
 
 typedef struct {
     char label[16], words[24], max[12], min[12], rain[12];
 } board_day;
-
-/* A extras (since 2026-10-13): label|value|date|state|reason, state
- * "ok", "stale" (the value and date are old: the reason says why) or "none"
- * (value and date "-"). */
-typedef struct {
-    char label[48], value[24], when[16], state[8], reason[96];
-} board_extra;
 
 /* A headline: source|age|title, the age in seconds at the Worker's now, -1
  * for an item with no date. The Worker cuts a title to 110 code points: 336
@@ -50,27 +44,25 @@ typedef struct {
     long age;                        /* seconds since the Worker got the data, -1 when absent */
 } board_feed;
 
-/* A change against the previous calendar day's close: rate_chg=label|dir|pct|abs|date and extra_chg=... with the same
- * fields. dir: CHG_UP, CHG_DOWN, CHG_FLAT (no chip), CHG_NONE for
- * another word (no chip). pct and abs are the Worker's LOCALE text with
- * a sign ("+0,3%", "-3,20"), "-" when missing; when: the compared close's
- * date ("12 Oct"). */
+/* A change against the previous calendar day's close:
+ * rate_chg=label|dir|pct|abs|date, the amount and the date not kept (0.5.1:
+ * no chip shows them). dir: CHG_UP, CHG_DOWN, CHG_FLAT (no chip), CHG_NONE
+ * for another word (no chip). pct is the Worker's LOCALE text with a sign
+ * ("+0,3%"), "-" when missing. The label is cut as a rate line's. */
 enum { CHG_NONE, CHG_UP, CHG_DOWN, CHG_FLAT };
 typedef struct {
-    char label[48];
+    char label[24];
     int dir;
-    char pct[16], abs[24], when[16];
+    char pct[16];
 } board_chg;
 
 /* A 30-day series: spark=label|yyyy-mm-dd|v1 v2 ... the daily
- * values, oldest first, from the date given; "-" a missing
- * day (v[i] -1). start_day: the first date as days since 1970-01-01, -1 when
- * it is not a date. */
+ * values, oldest first, from the date given (not kept: the sparkline has
+ * no dates); "-" a missing day (v[i] -1). */
 #define BOARD_SPARKS 2               /* spark lines kept, at most (the Worker sends the hero tile's) */
 #define SPARK_MAX 31                 /* values kept per line, at most (the Worker sends 30) */
 typedef struct {
     char label[24];
-    long start_day;
     int dec;                         /* the values are times 10^dec (since 0.4.0) */
     int n;
     int v[SPARK_MAX];
@@ -99,12 +91,11 @@ typedef struct {
     int n_day;
     board_day day[BOARD_DAYS];
     board_feed wx_feed;
-    /* since 2026-10-13, keys a Couch 0.1.0 skips: the extras, the
-     * sky (wx_rain=rain|words or dry|words, wx_sun=rise|set; an older
-     * Worker's wx_moon is skipped: astro.h has the moon) and the news; each
-     * absent from an older Worker's reply */
-    int n_extra;
-    board_extra extra[BOARD_EXTRAS];
+    /* since 2026-10-13, keys a Couch 0.1.0 skips: the sky
+     * (wx_rain=rain|words or dry|words, wx_sun=rise|set; an older Worker's
+     * wx_moon is skipped: astro.h has the moon) and the news; each absent
+     * from an older Worker's reply (0.5.1: the extras, extra= and
+     * extra_chg=, are skipped too: no Worker sends them) */
     int has_rain, rain_wet;
     char rain[64];
     int has_sun;
@@ -133,14 +124,13 @@ typedef struct {
     int day_code[BOARD_DAYS];
     int n_rate_chg;
     board_chg rate_chg[BOARD_RATES];    /* matched to a rate line by its label (board_chg_find) */
-    int n_extra_chg;
-    board_chg extra_chg[BOARD_EXTRAS];/* matched to a extra line by its label */
     int n_spark;
     board_spark spark[BOARD_SPARKS]; /* matched to a rate line by its label (board_spark_find) */
-    /* since 0.3.2: holiday=YYYY-MM-DD|name|days (the Worker of 2026-10-16) */
+    /* since 0.3.2: holiday=YYYY-MM-DD|name|days (the Worker of 2026-10-16;
+     * days, 0 to 400, is only checked: holiday_parts counts them from the
+     * date) */
     int has_holiday;
     int hol_year, hol_month, hol_day;/* 1 to 12, 1 to 31 */
-    int hol_days;                    /* days to it, 0 (today) to 400 */
     char hol_name[96];
     /* since 0.5.0, keys a Couch 0.4.1 skips: wx_soon=words (the rain of
      * the next 2 h from Open-Meteo's 15-minute values: "Rain from 18:45",
@@ -167,10 +157,9 @@ enum { BP_OK, BP_NOT_BOARD, BP_VERSION, BP_CUT };
  * failed, so every text becomes ASCII (text_field). */
 int board_parse(const char *body, int n, int fold, board_data *b);
 
-/* The change line of a label (a rate or extra line's label, compared as the
- * parse wrote both), or NULL: no chip. extra 0 searches rate_chg, 1
- * extra_chg. The first match counts. */
-const board_chg *board_chg_find(const board_data *b, int extra, const char *label);
+/* The change line of a rate line's label (compared as the parse wrote
+ * both), or NULL: no chip. The first match counts. */
+const board_chg *board_chg_find(const board_data *b, const char *label);
 /* The spark line of a rate label, or NULL. */
 const board_spark *board_spark_find(const board_data *b, const char *label);
 /* The lowest and the highest present value of a series (the "30 d: 1.540 to
@@ -364,7 +353,7 @@ double ticker_offset(double t, double px_s, double period);
 /* ---- the reader (0.3.1, stage 11): the Worker's /news and /article -------------- */
 
 /* GET /news (worker/README.md, "The news reader"): "couch-news 1",
- * now=, item=id|source|category|age|title (0 to 30, the newest first; a
+ * now= (not kept), item=id|source|category|age|title (0 to 30, the newest first; a
  * 6th field, the summary of an older Worker, is skipped), news_age=,
  * news_state=, end. At most NEWS_MAX bytes (the Worker's
  * NEWS_BYTES). The same rules as the Board's: unknown keys and lines with
@@ -380,7 +369,6 @@ typedef struct {
 } news_item;
 typedef struct {
     int version;
-    long now;
     int n;
     news_item item[NEWS_ITEMS];
     board_feed feed;                 /* news_age and news_state ("" when absent) */
@@ -391,17 +379,17 @@ typedef struct {
  * an item. fold as board_parse's. */
 int news_parse(const char *body, int n, int fold, news_data *d);
 
-/* GET /article?id=<id>: "couch-article 1", now=, id=, source=, category=,
- * title=, date=words|age, link=, state=, p= (0 or more), end. At most
- * ARTICLE_MAX bytes; the p= lines with "p=" and LF at most 12288 bytes. */
+/* GET /article?id=<id>: "couch-article 1", now=, id= (neither kept: the
+ * reader matches a reply by its request's id), source=, category=, title=,
+ * date=words|age, link=, state=, p= (0 or more), end. At most ARTICLE_MAX
+ * bytes; the p= lines with "p=" and LF at most 12288 bytes. */
 #define ARTICLE_MAX 16384
 #define ART_TEXT 12288               /* the paragraphs' bytes, each with its NUL */
 #define ART_PARAS 400                /* p= lines kept, at most (a 12 KB text of 30-byte lines) */
 #define ART_LINK 1024                /* the link: at most 1024 bytes with "link=" */
 typedef struct {
     int version;
-    long now;
-    char id[9], source[32], category[20];
+    char source[32], category[20];
     char title[904];                 /* 300 code points of 3 bytes and the NUL */
     char date[48];                   /* "Wed 14 Oct 12:12", "" for "-" */
     long age;                        /* seconds, -1 for "-" */
@@ -449,9 +437,9 @@ typedef struct {
     char day[48];
     int n_league, n_game;
     fut_league league[FUT_LEAGUES];
-    fut_game game[FUT_GAMES];
     int more_leagues, more_games;    /* left out, 0 when none */
     board_feed feed;                 /* futbol_age and futbol_state ("" when absent) */
+    fut_game game[FUT_GAMES];        /* last (0.5.1): a copy of a reply ends after its n_game games (futbol_take) */
 } futbol_data;
 /* The body into *d, with the return values of news_parse (line 1
  * "couch-futbol 1"). fold as board_parse's. */

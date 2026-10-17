@@ -29,6 +29,7 @@
 #include "board.h"
 #include "clock.h"
 #include "parse.h"
+#include "sky.h"
 
 #define GROUP_PRIO 100               /* PSL1GHT's samples: 16 is the highest, 255 the lowest */
 #define FIRST_US 2000000             /* the six start reports, or the group is stopped */
@@ -350,28 +351,6 @@ static const char *textures(void)
     return NULL;
 }
 
-/* A small texture the PPU makes once: w x h A8R8G8B8, white in every texel
- * (the RGB rule of bilinear filtering mixes RGB without
- * premultiplied alpha), the alpha from fn and the 4 x 4 dither under 0x30
- * (the alpha test drops texels under 0x10). Written in 32-bit stores. */
-static int make_tex(gfx_tex *t, u16 w, u16 h, float (*fn)(float, float))
-{
-    static const u32 bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-    u8 *p = gfx_tex_new(t, w, h, GFX_TEX_A8R8G8B8, 1);
-    if (!p) return 0;
-    frame_ev |= EV_TEX;
-    for (u32 y = 0; y < h; y++) {
-        volatile u32 *row = (volatile u32 *)(p + y * t->pitch);
-        for (u32 x = 0; x < w; x++) {
-            float f = fn(((float)x + 0.5f) / w, ((float)y + 0.5f) / h);
-            u32 a = (u32)(f < 0 ? 0 : f > 1 ? 255 : f * 255.0f + 0.5f);
-            if (a < 0x30) a = (a + bayer[y & 3][x & 3]) >> 4 << 4;
-            row[x] = a << 24 | 0xffffffu;
-        }
-    }
-    return 1;
-}
-
 /* A soft cloud: five round lumps on a flat base, fading at the edges. */
 static float blob(float u, float v)
 {
@@ -392,6 +371,10 @@ static float dot(float u, float v)
     return r >= 1 ? 0 : (1 - r) * (1 - r) * 1.6f;
 }
 
+/* The two small textures the PPU makes once, by sky.h's make_tex (white
+ * in every texel: the RGB rule of bilinear filtering mixes RGB without
+ * premultiplied alpha; the dither under 0x30: the alpha test drops texels
+ * under 0x10). */
 static gfx_tex blob_tex, dot_tex;
 static int blob_ok = -1, dot_ok = -1;
 
@@ -504,8 +487,6 @@ static unsigned mix_rgb(unsigned a, unsigned b, float t)
     return r;
 }
 
-static float clampf(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }
-
 /* The scene from the last good reply and the clock (no geo yet: night,
  * 30 % cloud, dry, no wind). The cloud colours: by day the
  * horizon's colour lit toward white and the top's darkened, by night a
@@ -515,17 +496,18 @@ static void scene(long utc)
 {
     fx_scene s;
     const board_data *b = &board_cur;
+    double azim = 0;                         /* the sun's azimuth, degrees (no geo: 0) */
+    unsigned top, horizon;                   /* the gradient (sky_colors) */
     memset(&s, 0, sizeof s);
     int geo = board_have && b->has_geo, fx = board_have && b->has_fx;
-    if (geo) sun_pos(utc, b->lat, b->lon, &s.elev, &s.azim);
+    if (geo) sun_pos(utc, b->lat, b->lon, &s.elev, &azim);
     else s.elev = board_have && b->has_wx && b->is_day ? 30 : -20;   /* a reply with no geo (before 0.3.0): wx_now's day or night */
-    int cover = fx ? b->fx_cover : -1, code = fx ? b->fx_code : -1;
-    s.wet = wmo_wet(code);
-    sky_colors(s.elev, cover, s.wet, &s.top, &s.horizon);
-    s.sky[0] = s.top;                        /* the glass source's stops, as ps3gfx's test: top, 55 % of the way, horizon, a quarter back */
-    s.sky[1] = mix_rgb(s.top, s.horizon, 0.55f);
-    s.sky[2] = s.horizon;
-    s.sky[3] = mix_rgb(s.horizon, s.top, 0.25f);
+    int cover = fx ? b->fx_cover : -1, code = fx ? b->fx_code : -1, wet = wmo_wet(code);   /* wet: rain or a storm now */
+    sky_colors(s.elev, cover, wet, &top, &horizon);
+    s.sky[0] = top;                          /* the glass source's stops, as ps3gfx's test: top, 55 % of the way, horizon, a quarter back */
+    s.sky[1] = mix_rgb(top, horizon, 0.55f);
+    s.sky[2] = horizon;
+    s.sky[3] = mix_rgb(horizon, top, 0.25f);
     s.cover = cover < 0 ? 0.3f : (float)cover / 100.0f;
     float kmh = fx && b->fx_speed > 0 ? (float)b->fx_speed : 0, from = fx && b->fx_dir >= 0 ? (float)b->fx_dir : 0;
     s.rain_wind = fx_rain_wind(kmh, from);
@@ -545,9 +527,9 @@ static void scene(long utc)
     /* by day from the sky's own colours; by night a dim blue-grey just over
      * the night sky (stage 9: stage 8's 2a3550 and 121a2c made an overcast
      * night twice as bright as a clear one) */
-    s.lit = mix_rgb(0x141a28, mix_rgb(s.horizon, 0xffffff, 0.35f), d);
-    s.shade = mix_rgb(0x080c16, mix_rgb(s.top, 0x000000, 0.2f), d);
-    if (s.wet) {
+    s.lit = mix_rgb(0x141a28, mix_rgb(horizon, 0xffffff, 0.35f), d);
+    s.shade = mix_rgb(0x080c16, mix_rgb(top, 0x000000, 0.2f), d);
+    if (wet) {
         s.lit = mix_rgb(s.lit, mix_rgb(0x181d26, 0x5d6878, d), 0.5f * d + 0.2f);   /* the rain's grey, dim at night */
         s.shade = mix_rgb(s.shade, mix_rgb(0x0a0d14, 0x2c3442, d), 0.5f * d + 0.2f);
     }
@@ -557,7 +539,7 @@ static void scene(long utc)
     /* the sun's place: the screen spans 180 deg of azimuth, facing the
      * equator (north in the south); elevation 0 at 80 % of the height, 60
      * deg at the top */
-    float da = (float)s.azim - (geo && b->lat < 0 ? 0.0f : 180.0f);
+    float da = (float)azim - (geo && b->lat < 0 ? 0.0f : 180.0f);
     while (da > 180) da -= 360;
     while (da < -180) da += 360;
     s.sun_x = (960.0f + da / 90.0f * 960.0f) / 4.0f;
@@ -799,7 +781,6 @@ void fx_tick(int mode)
     if (fx_state != FXS_SPU) return;
     if (P.busy) pics_poll();
     if (fx_state != FXS_SPU || P.busy) return;
-    entries_check();
     if (mode == FXM_NONE) return;            /* no picture: the SPUs rest (the one out was polled above) */
     if (P.frame - P.sent_frame >= period(mode) || !P.job) pics_send(mode);
 }
@@ -1000,9 +981,6 @@ void fx_draw_rain(float alpha)
 
 /* ---- the exit ----------------------------------------------------------------------- */
 
-/* Thread i has no job out: its last report is in. */
-static int idle(int i) { return came(i); }
-
 void fx_stop(void)
 {
     if (log_later) couch_log("%s", log_later);
@@ -1021,7 +999,7 @@ void fx_stop(void)
             sysUsleep(1000);
             n = 0;
             for (int i = 0; i < FX_SPUS; i++) {
-                if (!sent[i] && idle(i)) {   /* a word only to a thread whose last report came: the mailbox never fills */
+                if (!sent[i] && came(i)) {   /* a word only to a thread whose last report came (no job out): the mailbox never fills */
                     sent[i] = 1;
                     if (sysSpuThreadWriteMb(threads[i], ctls[i].serial)) sent[i] = 2;
                 }

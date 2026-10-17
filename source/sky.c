@@ -41,7 +41,6 @@ static u32 hash(u32 x)
     return x;
 }
 static float hashf(u32 x) { return (float)(hash(x) & 0xffffff) / 16777216.0f; }
-static float clampf(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }
 
 /* One texel: the alpha (0 to 1) with the dither under 0x30, and an RGB. */
 static u32 texel(float a, u32 rgb, u32 x, u32 y)
@@ -51,9 +50,7 @@ static u32 texel(float a, u32 rgb, u32 x, u32 y)
     return v << 24 | (rgb & 0xffffffu);
 }
 
-/* A white texture of w x h from an alpha function of the texel's centre
- * (0 to 1 over the texture), in 32-bit stores; 0 when RSX memory is short. */
-static int make_tex(gfx_tex *t, u16 w, u16 h, float (*fn)(float, float))
+int make_tex(gfx_tex *t, u16 w, u16 h, float (*fn)(float, float))
 {
     u8 *p = gfx_tex_new(t, w, h, GFX_TEX_A8R8G8B8, 1);
     if (!p) return 0;

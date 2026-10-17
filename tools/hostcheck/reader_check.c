@@ -1,15 +1,18 @@
 /* Couch's host check of the reader's pure code in source/parse.c (0.3.1,
  * stage 11; tools/hostcheck/run.zsh): news_parse and article_parse against
- * the Worker test's replies (worker/test/reader.test.js: its /news
- * item and its /article texts, which run.zsh extracts) and the live replies
- * of 2026-10-14 (tools/preview/fixtures, decoded), each cut at every byte,
- * with CR LF, as version 2, with long fields, too many lines, a 32 KB list
- * and a 16 KB article; the fold; wrap_lines with a width of 10 px a code
- * point; grid_move, the scroll's helpers, url_sibling. With
- * "fuzz" last, also 20,000 mutated replies of the live list and of a live
- * article (a sanitizer build: no crash, every field ends inside its
- * buffer). Since 0.5.0 also futbol_parse against the template Worker's
- * /futbol test reply (worker/test/board.test.js's form, made-up teams),
+ * the Worker test's replies (worker/test/reader.test.js: the cut and the
+ * long /article texts of its articleText test, which run.zsh extracts; its
+ * /news item and its ok and summary /article forms, which run.zsh writes
+ * as the test makes them, since the test's own hold the feed's computed
+ * id, title and link) and the live replies of 2026-10-14
+ * (tools/preview/fixtures, decoded), each cut at every byte, with CR LF, as
+ * version 2, with long fields, too many lines, a 32 KB list and a 16 KB
+ * article; the fold; wrap_lines with a width of 10 px a code point;
+ * grid_move, the scroll's helpers, url_sibling. With "fuzz" last, also
+ * 20,000 mutated replies of the live list and of a live article (a
+ * sanitizer build: no crash, every field ends inside its buffer). Since
+ * 0.5.0 also futbol_parse against the template Worker's /futbol test reply
+ * (worker/test/board.test.js's, made-up teams, which run.zsh extracts),
  * cut at every byte, with CR LF, as version 2, past its arrays, and 20,000
  * mutated replies. Prints PASS or FAIL per group; the exit status is the
  * number of failed checks.
@@ -74,7 +77,7 @@ static int news_bounded(void)
 
 static int art_bounded(void)
 {
-    int ok = IN(ad.id) && id_ok(ad.id) && IN(ad.source) && IN(ad.category) && IN(ad.title) && IN(ad.date) && IN(ad.link) && IN(ad.state) &&
+    int ok = IN(ad.source) && IN(ad.category) && IN(ad.title) && IN(ad.date) && IN(ad.link) && IN(ad.state) &&
              IN(ad.reason) && ad.n_para >= 0 && ad.n_para <= ART_PARAS && ad.age >= -1 && !strchr(ad.link, ' ');
     for (int i = 0; ok && i < ad.n_para; i++) {
         int o = ad.para_off[i];
@@ -89,7 +92,7 @@ static void news_worker(const char *w, int wn)
 {
     int f0 = fails;
     CHECK(news_parse(w, wn, 0, &nd) == BP_OK);
-    CHECK(nd.version == 1 && nd.now == 1792164000 && nd.n == 1);
+    CHECK(nd.version == 1 && nd.n == 1);
     STR(nd.item[0].id, "1a2b3c4d");
     STR(nd.item[0].source, "Z\xc3\xbcrich Post");
     STR(nd.item[0].category, "world");
@@ -205,12 +208,11 @@ static void article_worker(const char *ok, int okn, const char *sm, int smn, con
 {
     int f0 = fails;
     CHECK(article_parse(ok, okn, 0, &ad) == BP_OK && art_bounded());
-    STR(ad.id, "1a2b3c4d");
     STR(ad.source, "Z\xc3\xbcrich Post");
     STR(ad.category, "world");
     STR(ad.title, "Leaders meet in Z\xc3\xbcrich to agree on a new plan for river shipping");
     STR(ad.date, "Fri 16 Oct 17:10");
-    CHECK(ad.age == 600 && ad.now == 1792164000);
+    CHECK(ad.age == 600);
     STR(ad.link, "https://news.example.org/world/leaders-meet-in-z%C3%BCrich");
     STR(ad.state, "ok");
     CHECK(ad.n_para == 2 && !ad.text_cut);
@@ -240,7 +242,7 @@ static void article_worker(const char *ok, int okn, const char *sm, int smn, con
     STR(ad.state, "summary");
     STR(ad.reason, "x: HTTP 403");
     const char *none = "couch-article 1\nnow=1792164000\nstate=none|unknown id\nend\n";
-    CHECK(article_parse(none, (int)strlen(none), 0, &ad) == BP_OK && !ad.id[0] && ad.n_para == 0);
+    CHECK(article_parse(none, (int)strlen(none), 0, &ad) == BP_OK && ad.n_para == 0);
     STR(ad.state, "none");
     STR(ad.reason, "unknown id");
     group("the Worker's /article forms: ok, summary, cut, no date and no link, none; folded", f0);
@@ -250,7 +252,7 @@ static void article_live(const char *w, int wn)
 {
     int f0 = fails;
     CHECK(article_parse(w, wn, 0, &ad) == BP_OK && art_bounded());
-    CHECK(strlen(ad.id) == 8 && ad.n_para >= 10 && ad.link[0] && !strncmp(ad.link, "https://", 8));
+    CHECK(ad.n_para >= 10 && ad.link[0] && !strncmp(ad.link, "https://", 8));
     STR(ad.state, "ok");
     int whole = 0, bad = 0;
     for (int k = 0; k <= wn; k++) {
@@ -271,7 +273,7 @@ static void article_rules(void)
     const char *r = "couch-article 1\nid=0123456Z\nsource=-\ncategory=world\ntitle=  T  \ndate=Wed 14 Oct 9:05|abc\n"
                     "link=https://x.example/\xc3\xa1 b\nstate=weird words\np=\np=  \np=one\nother=x\nend\np=after\n";
     CHECK(article_parse(r, (int)strlen(r), 1, &ad) == BP_OK);
-    CHECK(!ad.id[0] && !ad.source[0] && ad.age == -1 && !ad.link[0] && ad.n_para == 1);
+    CHECK(!ad.source[0] && ad.age == -1 && !ad.link[0] && ad.n_para == 1);
     STR(ad.title, "T");
     STR(ad.date, "Wed 14 Oct 9:05");
     STR(ad.state, "none");
@@ -306,7 +308,7 @@ static void article_rules(void)
     k += snprintf(b + k, sizeof b - (size_t)k, "end\n");
     CHECK(article_parse(b, k, 0, &ad) == BP_OK && art_bounded() && ad.text_cut && ad.n_para == 3);
     CHECK(strlen(ad.text + ad.para_off[2]) % 3 == 0 && ad.para_off[2] + (int)strlen(ad.text + ad.para_off[2]) < ART_TEXT);
-    group("/article's rules: version, ids, '-', the state's words, the link never folded or cut, 400 paragraphs, 12 KB of text", f0);
+    group("/article's rules: version, '-', the state's words, the link never folded or cut, 400 paragraphs, 12 KB of text", f0);
 }
 
 /* ---- the helpers ---------------------------------------------------------------------------- */

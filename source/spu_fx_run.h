@@ -44,16 +44,14 @@ extern char fx_why[120];             /* why RSX only, "" while the SPUs run */
  * (fx_tick recomputes it each second and at each new reply). Colours are
  * 0xRRGGBB. The Board page and sky.c read it (the glass tint, the sun, the stars). */
 typedef struct {
-    double elev, azim;               /* the sun, degrees (no geo: -20, 0) */
-    unsigned top, horizon;           /* the gradient (sky_colors) */
-    unsigned sky[4];                 /* the gradient at 0, 55, 80 and 100 % of the height */
+    double elev;                     /* the sun's elevation, degrees (no geo: 30 by day, -20 by night) */
+    unsigned sky[4];                 /* the gradient (sky_colors) at 0, 55, 80 and 100 % of the height */
     float cover;                     /* 0 to 1 */
     float wind_x, wind_y;            /* the clouds' drift, picture pixels a second (1 picture pixel = 4 screen pixels) */
     float rain_wind;                 /* the rain's slant, px/s (fx_rain_wind) */
     int precip, kind;                /* drops or flakes (wx_precip), FX_DROPS or FX_FLAKES; 0: dry */
     unsigned lit, shade, edge;       /* the clouds' colours */
     float edge_amt, sun_x, sun_y, sun_gain;   /* sun_x, sun_y in picture pixels */
-    int wet;                         /* rain or a storm now */
     float light;                     /* the sky's light, 0 (night, from -6 deg down) to 1 (day, from 12 deg up): the glass tint */
 } fx_scene;
 extern fx_scene fx_sc;

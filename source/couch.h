@@ -26,6 +26,9 @@ extern s64 t_start;                  /* sysGetSystemTime at the start */
 #define TEMP_COLD   0x6cb8ffff       /* the min/max bar's cold end */
 #define TEMP_HOT    0xff8a5cff       /* its hot end */
 
+/* x clamped to lo .. hi (board_page.c, sky.c, spu_fx_run.c: one copy since 0.5.1). */
+static inline float clampf(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }
+
 /* One line appended to couch.txt, with its line end; nothing when the folder
  * is not writable. The main thread only.
  *

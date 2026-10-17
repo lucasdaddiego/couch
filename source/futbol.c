@@ -5,6 +5,7 @@
  * scroll_follow) and draws through stext.h, cut and faded at the edges of
  * its band, as the reader's list. The main thread only. */
 #include <stdio.h>
+#include <stddef.h>
 #include <string.h>
 #include <math.h>
 #include <sys/systime.h>
@@ -153,8 +154,9 @@ void futbol_take(const board_reply *b)
         }
     } else snprintf(what, sizeof what, "a list of a day gone by (asked before midnight): dropped");
     if ((j == 0 || j == 1) && last_ok[j]) {
-        int first = !have[j];
-        D[j] = *b->fut;
+        int first = !have[j], ng = b->fut->n_game < 0 ? 0 : b->fut->n_game > FUT_GAMES ? FUT_GAMES : b->fut->n_game;
+        /* up to its last game (game[] is last): a typical day fills a third of the 91 KB, every 60 s while a game is live */
+        memcpy(&D[j], b->fut, offsetof(futbol_data, game) + (size_t)ng * sizeof(fut_game));
         have[j] = 1;
         got_at[j] = b->at;
         got_date[j] = ask_date[k];

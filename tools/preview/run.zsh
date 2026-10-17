@@ -200,11 +200,9 @@ accents_line() {
     (*) print -r -- "$1";;
     esac
 }
-body_extras() { each extras_line; }   # two extras (none and stale), no rain, no news (the feeds failed)
-extras_line() {
+body_nonews() { each nonews_line; }   # no rain, no news (the feeds failed)
+nonews_line() {
     case $1 in
-    (rate_state=*) print -r -- "$1"; print -r -- "extra=Index|-|-|none|example.org: HTTP 503"
-        print -r -- "extra=Fixed term (APR)|3,25%|14:00|stale|example.org: no answer in 4 s";;
     (wx_rain=*) print -r -- "wx_rain=dry|No rain in the next 12 h";;
     (news=*) ;;
     (news_age=*) print -r -- "news_age=0";;
@@ -221,7 +219,7 @@ snow_line() { case $1 in wx_fx=*) print -r -- "wx_fx=73|90|0.4|270|10|15";; *) p
 # The night scenes put the place at longitude 165 (and offset and PV_TZ at +11 h): the preview's
 # clock is fixed at 12:00 UTC, which is 23:00 there.
 body_old() { each old_line; }     # a minimal Worker: the reply without the derived keys (the host check's first reply)
-old_line() { [[ $1 == (geo|wx_fx|wx_hours|days_fx|rate_chg|extra_chg|spark|feature|numfmt|wx_soon|air|futbol)=* ]] || print -r -- "$1"; }
+old_line() { [[ $1 == (geo|wx_fx|wx_hours|days_fx|rate_chg|spark|feature|numfmt|wx_soon|air|futbol)=* ]] || print -r -- "$1"; }
 body_dayrain() { each dayrain_line; }   # a rainy day: WMO 61, 88 %, 20 km/h from the SE; a chip of each kind
 dayrain_line() {
     case $1 in
@@ -393,8 +391,8 @@ board_none|all)    # both upstreams failed with no old data
 pages|all)         # L1 and R1 cycle the Board, the News and the Futbol page (0.5.0): R1 to the News, R1 to the Futbol page, R1
                    # wraps to the Board, L1 to the Futbol page; SELECT opens the Info page, R1 there does nothing, CIRCLE goes back
     scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_futbol 182:R1 210:SNAP=pages_back 212:L1 240:SNAP=pages_l1 242:SELECT 270:SNAP=pages_info 272:R1 300:SNAP=pages_info_r1 302:CIRCLE 330:SNAP=pages_circle 331:EXIT" ;|
-board_extras|all)  # the money extras none and stale, a dry forecast, the feeds failed: the News page says why
-    NEWS=none BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 150:SNAP=news_none 151:EXIT" ;|
+board_nonews|all)  # a dry forecast, the news feeds failed (0.5.1: no extras, which no Worker sends): no ticker, the News page says why
+    NEWS=none BODY=nonews scn board_nonews "120:SNAP=board_nonews 122:R1 150:SNAP=news_none 151:EXIT" ;|
 board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines, no /news (the new Couch draws what came)
     NEWS=404 BODY=v1 scn board_v1 "120:SNAP=board_v1 122:R1 150:SNAP=news_v1 151:EXIT" ;|
 net_slow|all)      # the connect takes 2 s: the header says the internet is slow (0.5.0's review: by the connect's time); a slow

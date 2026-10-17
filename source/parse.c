@@ -220,44 +220,23 @@ static int words(const char *v, int n, const char **w, int *wl, int max)
     return k;
 }
 
-/* "2026-09-14" as days since 1970-01-01, -1 for anything else. */
-static long ymd_days(const char *s, int n)
+/* label|dir|pct|abs|date (the amount and the date not kept); the label
+ * cut as its rate line's (the same size), so that a long label still finds
+ * its line */
+static void chg_line(board_chg *g, const char *val, int vl, int fold)
 {
-    int v[3] = {0, 0, 0}, len[3] = {4, 2, 2}, i = 0;
-    while (n > 0 && s[n - 1] == ' ') n--;
-    while (i < n && s[i] == ' ') i++;
-    if (n - i != 10) return -1;
-    for (int p = 0; p < 3; p++) {
-        if (p && s[i++] != '-') return -1;
-        for (int d = 0; d < len[p]; d++, i++) {
-            if (s[i] < '0' || s[i] > '9') return -1;
-            v[p] = v[p] * 10 + (s[i] - '0');
-        }
-    }
-    static const unsigned char mdays[12] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    if (v[0] < 1970 || v[1] < 1 || v[1] > 12 || v[2] < 1 || v[2] > mdays[v[1] - 1]) return -1;
-    if (v[1] == 2 && v[2] == 29 && !((v[0] % 4 == 0 && v[0] % 100 != 0) || v[0] % 400 == 0)) return -1;
-    return days_from_civil(v[0], v[1], v[2]);
-}
-
-/* label|dir|pct|abs|date; the label cut as its rate or extra line's (lsize
- * bytes with the NUL), so that a long label still finds its line */
-static void chg_line(board_chg *g, const char *val, int vl, int fold, int lsize)
-{
-    const char *f[5];
-    int fl[5];
+    const char *f[3];
+    int fl[3];
     char dir[8];
-    int c = split(val, vl, f, fl, 5);
-    put(g->label, lsize, f, fl, c, 0, fold);
+    int c = split(val, vl, f, fl, 3);
+    put(g->label, sizeof g->label, f, fl, c, 0, fold);
     put(dir, sizeof dir, f, fl, c, 1, 1);
     g->dir = !strcmp(dir, "up") ? CHG_UP : !strcmp(dir, "down") ? CHG_DOWN : !strcmp(dir, "flat") ? CHG_FLAT : CHG_NONE;
     put(g->pct, sizeof g->pct, f, fl, c, 2, fold);
-    put(g->abs, sizeof g->abs, f, fl, c, 3, fold);
-    put(g->when, sizeof g->when, f, fl, c, 4, fold);
 }
 
-/* label|yyyy-mm-dd|v1 v2 ...|dec (dec since 0.4.0: the values are times
- * 10^dec, 0 to 4; absent 0) */
+/* label|yyyy-mm-dd|v1 v2 ...|dec (the date not kept; dec since 0.4.0: the
+ * values are times 10^dec, 0 to 4; absent 0) */
 static void spark_line(board_spark *s, const char *val, int vl, int fold)
 {
     const char *f[4], *w[SPARK_MAX];
@@ -265,7 +244,6 @@ static void spark_line(board_spark *s, const char *val, int vl, int fold)
     int c = split(val, vl, f, fl, 4);
     s->dec = field_c(f, fl, c, 3, 0, 4, 1, 0);
     put(s->label, sizeof s->label, f, fl, c, 0, fold);
-    s->start_day = c > 1 ? ymd_days(f[1], fl[1]) : -1;
     s->n = c > 2 ? words(f[2], fl[2], w, wl, SPARK_MAX) : 0;
     for (int i = 0; i < SPARK_MAX; i++) s->v[i] = i < s->n ? num_c(w[i], wl[i], 0, 100000000, 0, -1) : -1;
 }
@@ -343,9 +321,8 @@ int board_parse(const char *body, int n, int fold, board_data *b)
         } else if (key_is(k, kl, "rate")) {
             if (b->n_rate == BOARD_RATES) continue;
             board_rate *u = &b->rate[b->n_rate++];
-            c = split(val, vl, f, fl, 4);
+            c = split(val, vl, f, fl, 4);                    /* field 1, the buy price, not kept */
             put(u->label, sizeof u->label, f, fl, c, 0, fold);
-            put(u->buy, sizeof u->buy, f, fl, c, 1, fold);
             put(u->sell, sizeof u->sell, f, fl, c, 2, fold);
             put(u->when, sizeof u->when, f, fl, c, 3, fold);
         } else if (key_is(k, kl, "numfmt")) {
@@ -385,19 +362,6 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             feed_age(&b->wx_feed, val, vl);
         } else if (key_is(k, kl, "wx_state")) {
             feed_state(&b->wx_feed, val, vl, fold);
-        } else if (key_is(k, kl, "extra")) {
-            /* label|value|date|state|reason: a state that is not ok or stale is none */
-            if (b->n_extra == BOARD_EXTRAS) continue;
-            board_extra *m = &b->extra[b->n_extra++];
-            char st[8];
-            c = split(val, vl, f, fl, 5);
-            put(m->label, sizeof m->label, f, fl, c, 0, fold);
-            put(m->value, sizeof m->value, f, fl, c, 1, fold);
-            put(m->when, sizeof m->when, f, fl, c, 2, fold);
-            put(st, sizeof st, f, fl, c, 3, 1);
-            snprintf(m->state, sizeof m->state, "%s", !strcmp(st, "ok") || !strcmp(st, "stale") ? st : "none");
-            m->reason[0] = 0;
-            if (c > 4) text_field(m->reason, sizeof m->reason, f[4], fl[4], fold);
         } else if (key_is(k, kl, "wx_rain")) {
             char kind[8];
             c = split(val, vl, f, fl, 2);
@@ -411,7 +375,7 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             put(b->sunset, sizeof b->sunset, f, fl, c, 1, fold);
             b->has_sun = strcmp(b->sunrise, "-") && strcmp(b->sunset, "-");
         } else if (key_is(k, kl, "holiday")) {
-            /* YYYY-MM-DD|name|days: a bad date or day count leaves no holiday */
+            /* YYYY-MM-DD|name|days: a bad date or day count leaves no holiday (the count is not kept) */
             c = split(val, vl, f, fl, 3);
             b->has_holiday = 0;
             int digits_ok = c == 3 && fl[0] == 10 && f[0][4] == '-' && f[0][7] == '-';
@@ -423,7 +387,6 @@ int board_parse(const char *body, int n, int fold, board_data *b)
                     b->hol_year = (f[0][0] - '0') * 1000 + (f[0][1] - '0') * 100 + (f[0][2] - '0') * 10 + (f[0][3] - '0');
                     b->hol_month = mo;
                     b->hol_day = d;
-                    b->hol_days = (int)v;
                     put(b->hol_name, sizeof b->hol_name, f, fl, c, 1, fold);
                     b->has_holiday = b->hol_name[0] && strcmp(b->hol_name, "-");
                 }
@@ -458,9 +421,7 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             b->n_day_code = c;
             for (int i = 0; i < BOARD_DAYS; i++) b->day_code[i] = field_c(f, fl, c, i, 0, 99, 1, -1);
         } else if (key_is(k, kl, "rate_chg")) {
-            if (b->n_rate_chg < BOARD_RATES) chg_line(&b->rate_chg[b->n_rate_chg++], val, vl, fold, (int)sizeof b->rate[0].label);
-        } else if (key_is(k, kl, "extra_chg")) {
-            if (b->n_extra_chg < BOARD_EXTRAS) chg_line(&b->extra_chg[b->n_extra_chg++], val, vl, fold, (int)sizeof b->extra[0].label);
+            if (b->n_rate_chg < BOARD_RATES) chg_line(&b->rate_chg[b->n_rate_chg++], val, vl, fold);
         } else if (key_is(k, kl, "spark")) {
             if (b->n_spark < BOARD_SPARKS) spark_line(&b->spark[b->n_spark++], val, vl, fold);
         } else if (key_is(k, kl, "wx_soon")) {
@@ -795,7 +756,6 @@ int news_parse(const char *body, int n, int fold, news_data *d)
 {
     const char *p = body, *end = body + n, *ls;
     int ll;
-    long v;
     memset(d, 0, sizeof *d);
     d->feed.age = -1;
     int rc = head_line(&p, end, "couch-news ", &d->version);
@@ -806,9 +766,7 @@ int news_parse(const char *body, int n, int fold, news_data *d)
         if (!eq) continue;
         const char *k = ls, *val = eq + 1;
         int kl = (int)(eq - ls), vl = ll - kl - 1;
-        if (key_is(k, kl, "now")) {
-            if (to_long(val, vl, &v) && v > 0) d->now = v;
-        } else if (key_is(k, kl, "item")) {
+        if (key_is(k, kl, "item")) {
             /* id|source|category|age|title: the title ends at a '|' (an older Worker's 6th field, the summary, is dropped) */
             if (d->n == NEWS_ITEMS) continue;
             const char *f[5];
@@ -834,7 +792,6 @@ int article_parse(const char *body, int n, int fold, article_data *a)
 {
     const char *p = body, *end = body + n, *ls;
     int ll, used = 0;
-    long v;
     memset(a, 0, sizeof *a);
     a->age = -1;
     int rc = head_line(&p, end, "couch-article ", &a->version);
@@ -845,11 +802,7 @@ int article_parse(const char *body, int n, int fold, article_data *a)
         if (!eq) continue;
         const char *k = ls, *val = eq + 1;
         int kl = (int)(eq - ls), vl = ll - kl - 1;
-        if (key_is(k, kl, "now")) {
-            if (to_long(val, vl, &v) && v > 0) a->now = v;
-        } else if (key_is(k, kl, "id")) {
-            id_field(a->id, val, vl);
-        } else if (key_is(k, kl, "source")) {
+        if (key_is(k, kl, "source")) {
             text_field(a->source, sizeof a->source, val, vl, fold);
             if (!strcmp(a->source, "-")) a->source[0] = 0;
         } else if (key_is(k, kl, "category")) {
@@ -1071,12 +1024,10 @@ double scroll_follow(double s, double target, double dt, double tau)
 
 /* ---- the changes, the series, the numbers (0.3.0) ------------------------------ */
 
-const board_chg *board_chg_find(const board_data *b, int extra, const char *label)
+const board_chg *board_chg_find(const board_data *b, const char *label)
 {
-    const board_chg *c = extra ? b->extra_chg : b->rate_chg;
-    int n = extra ? b->n_extra_chg : b->n_rate_chg;
-    for (int i = 0; i < n; i++)
-        if (!strcmp(c[i].label, label)) return &c[i];
+    for (int i = 0; i < b->n_rate_chg; i++)
+        if (!strcmp(b->rate_chg[i].label, label)) return &b->rate_chg[i];
     return NULL;
 }
 
