@@ -20,7 +20,9 @@
  *                         "couch-board 2"), hang (recv waits until a
  *                         netShutdown, at most 30 s of host time), slow
  *                         (the answer comes 4 s of the preview's clock
- *                         after the connect: a slow internet)
+ *                         after the connect: a slow Worker, its upstreams'
+ *                         waits), slownet (the connect takes 2 s of the
+ *                         preview's clock: a slow internet, 0.5.0's review)
  *   PV_NEWS=<file>        the body of GET /news (0.3.1's reader); "404" or
  *                         absent: HTTP 404 (a Worker before the reader)
  *   PV_ARTICLES=<dir>     GET /article?id=<id> answers <dir>/<id>.txt, and
@@ -80,14 +82,14 @@ static const char default_body[] =
     "wx_state=ok\n"
     "end\n";
 
-enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2, K_HANG, K_SLOW, K_404, K_KINDS };
+enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2, K_HANG, K_SLOW, K_404, K_SLOWNET, K_KINDS };
 
 extern volatile int quit;                    /* ps3gfx's: Quit Game from the PS button menu */
 
 /* The kind of entry n (0 first) of a list: PV_BOARD_FAIL's, per connect. */
 static int kind_of(const char *s, int n)
 {
-    static const char *const names[K_KINDS] = {"ok", "refused", "silent", "cut", "301", "v2", "hang", "slow", "404"};
+    static const char *const names[K_KINDS] = {"ok", "refused", "silent", "cut", "301", "v2", "hang", "slow", "404", "slownet"};
     char tok[16] = "ok";
     for (int i = 0; s && *s; i++) {
         int len = (int)strcspn(s, ",");
@@ -172,6 +174,10 @@ s32 netConnect(s32 s, const struct sockaddr *a, socklen_t l)
     if ((in->sin_port != 80 && in->sin_port != 8787) || kind == K_REFUSED) {   /* htons is the identity in the stub */
         err_val = NET_ECONNREFUSED;
         return -1;
+    }
+    if (kind == K_SLOWNET) {                 /* the preview's clock moves with the frames: 2 s of it in the connect */
+        u64 t = sysGetSystemTime();
+        while (sysGetSystemTime() - t < 2000000) usleep(1000);
     }
     sk[i].kind = kind;
     sk[i].n = connects - 1;

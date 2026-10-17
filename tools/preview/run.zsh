@@ -82,7 +82,7 @@ soon_line() {
     case $1 in
     (wx_rain=*) print -r -- "wx_rain=rain|Rain from 19:00 (60%)"; print -r -- "wx_soon=Rain from 18:45";;
     (air=*|futbol=*) ;;
-    (wx_state=*) print -r -- "$1"; print -r -- "air=42|3"; print -r -- "futbol=2|9|2 live";;
+    (wx_state=*) print -r -- "$1"; print -r -- "air=42|3"; print -r -- "futbol=2|2 live";;
     (*) print -r -- "$1";;
     esac
 }
@@ -92,7 +92,7 @@ soon2_line() {
     (wx_fx=*) print -r -- "wx_fx=61|88|1.2|135|20|30";;
     (wx_rain=*) print -r -- "wx_rain=rain|Rain now (80%)"; print -r -- "wx_soon=Rain until 19:30";;
     (air=*|futbol=*) ;;
-    (wx_state=*) print -r -- "$1"; print -r -- "air=163|9"; print -r -- "futbol=0|9|Next: Northbridge${DASH}Valley Athletic 21:00";;
+    (wx_state=*) print -r -- "$1"; print -r -- "air=163|9"; print -r -- "futbol=0|Next: Northbridge${DASH}Valley Athletic 21:00";;
     (*) print -r -- "$1";;
     esac
 }
@@ -184,7 +184,6 @@ offset=7200
 city=Berlin
 rate_age=0
 rate_state=none|frankfurter.dev: HTTP 503
-wx_moon=Waxing crescent moon
 wx_age=0
 wx_state=none|open-meteo: no answer in 4 s
 news_age=0
@@ -192,8 +191,6 @@ news_state=none|feeds.bbci.co.uk: HTTP 403
 end
 "
 }
-body_src() { each src_line; }    # the now line from another source (a Worker that reads a station): the card's foot names it
-src_line() { case $1 in wx_now=*) print -r -- "wx_now=17$D|17$D|62%|Cloudy|3 km/h|day|Station 17:00";; *) print -r -- "$1";; esac; }
 body_accents() { each accents_line; }   # a city with an n tilde (U+00F1) and a reason with an en dash, for the fold
 accents_line() {
     case $1 in
@@ -226,7 +223,7 @@ old_line() { [[ $1 == (geo|wx_fx|wx_hours|days_fx|rate_chg|extra_chg|spark|featu
 body_dayrain() { each dayrain_line; }   # a rainy day: WMO 61, 88 %, 20 km/h from the SE; a chip of each kind
 dayrain_line() {
     case $1 in
-    (wx_now=*) print -r -- "wx_now=19$D|17$D|88%|Rain|20 km/h|day|Open-Meteo";;
+    (wx_now=*) print -r -- "wx_now=19$D|17$D|88%|Rain|20 km/h|day";;
     (wx_fx=*) print -r -- "wx_fx=61|88|1.2|135|20|34";;
     (days_fx=*) print -r -- "days_fx=61|3|2";;
     (day=Sun*) print -r -- "day=Sun|Partly cloudy|22$D|12$D|18%";;
@@ -248,7 +245,7 @@ night_line() {   # $2: the wx_now words and wx_fx of the night
     case $1 in
     (offset=*) print -r -- "offset=39600";;
     (geo=*) print -r -- "geo=52.52|165";;
-    (wx_now=*) print -r -- "wx_now=11$D|10$D|71%|$2|6 km/h|night|Open-Meteo";;
+    (wx_now=*) print -r -- "wx_now=11$D|10$D|71%|$2|6 km/h|night";;
     (wx_fx=*) print -r -- "wx_fx=$3";;
     (wx_rain=*) print -r -- "wx_rain=dry|No rain in the next 12 h";;
     (wx_hours=*) print -r -- "wx_hours=0|11 10 10 9 9 8 8 8 8 9 11 13|0 0 0 0 0 0 0 0 0 0 0 0|0 0 0 0 0 0 0 1 1 1 1 1";;
@@ -258,18 +255,14 @@ night_line() {   # $2: the wx_now words and wx_fx of the night
     esac
 }
 hol_line() { [[ $1 == holiday=* ]] && { print -r -- "holiday=2026-10-12|Founders' Day|4"; return }; print -r -- "$1"; }   # the next holiday in 4 days
-dayhol_line() {   # and the hours from 10:00, the preview clock's next hour (the base reply's start at 18 hides the hourly card)
-    [[ $1 == wx_hours=* ]] && { print -r -- "wx_hours=10|13 15 16 17 18 19 19 18 17 15 14 13|0 0 10 20 40 60 75 70 50 30 10 0|2 2 3 3 61 61 63 61 3 2 1 0"; return }
-    hol_line "$1"
-}
-body_hol() { each dayhol_line; }
+body_hol() { each hol_line; }   # the hourly card from 18:00, the reply's next hour (0.5.0's review: by the reply's clock and zone)
 body_nighthol() { local l; for l in "${(@f)$(body_night)}"; do hol_line "$l"; done; }
 body_night() { local l; for l in "${(@f)$(< $REPLY)}"; do night_line "$l" Clear "0|3|0|200|6|11"; done; }
 body_ocnight() { local l; for l in "${(@f)$(< $REPLY)}"; do night_line "$l" Overcast "3|100|0|200|8|15"; done; }
 body_storm() { each storm_line; }   # a thunderstorm by day: WMO 95, 100 %, 8.5 mm, 35 km/h from the NW
 storm_line() {
     case $1 in
-    (wx_now=*) print -r -- "wx_now=18$D|18$D|94%|Thunderstorm|35 km/h|day|Open-Meteo";;
+    (wx_now=*) print -r -- "wx_now=18$D|18$D|94%|Thunderstorm|35 km/h|day";;
     (wx_fx=*) print -r -- "wx_fx=95|100|8.5|300|35|62";;
     (wx_rain=*) print -r -- "wx_rain=rain|Rain now (90%)";;
     (days_fx=*) print -r -- "days_fx=95|61|3";;
@@ -279,7 +272,7 @@ storm_line() {
 body_snowday() { each snowday_line; }   # snow by day, below 0: the minus sign of the digits
 snowday_line() {
     case $1 in
-    (wx_now=*) print -r -- "wx_now=-1$D|-6$D|90%|Snow|10 km/h|day|Open-Meteo";;
+    (wx_now=*) print -r -- "wx_now=-1$D|-6$D|90%|Snow|10 km/h|day";;
     (wx_fx=*) print -r -- "wx_fx=73|90|0.4|270|10|15";;
     (wx_rain=*) print -r -- "wx_rain=rain|Snow now (80%)";;
     (day=Today*) print -r -- "day=Today|Snow|1$D|-3$D|80%";;
@@ -311,7 +304,7 @@ rate=USD|0,8850|0,8920|16 Oct
 rate=GBP|1,1800|1,1900|16 Oct
 rate_age=42
 rate_state=ok
-wx_now=11$D|10$D|92%|Overcast|9 km/h|night|Open-Meteo
+wx_now=11$D|10$D|92%|Overcast|9 km/h|night
 day=Today|Rain showers|16$D|11$D|96%
 day=Sat|Overcast|16$D|9$D|2%
 day=Sun|Drizzle|16$D|10$D|22%
@@ -402,8 +395,10 @@ board_extras|all)  # the money extras none and stale, a dry forecast, the feeds 
     NEWS=none BODY=extras scn board_extras "120:SNAP=board_extras 122:R1 150:SNAP=news_none 151:EXIT" ;|
 board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines, no /news (the new Couch draws what came)
     NEWS=404 BODY=v1 scn board_v1 "120:SNAP=board_v1 122:R1 150:SNAP=news_v1 151:EXIT" ;|
-net_slow|all)      # the answer takes 4 s: the header says the internet is slow
-    scn net_slow "400:SNAP=net_slow 402:SELECT 430:SNAP=net_slow_info 431:EXIT" PV_BOARD_FAIL=slow ;|
+net_slow|all)      # the connect takes 2 s: the header says the internet is slow (0.5.0's review: by the connect's time); a slow
+                   # Worker (its answer 4 s after a fast connect) is no slow internet
+    scn net_slow "400:SNAP=net_slow 402:SELECT 430:SNAP=net_slow_info 431:EXIT" PV_BOARD_FAIL=slownet
+    scn net_slowworker "400:SNAP=net_slowworker 401:EXIT" PV_BOARD_FAIL=slow ;|
 net_down|all)      # a good reply, then SQUARE after 10 s and a refused connect: no internet since 09:00
     scn net_down "120:SNAP=net_down_first 700:SQUARE 820:SNAP=net_down 822:SELECT 850:SNAP=net_down_info 851:EXIT" PV_BOARD_FAIL=ok,refused ;|
 ambient|all)       # 10 min with no button (1 min in the preview's build): the waiting screen; after 2 min of it the block
@@ -411,9 +406,6 @@ ambient|all)       # 10 min with no button (1 min in the preview's build): the w
                    # screen (the Board) and does not exit; the fetches go on (every 5 min: 3 min of frames, one)
     BODY=hol scn ambient "120:SNAP=ambient_before 3720:SNAP=ambient 7320:SNAP=ambient_news 10800:SNAP=ambient_fade 10920:SNAP=ambient_moved 10940:START 10960:SNAP=ambient_awake 10970:EXIT" PV_MAXFRAMES=11000
     print -r -- "  requests: $(command grep -c '^GET' $P/build/sbx/ambient$SFX/peer.log); couch.txt: $(command grep -h '^ambient' $P/build/sbx/ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
-board_src|all)     # the now line from another source: the weather card's foot names it; the same folded to ASCII
-    BODY=src scn board_src "120:SNAP=board_src 121:EXIT"
-    BIN=pv_utf8_off BODY=src scn board_src_utf8_off "120:SNAP=board_src_utf8_off 121:EXIT" ;|
 board_301|all)     # the host redirects plain HTTP (Always Use HTTPS back on)
     scn board_301 "120:SNAP=board_301 122:SELECT 150:SNAP=board_301_info 151:EXIT" PV_BOARD_FAIL=301 ;|
 board_stale301|all) # a good reply, then SQUARE after 10 s and a 301: the stale line keeps the data's time, the Info screen the Location
@@ -556,6 +548,12 @@ reader_ambient|all) # an open article holds the ambient mode off for 20 min (10 
                    # still the article, at 182 s the aurora; no list request while the article is open (not in the narrow pass)
     [[ $AREA != narrow ]] && scn reader_ambient "120:R1 160:DOWN 166:CROSS 5520:SNAP=reader_noambient 10920:SNAP=reader_ambient 10921:EXIT" PV_MAXFRAMES=11000
     [[ $AREA != narrow ]] && print -r -- "  requests: $(command grep -c '^GET /news' $P/build/sbx/reader_ambient$SFX/peer.log) of /news, $(command grep -c '^GET /board' $P/build/sbx/reader_ambient$SFX/peer.log) of /board; couch.txt: $(command grep -h '^ambient' $P/build/sbx/reader_ambient$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+reader_title|all)  # 0.5.0's review: an article's title of 7 lines and more: its 6th line ends in "..."
+    A2=$P/build/sbx/articles_title$SFX
+    rm -rf $A2 && mkdir -p $A2 && cp $FIX/articles/*.txt $A2/
+    TT="$(printf 'Leaders meet in the capital to agree on a new plan for river shipping and ports %.0s' 1 2 3 4 5)"
+    sed -i '' "s|^title=.*|title=${TT% }|" $A2/f80706d6.txt
+    scn reader_title "120:R1 160:DOWN 166:CROSS 260:SNAP=article_title 261:EXIT" PV_ARTICLES=$A2 ;|
 board_soon|all)    # 0.5.0: the rain of the next 2 h in the hero's band, the air's chips, the futbol line in the header by turns
                    # with the holiday (8 s each: frame 600 is the futbol line); then raining until 19:30, a poor air, the next game
     BODY=soon scn board_soon "120:SNAP=board_soon 600:SNAP=board_soon_futbol 601:EXIT"
@@ -570,7 +568,10 @@ futbol_states|all) # 0.5.0: no games today, the source failed (the Worker's stat
     FUT=empty scn futbol_empty "120:L1 160:SNAP=futbol_empty 161:EXIT"
     FUT=none scn futbol_none "120:L1 160:SNAP=futbol_none 161:EXIT"
     FUT=404 scn futbol_404 "120:L1 160:SNAP=futbol_404 161:EXIT"
-    scn futbol_slow "120:L1 160:SNAP=futbol_skeleton 161:EXIT" PV_FUTBOL_FAIL=slow ;|
+    scn futbol_slow "120:L1 160:SNAP=futbol_skeleton 161:EXIT" PV_FUTBOL_FAIL=slow
+    # 0.5.0's review: SQUARE on the Futbol page asks only its list, not the Board
+    scn futbol_square "120:L1 800:SQUARE 900:SNAP=futbol_square 901:EXIT"
+    print -r -- "  requests: $(command grep -c '^GET /futbol' $P/build/sbx/futbol_square$SFX/peer.log) of /futbol, $(command grep -c '^GET /board' $P/build/sbx/futbol_square$SFX/peer.log) of /board" ;|
 info_console|all)  # 0.5.0: SELECT with no fan_policy in the journal: the fan's first-run prompt, CROSS; the Info page with the Hardware row;
                    # TRIANGLE edits the night, RIGHT to the start, UP twice; CROSS saves night.txt; then SELECT on a hot console
     JOURNAL=$TZ_ONLY scn info_console "120:SELECT 150:SNAP=info_fan_prompt 152:CROSS 180:SNAP=info_console 182:TRIANGLE 210:SNAP=info_night_edit 212:RIGHT 216:UP 220:UP 240:SNAP=info_night_changed 242:CROSS 270:SNAP=info_night_saved 271:EXIT"
@@ -579,7 +580,7 @@ info_console|all)  # 0.5.0: SELECT with no fan_policy in the journal: the fan's 
 ambient_nightmode|all) # 0.5.0: night.txt 22-07 and 23:00 at the place: the waiting screen is the dim clock on black; 2 min later it
                    # fades out (half way) and comes back at its next place
     NIGHT=22-07 BODY=night scn ambient_nightmode "3720:SNAP=ambient_nightmode 10800:SNAP=ambient_nightmode_fade 10920:SNAP=ambient_nightmode_moved 10921:EXIT" PV_TZ=660 PV_MAXFRAMES=11000
-    print -r -- "  couch.txt: $(command grep -h -e '^ambient' -e '^night' $P/build/sbx/ambient_nightmode$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+    print -r -- "  couch.txt: $(command grep -h -e '^ambient' -e '^night' -e 'sky pictures' $P/build/sbx/ambient_nightmode$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 esac
 [[ -n $PV_CHILD ]] && exit 0                 # the PNGs: the parent's, once
 py=${PYTHON:-python3}

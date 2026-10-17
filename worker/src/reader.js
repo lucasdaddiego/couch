@@ -4,7 +4,7 @@
 // key=value lines with "|" between the fields of a value, then "end". No value holds "|", CR or LF
 // (clean() makes them spaces). Pure functions: the Worker (index.js) gets the feeds and the page.
 
-import { clean } from './board.js';
+import { clean, dateFmt } from './board.js';
 import { cutTitle } from './news.js';
 
 export const NEWS_VERSION = 1;
@@ -42,10 +42,11 @@ export function quotas(weights, max) {
 // newest items (quotas above), then each feed gives one item in turn until max, so a feed with
 // fewer items leaves its share to the others; an id already taken (the same link in two feeds) is
 // skipped. Then the items are sorted newest first (no date last) and the oldest drop until the
-// reply fits NEWS_BYTES.
+// reply fits NEWS_BYTES. No summary since Couch 0.5.0's review: Couch never drew it (Couch 0.4.1
+// reads a missing one as none); the cache keeps it for /article's fallback.
 //   couch-news 1
 //   now=<unix>
-//   item=<id>|<source>|<category>|<age>|<title>|<summary>      (0 to max lines)
+//   item=<id>|<source>|<category>|<age>|<title>      (0 to max lines)
 //   news_age=<s>
 //   news_state=ok | stale|<reason> | none|<reason>
 //   end
@@ -56,7 +57,7 @@ export function newsText({ now, feeds = [], max = NEWS_LIST }) {
     .filter((x) => x && /^[0-9a-f]{8}$/.test(x.id) && typeof x.title === 'string' && clean(x.title))
     .map((x) => ({
       id: x.id, label: clean(label) || '-', cat: clean(category) || '-', title: clean(x.title),
-      summary: clean(x.summary), at: Number.isFinite(x.at) ? x.at : null,
+      at: Number.isFinite(x.at) ? x.at : null,
     }))
     .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)));
   const picked = [], seen = new Set(), taken = lists.map(() => 0);
@@ -76,7 +77,7 @@ export function newsText({ now, feeds = [], max = NEWS_LIST }) {
   const bad = rs.find((r) => r.state !== 'ok');
   const tail = [`news_age=${Math.max(0, ...rs.filter((r) => r.data).map((r) => r.age | 0))}`,
     `news_state=${!bad ? 'ok' : `${picked.length ? 'stale' : 'none'}|${clean(bad.reason)}`}`, 'end', ''];
-  const lines = picked.map((x) => `item=${x.id}|${x.label}|${x.cat}|${age(x.at, now)}|${x.title}|${x.summary}`);
+  const lines = picked.map((x) => `item=${x.id}|${x.label}|${x.cat}|${age(x.at, now)}|${x.title}`);
   let size = utf8([...head, ...tail].join('\n')) + lines.reduce((a, l) => a + utf8(l) + 1, 0);
   while (lines.length && size > NEWS_BYTES) size -= utf8(lines.pop()) + 1;
   return [...head, ...lines, ...tail].join('\n');
@@ -106,7 +107,7 @@ export function capParas(paras) {
 export function dateWords(t, tz) {
   if (!Number.isFinite(t)) return '-';
   const p = {};
-  for (const x of new Intl.DateTimeFormat('en-US', {
+  for (const x of dateFmt('en-US', {
     timeZone: tz, month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).formatToParts(new Date(t * 1000))) p[x.type] = x.value;
   return `${p.weekday} ${+p.day} ${MONTHS[+p.month - 1]} ${p.hour}:${p.minute}`;

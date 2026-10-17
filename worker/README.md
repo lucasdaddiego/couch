@@ -7,13 +7,15 @@ API, and formats one reply of at most 4 KB.
 | Endpoint | Reply |
 |---|---|
 | `GET /board` | the Board: the place, the rates, the weather, the next holiday, 8 headlines |
-| `GET /news` | the News page: up to `NEWS_LIST` (30) headlines with their ids, categories and summaries |
+| `GET /news` | the News page: up to `NEWS_LIST` (30) headlines with their ids and categories |
 | `GET /article?id=<8 hex>` | one headline's article: its page's paragraphs (at most 12 KB), else the feed's summary |
-| `GET /futbol?d=0` or `d=1` | the Fútbol page: today's or tomorrow's fixtures by league (at most 12 KB); this template has no source, so its state is `none` |
+| `GET /futbol?d=0` or `d=1` | the Fútbol page: today's or tomorrow's fixtures by league (at most 16 KB); this template has no source, so its state is `none` |
 
 Every reply is 200 with the state in its body; any other path or method is
 404. `/article` fetches only the link of an item in a configured feed, so the
-Worker is no open proxy.
+Worker is no open proxy. It also opens a headline that `/news` listed after
+the item left its feed: `/news` keeps the feeds' last 150 items in one cache
+entry.
 
 ## Settings
 
@@ -26,8 +28,7 @@ All in `wrangler.jsonc` as vars (no secrets); its comment describes each one.
 | `CURRENCY`, `RATES`, `FEATURE` | your currency, up to 8 others (`USD,GBP:Pound,JPY`), the large tile's code |
 | `COUNTRY`, `HOLIDAY_NAMES` | the holidays' country (ISO 3166 alpha-2), `local` or `english` names |
 | `NEWS_FEEDS`, `NEWS_MAX`, `NEWS_LIST` | `Label*weight@category=URL` between commas, at most 6; the Board's and the News page's counts |
-| `WX_TTL`, `FX_TTL`, `NEWS_TTL`, `ARTICLE_TTL` | seconds an answer stays fresh (900, 3600, 600, 3600) |
-| `AIR_TTL` | optional: the air quality's seconds (absent: `WX_TTL`'s) |
+| `WX_TTL`, `AIR_TTL`, `FX_TTL`, `NEWS_TTL`, `ARTICLE_TTL` | seconds an answer stays fresh (900, 3600, 3600, 600, 3600; an absent `AIR_TTL` takes `WX_TTL`'s) |
 
 An empty `RATES`, `COUNTRY` or `NEWS_FEEDS` leaves that part out.
 
@@ -62,7 +63,9 @@ go out marked `stale` with their real age and the reason. A failure is
 remembered: the next requests answer at once with the old entry, and the
 upstream is tried again after the reply at most once per 300 s. A cold
 `/board` with 3 feeds makes 7 fetches and 14 cache calls, far below the free
-plan's 50 subrequests (6 feeds and both holiday years: 31).
+plan's 50 subrequests (6 feeds and both holiday years: 31). At most 6 fetches
+run at once (the runtime's limit of open connections), each with its 4 s
+limit from its own start.
 
 ## The Board reply
 
@@ -82,30 +85,30 @@ the chart, the hours, the changes, the sky lines, then the rates and days.
 | `spark` | `label\|first date\|30 values\|decimals` (the values times 10^decimals, `-` for none) |
 | `extra` | `label\|value\|date\|state\|reason`: a value of another kind (an index, a rate of interest); this Worker sends none |
 | `rate_age`, `rate_state` | the rates' age in seconds, `ok` or `stale\|reason` or `none\|reason` |
-| `wx_now` | `temperature\|feels like\|humidity\|words\|wind\|day or night\|source` |
+| `wx_now` | `temperature\|feels like\|humidity\|words\|wind\|day or night` |
 | `wx_fx` | `WMO code\|cloud cover\|mm per hour\|wind from (degrees)\|wind km/h\|gusts km/h` |
 | `day`, `days_fx` | `label\|words\|max\|min\|chance of rain`, and each day's WMO code |
-| `wx_rain`, `wx_sun`, `wx_moon` | `rain or dry\|words`, `sunrise\|sunset`, the moon's phase in words |
+| `wx_rain`, `wx_sun` | `rain or dry\|words`, `sunrise\|sunset` (Couch works out the moon from its clock) |
 | `wx_soon` | the rain of the next 2 h in words: `Rain from 18:45`, `Rain until 19:30` or `Rain for the next 2 h`; absent when dry (Couch 0.5.0) |
 | `wx_hours` | `first hour\|12 temperatures\|12 chances\|12 WMO codes` |
 | `wx_age`, `wx_state` | as the rates' |
 | `air` | `US AQI\|UV index`, whole, `-` for a missing one; absent when the data is over 3 h old (Couch 0.5.0) |
 | `holiday` | `date\|name\|days until it` |
-| `futbol` | `games live\|games today\|words` (`2 live`, `Next: Home–Away 21:00`, `No more games today`); only from a Worker with a fútbol source (Couch 0.5.0) |
+| `futbol` | `games live\|words` (`2 live`, `Next: Home–Away 21:00`, `No more games today`); only from a Worker with a fútbol source (Couch 0.5.0) |
 | `news`, `news_age`, `news_state` | `source\|age in seconds\|title`, as the rates' |
 
-`/news` is `couch-news 1`, then `item=id|source|category|age|title|summary`
-lines, `news_age`, `news_state`, `end`. `/article` is `couch-article 1`, then
-`id`, `source`, `category`, `title`, `date` (`words|age`), `link`, `state`
-(`ok`, `cut`, `summary|reason` or `none|reason`) and one `p=` line per
-paragraph, then `end`.
+`/news` is `couch-news 1`, then `item=id|source|category|age|title` lines,
+`news_age`, `news_state`, `end`. `/article` is `couch-article 1`, then `id`,
+`source`, `category`, `title`, `date` (`words|age`), `link`, `state` (`ok`,
+`cut`, `summary|reason` or `none|reason`) and one `p=` line per paragraph,
+then `end`.
 
 `/futbol` is `couch-futbol 1`, then `now`, `day` (`Today, Fri 16 Oct`), per
 league a `league=name|country` line and its `game=when|home|away|home
 goals|away goals|TV|kind` lines (`when`: the local start of a game to come,
 else its minute, `HT`, `Final`, `Pens 4-3`, `Postponed`; the goals `-` before
 the start; `kind`: `pre`, `live`, `end` or `off`), a `more=leagues|games` line
-when the 12 KB cap left whole leagues out, `futbol_age`, `futbol_state`, `end`.
+when the 16 KB cap left whole leagues out, `futbol_age`, `futbol_state`, `end`.
 `src/futbol.js` formats it from one day in a plain form (its first comment): a
 Worker with a source of fixtures fills that form; this template has none.
 

@@ -12,7 +12,8 @@
  * code, so the frame only copies them (reader.c takes them). It also
  * writes couch.txt's queued lines (couch.h's couch_log_drain) between its
  * requests. It never journals. Since 0.5.0 also GET /futbol?d=0 or d=1
- * (the Futbol page, futbol.h), after the Board and before the news list. */
+ * (the Futbol page, futbol.h), after an article and, since 0.5.0's review,
+ * before the Board and the news list (the page waits for it). */
 #ifndef BOARD_H
 #define BOARD_H
 
@@ -27,7 +28,6 @@
  * Before the thread starts. */
 void board_init(void);
 extern char board_url[200];          /* the URL in use, "" when none */
-extern int board_url_file;           /* 1: from board_url.txt */
 extern char board_url_note[160];     /* why board_url.txt was not used, or "" */
 
 /* The thread's requests. board_ask_news and board_ask_article (the
@@ -90,13 +90,18 @@ extern int board_has_skew;
 extern long board_skew;              /* the console's clock minus the Worker's now, at the reply */
 int board_offset(int *offset);       /* 1 and the last good reply's offset, or 0 */
 long board_age(void);                /* seconds since the last good reply came */
+/* The futbol line and the rain of the next 2 h go once the reply is older
+ * than this (0.5.0's review): the Worker's FUT_MAX_AGE (30 min), well
+ * inside the 2 h that the rain's words cover. */
+#define BOARD_FRESH_S 1800
 /* The schedule in words: "Fetching", "Refresh in 6 s", "Next update in 4 min". */
 void board_next_words(char *buf, int n);
 
-/* The internet as the fetches show it (parse.h's net_quality), for the
- * header: the last fetch's class, its time, its connect time (-1 with no
- * connection), and the console's clock at the first fetch with no answer
- * since the last answered one (0 while the fetches get answers). */
+/* The internet as the fetches show it (parse.h's net_quality: by the
+ * connect's time), for the header: the last fetch's class, its time, its
+ * connect time (-1 with no connection), and the console's clock at the
+ * first fetch with no answer since the last answered one (0 while the
+ * fetches get answers). */
 extern int board_net_q;
 extern s64 board_net_us, board_connect_us;
 extern long board_net_down_utc;

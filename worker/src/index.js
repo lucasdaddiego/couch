@@ -29,7 +29,42 @@ export const ARTICLE_TTL = 3600;          // an article's paragraphs, cached 1 h
 export const RETRY_S = 300;
 const KEEP_S = 86400;                    // the Cache API keeps an entry (data or a failure) 1 day
 
-const fetchOpts = () => ({ signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'user-agent': 'couch-board' } });
+// A fetch's options: its time limit as timeout (ms), which paced() turns into a signal when the
+// fetch starts, not when it is asked for.
+const fetchOpts = () => ({ timeout: TIMEOUT_MS, headers: { 'user-agent': 'couch-board' } });
+
+// The runtime's 6 connections open at once (Cloudflare's limit for a request): a fetch past them
+// waits in the runtime's queue, and a timer made when it was asked for runs out there, so a
+// healthy upstream behind slow ones could fail with "no answer in 4 s" (the Board asks up to 10 at
+// once). paced() starts at most FETCH_SLOTS fetches at once, in the order they were asked for,
+// each with its own timer from its start (opts.timeout); a slot frees when the answer's head came
+// or the fetch failed. Each read here takes its body at once, so a body holds its connection
+// briefly.
+export const FETCH_SLOTS = 6;
+export function paced(fetchFn, slots = FETCH_SLOTS) {
+  let busy = 0;
+  const queue = [];
+  const next = () => {
+    while (busy < slots && queue.length) queue.shift()();
+  };
+  return (url, opts = {}) => new Promise((resolve, reject) => {
+    queue.push(() => {
+      const { timeout, ...rest } = opts;
+      busy++;
+      let p;
+      try {
+        p = fetchFn(url, timeout ? { ...rest, signal: AbortSignal.timeout(timeout) } : rest);
+      } catch (e) {
+        p = Promise.reject(e);
+      }
+      Promise.resolve(p).then(resolve, reject).finally(() => {
+        busy--;
+        next();
+      });
+    });
+    next();
+  });
+}
 
 // A thrown fetch or body error in words (after the host).
 function errWords(e, ms = TIMEOUT_MS) {
@@ -179,7 +214,7 @@ export function articleUpstream(item) {
     key: () => `https://couch.internal/article?u=${encodeURIComponent(item.link)}`,
     ttl: (env) => Number(env.ARTICLE_TTL) || ARTICLE_TTL,
     load: async (env, now, deps) => {
-      const r = await deps.fetch(item.link, { signal: AbortSignal.timeout(ARTICLE_TIMEOUT_MS), headers: { 'user-agent': 'couch-board' } });
+      const r = await deps.fetch(item.link, { timeout: ARTICLE_TIMEOUT_MS, headers: { 'user-agent': 'couch-board' } });
       if (!r.ok) {
         if (r.body) r.body.cancel().catch(() => {});
         return { data: null, bad: `HTTP ${r.status}` };
@@ -225,10 +260,8 @@ async function refresh(u, env, now, deps, key, entry, bg) {
 // else the upstream (cached when valid), else the old entry marked stale, else none. An upstream
 // that failed before is not waited for (RETRY_S above): the old entry or none at once, with the
 // failure's reason, and at most once per RETRY_S a try after the reply. deps: {fetch, cache,
-// waitUntil}. opts.cacheOnly (since Couch 0.5.0): the cache entry only, never a fetch or a write
-// (an old entry is stale with BUDGET_WORDS). Never throws.
-export const BUDGET_WORDS = 'not refreshed: the subrequest budget';
-export async function get(name, env, now, deps, opts = {}) {
+// waitUntil}. Never throws.
+export async function get(name, env, now, deps) {
   const u = typeof name === 'string' ? UPSTREAMS[name] : name;
   let key, entry = null;
   try {
@@ -246,7 +279,6 @@ export async function get(name, env, now, deps, opts = {}) {
   const has = !!entry && entry.data !== null && entry.data !== undefined && Number.isFinite(entry.at);
   if (has && now - entry.at < u.ttl(env, entry.data, now)) return { state: 'ok', age: now - entry.at, data: entry.data };
   const old = (reason) => (has ? { state: 'stale', reason, age: now - entry.at, data: entry.data } : { state: 'none', reason, age: 0, data: null });
-  if (opts.cacheOnly) return old(BUDGET_WORDS);
   const fail = entry && entry.fail && Number.isFinite(entry.fail.at) ? entry.fail : null;
   if (fail) {
     if (now - fail.at >= RETRY_S || now < fail.at) deps.waitUntil(refresh(u, env, now, deps, key, has ? entry : null, true));
@@ -258,21 +290,56 @@ export async function get(name, env, now, deps, opts = {}) {
 
 const textReply = (text) => new Response(text, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
 
+// The items of the feeds that /news listed from (since Couch 0.5.0's review): a headline that left
+// its feed after the list was made still opens (/article). One cache entry, {items: [{id, title,
+// full, at, link, summary, label, category}]}: the newest LISTED_MAX by date, the feed's label and
+// category with each. /news writes it (after the reply) when the feeds hold an id it lacks; the
+// Cache API keeps it KEEP_S. Only items of the configured feeds come in, so /article still
+// fetches no link that a feed did not give.
+const LISTED_KEY = 'https://couch.internal/listed';
+export const LISTED_MAX = 150;
+const listedOk = (x) => !!x && typeof x === 'object' && /^[0-9a-f]{8}$/.test(x.id);
+
+async function listedRead(deps) {
+  try {
+    const hit = await deps.cache.match(LISTED_KEY);
+    const e = hit ? await hit.json() : null;
+    return e && Array.isArray(e.items) ? e.items.filter(listedOk) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function listedSave(feeds, rs, deps) {
+  const fresh = feeds.flatMap((f, i) => (Array.isArray(rs[i].data) ? rs[i].data : []).filter(listedOk)
+    .map((x) => ({ ...x, label: f.label, category: f.category })));
+  const old = await listedRead(deps), have = new Set(old.map((x) => x.id));
+  if (!fresh.some((x) => !have.has(x.id))) return;
+  const by = new Map([...old, ...fresh].map((x) => [x.id, x]));      // a feed's copy over the old one
+  const items = [...by.values()].sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, LISTED_MAX);
+  deps.waitUntil(Promise.resolve().then(() => deps.cache.put(LISTED_KEY, new Response(JSON.stringify({ items }), {
+    headers: { 'content-type': 'application/json', 'cache-control': `max-age=${KEEP_S}` },
+  }))).catch(() => {}));
+}
+
 // GET /news: the list (reader.js's newsText) of every feed of NEWS_FEEDS, from the cache that
-// /board fills (or a fetch, as /board's). Always 200, the states in the body.
+// /board fills (or a fetch, as /board's), and the listed items' entry. Always 200, the states in
+// the body.
 async function newsReply(env, now, deps) {
   const feeds = parseFeeds(env.NEWS_FEEDS);
   try {
     const rs = await Promise.all(feeds.map((f) => get(newsUpstream(f), env, now, deps)));
+    await listedSave(feeds, rs, deps);
     return newsText({ now, feeds: feeds.map((f, i) => ({ ...f, r: rs[i] })), max: Number(env.NEWS_LIST) || NEWS_LIST });
   } catch (e) {
     return [`couch-news 1`, `now=${now}`, 'news_age=0', `news_state=none|worker: ${clean((e && e.message) || e).slice(0, 60)}`, 'end', ''].join('\n');
   }
 }
 
-// GET /article?id=: the item of that id in the cached feeds of NEWS_FEEDS (none: state none,
-// and no fetch, so only a link that a configured feed gave is ever fetched), then its page's
-// paragraphs (articleUpstream), else its summary. Always 200, the state in the body.
+// GET /article?id=: the item of that id in the cached feeds of NEWS_FEEDS, else in the items /news
+// listed (none: state none, and no fetch, so only a link that a configured feed gave is ever
+// fetched), then its page's paragraphs (articleUpstream), else its summary. Always 200, the state
+// in the body.
 async function articleReply(env, now, deps, id) {
   const tz = env.TZ || 'UTC';
   try {
@@ -284,6 +351,10 @@ async function articleReply(env, now, deps, id) {
       const x = !item && Array.isArray(rs[i].data) ? rs[i].data.find((d) => d && d.id === id) : null;
       if (x) [item, feed] = [x, f];
     });
+    if (!item) {                                          // a headline that has left its feed since /news listed it
+      const x = (await listedRead(deps)).find((d) => d.id === id);
+      if (x) [item, feed] = [x, { label: x.label, category: x.category }];
+    }
     if (!item) return articleText({ now, tz, a: { state: 'none', reason: 'unknown id' } });
     const summary = { state: 'summary', paras: item.summary ? [item.summary] : [] };
     let link = null;
@@ -327,7 +398,8 @@ export async function handle(request, env, deps) {
   }
   const now = deps.now();
   // No RATES: no rate lines. No COUNTRY: no holiday. No NEWS_FEEDS: no news lines. Every
-  // upstream in parallel.
+  // upstream in parallel, asked in this order (paced() starts 6 at a time): the small answers
+  // first, the feeds (up to 96 KB of each, more for a feed that is not newest first) last.
   const feeds = parseFeeds(env.NEWS_FEEDS);
   const [wx, air, fx, hol, ...rs] = await Promise.all([get('wx', env, now, deps), get('air', env, now, deps),
     fxCodes(env).length ? get('fx', env, now, deps) : null, country(env) ? get('hol', env, now, deps) : null,
@@ -354,7 +426,7 @@ export async function handle(request, env, deps) {
 export default {
   async fetch(request, env, ctx) {
     return handle(request, env, {
-      fetch: (u, o) => fetch(u, o),
+      fetch: paced((u, o) => fetch(u, o)),
       cache: caches.default,
       waitUntil: (p) => ctx.waitUntil(p),
       now: () => Math.floor(Date.now() / 1000),

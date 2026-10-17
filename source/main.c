@@ -303,13 +303,17 @@ static int go(int to, int dir)
 }
 
 /* SQUARE on the Board: a refresh, or the network start and the thread
- * again; on the News page the list too, on the Futbol page its day. */
+ * again; on the News page the list too; on the Futbol page its day only
+ * (0.5.0's review: the Board's fetch went first and held the list up). */
 static int square(void)
 {
     if (net_state == NET_UP && board_running()) {
+        if (page == PAGE_FUTBOL) {
+            futbol_refresh();
+            return 0;
+        }
         board_refresh();
         if (page == PAGE_NEWS) reader_refresh();
-        if (page == PAGE_FUTBOL) futbol_refresh();
         return 0;
     }
     return board_enter();
@@ -419,7 +423,9 @@ int main(void)
             }
         }
         ambient_tick();
-        fx_tick(ambient && !ambient_day() ? FXM_AURORA : FXM_SKY);   /* 0.3.2: the ambient mode's sky by day */   /* after the last ui_flip: a picture's swap, the next picture */
+        /* after the last ui_flip: a picture's swap, the next picture; the ambient mode's sky by day (0.3.2), the
+         * aurora by night, no picture behind the night's black clock (0.5.0's review) */
+        fx_tick(ambient && night_now() ? FXM_NONE : ambient && !ambient_day() ? FXM_AURORA : FXM_SKY);
         sky_tick();                          /* the moon's sphere (into the texture no frame shows), the bolts */
         marquee_tick();                      /* the ticker's text: a headline a frame into the picture no frame shows */
         if (page == PAGE_NEWS || page == PAGE_FUTBOL) stext_on = 1;

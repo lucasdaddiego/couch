@@ -23,17 +23,17 @@ void sun_pos(long utc, double lat, double lon, double *elev, double *azim);
 int sun_arc(long utc, int offset, int rise_min, int set_min, double *frac, long *to_next);
 
 /* The moon's age in days since the mean new moon, 0 to MOON_SYNODIC: the
- * Worker's formula (board.js moonPhase: the new moon of 2000-01-06 18:14
- * UTC, the mean synodic month). A true new moon is within about 0.6 day of
- * age 0. */
+ * formula of the Worker's wx_moon until 0.5.0's review (the new moon of
+ * 2000-01-06 18:14 UTC, the mean synodic month). A true new moon is within
+ * about 0.6 day of age 0. */
 #define MOON_SYNODIC 29.530588853
 #define MOON_NEW_2000 947182440L
 double moon_age(long utc);
 
-/* The phase of an age, 0 to 7 (the Worker's eight phases of 3.7 days, each
- * centred on its moment: 0 new, 2 first quarter, 4 full, 6 last quarter),
- * and its words ("Waxing crescent"; the Worker's wx_moon adds " moon" to the
- * six that lack it). */
+/* The phase of an age, 0 to 7 (eight phases of 3.7 days, each centred on
+ * its moment: 0 new, 2 first quarter, 4 full, 6 last quarter), and its
+ * words ("Waxing crescent"; the old wx_moon added " moon" to the six that
+ * lack it). */
 int moon_phase(double age);
 extern const char *const moon_phase_name[8];
 

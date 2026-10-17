@@ -7,14 +7,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  boardText, wmoWords, clean, localWhen, tzOffset, MAX_BYTES, fold, rainWords, sunTimes, moonPhase, dayWords, newsLines,
+  boardText, wmoWords, clean, localWhen, tzOffset, MAX_BYTES, fold, rainWords, sunTimes, dayWords, newsLines,
   NEWS_FRESH, geoLine, fxLine, hoursLine, change, addDays, localDate, shortDate, holidayLine, parseRates, fxLines,
   numfmtLine, rateDec, currencySymbol, SPARK_DAYS, soonWords, airLine, AIR_MAX_AGE,
 } from '../src/board.js';
-import { parseFeed, parseFeeds } from '../src/news.js';
-import { get, handle, newsUpstream, RETRY_S, FX_DAYS, FUTBOL_NONE } from '../src/index.js';
-import { futbolLine, futbolText, FUTBOL_BYTES, FUT_MAX_AGE, dayName } from '../src/futbol.js';
+import { feedItems, ITEMS_MAX, parseFeeds } from '../src/news.js';
+import { get, handle, newsUpstream, RETRY_S, FX_DAYS, FUTBOL_NONE, paced, FETCH_SLOTS } from '../src/index.js';
+import { futbolLine, futbolText, FUTBOL_BYTES, FUT_MAX_AGE, dayName, tvCut } from '../src/futbol.js';
 
+// A feed's 8 newest items as the Board takes them (feedItems).
+const feed8 = (xml) => feedItems(xml, ITEMS_MAX);
 const text = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
 const fixture = (f) => JSON.parse(text(f));
 const wxData = fixture('meteo_berlin.json');
@@ -35,9 +37,9 @@ const fxData = (() => {
 })();
 const holData = [...hol26, ...hol27].filter((x) => x.global && x.types.includes('Public')).map((x) => ({ fecha: x.date, nombre: x.localName }));
 const news = () => [
-  { label: 'BBC', weight: 4, r: okR(parseFeed(feedXml.world), 120) },
-  { label: 'BBC', weight: 2, r: okR(parseFeed(feedXml.business), 120) },
-  { label: 'BBC', weight: 2, r: okR(parseFeed(feedXml.tech), 120) },
+  { label: 'BBC', weight: 4, r: okR(feed8(feedXml.world), 120) },
+  { label: 'BBC', weight: 2, r: okR(feed8(feedXml.business), 120) },
+  { label: 'BBC', weight: 2, r: okR(feed8(feedXml.tech), 120) },
 ];
 
 // Made-up answers for the keys of Couch 0.5.0: Open-Meteo's air quality in its shape, and a day of
@@ -63,7 +65,7 @@ const futDay = () => ({
 // The first test's reply is the host check's (tools/hostcheck/run.zsh takes this array, line for
 // line) and the preview's body_ok: it keeps its text as UTF-8, with no escapes. REPLY_BYTES is its
 // size.
-const REPLY_BYTES = 1517;
+const REPLY_BYTES = 1475;
 test('the reply of 2026-10-16 in Berlin, every upstream, line for line', () => {
   const t = boardText({
     now: NOW, env, fx: okR(fxData, 600), wx: okR(wxData, 300), news: news(), hol: okR(holData, 3600), air: okR(airData, 600), fut: okR(futDay(), 120),
@@ -87,7 +89,7 @@ test('the reply of 2026-10-16 in Berlin, every upstream, line for line', () => {
     'spark=USD|2026-09-17|8710 8726 - - 8703 8724 8763 8797 8770 - - 8789 8807 8807 8851 8909 - - 8925 8874 8947 8940 8924 - - 8944 8938 8933 8922 8887|4',
     'rate_age=600',
     'rate_state=ok',
-    'wx_now=19°|18°|57%|Partly cloudy|8 km/h|day|Open-Meteo',
+    'wx_now=19°|18°|57%|Partly cloudy|8 km/h|day',
     'wx_fx=2|70|0|172|8|23',
     'day=Today|Fog|19°|7°|0%',
     'day=Sat|Rain|12°|10°|55%',
@@ -95,13 +97,12 @@ test('the reply of 2026-10-16 in Berlin, every upstream, line for line', () => {
     'days_fx=45|61|3',
     'wx_rain=dry|No rain in the next 12 h',
     'wx_sun=07:33|18:09',
-    'wx_moon=Waxing crescent moon',
     'wx_hours=18|18 17 15 14 14 13 12 12 11 11 11 11|0 0 0 0 0 0 0 0 0 0 0 0|2 3 3 3 2 0 0 1 2 1 3 3',
     'wx_age=300',
     'wx_state=ok',
     'air=38|1',
     'holiday=2026-12-25|Erster Weihnachtstag|70',
-    'futbol=0|5|Next: Rovers–Tegelsee 18:30',
+    'futbol=0|Next: Rovers–Tegelsee 18:30',
     'news=BBC|600|Leaders meet to agree on a new plan for river shipping',
     'news=BBC|600|Central bank keeps its rate unchanged',
     'news=BBC|600|A phone maker shows a screen that folds three times',
@@ -126,7 +127,7 @@ test('stale and none: the state lines, the old data with its age, no data lines 
   assert.equal(lines.filter((l) => l.startsWith('rate=')).length, 4);
   assert.ok(lines.includes('wx_state=none|open-meteo: no answer in 4 s'));
   assert.equal(lines.filter((l) => l.startsWith('wx_now=') || l.startsWith('day=')).length, 0);
-  assert.ok(lines.includes('offset=7200') && lines.includes('wx_moon=Waxing crescent moon'));   // from the time zone and the date, with no forecast
+  assert.ok(lines.includes('offset=7200') && !lines.some((l) => l.startsWith('wx_moon=')));   // from the time zone; no moon (Couch works it out)
   assert.equal(lines.at(-1), 'end');
   // no RATES: no rate lines, no state line; no COUNTRY: no holiday
   const bare = boardText({ now: NOW, env: { ...env, RATES: '' }, wx: NONE });
@@ -193,10 +194,9 @@ test('the holidays: the next one on or after today, its days; none after the lis
   assert.equal(holidayLine(NONE, NOW, env.TZ), null);
 });
 
-test('the sky: the rain of the next 12 h, the sun of today, the moon, the next hours, wx_fx', () => {
+test('the sky: the rain of the next 12 h, the sun of today, the next hours, wx_fx', () => {
   const p = localDate(NOW, env.TZ);
   assert.deepEqual(sunTimes(wxData.daily, p), { rise: wxData.daily.sunrise[0].slice(11), set: wxData.daily.sunset[0].slice(11) });
-  assert.equal(moonPhase(NOW), 'Waxing crescent moon');
   const r = rainWords(wxData.hourly, NOW, env.TZ);
   assert.ok(r && typeof r.wet === 'boolean' && r.words.length > 0);
   const h = hoursLine(wxData.hourly, NOW, env.TZ).split('|');
@@ -238,6 +238,42 @@ test('news: NEWS_FEEDS, the share per feed by weight, the newest first, old ones
   assert.deepEqual(newsLines([{ label: 'A', r: { state: 'none', reason: 'a.example: no items', age: 0, data: null } }], T, 8),
     ['news_age=0', 'news_state=none|a.example: no items']);
   assert.deepEqual(parseFeeds(env.NEWS_FEEDS).map((f) => [f.label, f.weight, f.category]), [['BBC', 4, 'world'], ['BBC', 2, 'business'], ['BBC', 2, 'tech']]);
+  // an item that two feeds carry (the same id: the same link) counts once
+  const it = (id, title, t) => ({ id, title, at: t });
+  const a = [it('00000001', 'One', T - 10), it('00000002', 'Two', T - 20)], b = [it('00000001', 'One', T - 10), it('00000003', 'Three', T - 30)];
+  assert.deepEqual(newsLines([{ label: 'A', r: okR(a) }, { label: 'B', r: okR(b) }], T, 8).filter((x) => x.startsWith('news=')),
+    ['news=A|10|One', 'news=A|20|Two', 'news=B|30|Three']);
+});
+
+test('tvCut keeps whole channel names and drops their notes', () => {
+  assert.equal(tvCut('Spree TV, Kanal 9 (Fu\u00dfball-Paket)', 40), 'Spree TV, Kanal 9');
+  assert.equal(tvCut('Spree TV Premium, Kanal 9 Sport, Havel Stream Plus', 40), 'Spree TV Premium, Kanal 9 Sport');
+  assert.equal(tvCut('A channel name that is far too long to fit', 10), 'A channel');
+  assert.equal(tvCut('', 40), '-');
+  const g = futDay();
+  g.leagues[0].games[1].tv = 'Spree TV (Abo), Kanal 9 (Fu\u00dfball-Paket)';
+  assert.ok(futbolText({ now: NOW, tz: env.TZ, d: 0, r: okR(g) }).includes('\ngame=18:30|Havel Rovers|SV Tegelsee|-|-|Spree TV, Kanal 9|pre\n'));
+});
+
+test('paced: at most FETCH_SLOTS fetches at once, in order, each timer from its own start', async () => {
+  const started = [], ends = [];
+  let open = 0, most = 0;
+  const f = paced((url, o) => {
+    started.push([url, !!o.signal, 'timeout' in o]);
+    most = Math.max(most, ++open);
+    return new Promise((r) => ends.push(() => { open--; r(new Response(url)); }));
+  }, 2);
+  const all = ['a', 'b', 'c', 'd'].map((u) => f(u, { timeout: 4000, headers: {} }));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(started, [['a', true, false], ['b', true, false]]);               // c and d wait, their timers not made
+  ends.shift()();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(started.map((x) => x[0]), ['a', 'b', 'c']);
+  while (ends.length) { ends.shift()(); await new Promise((r) => setTimeout(r, 0)); }
+  assert.deepEqual(await Promise.all(all.map(async (p) => (await p).text())), ['a', 'b', 'c', 'd']);
+  assert.deepEqual([most, FETCH_SLOTS], [2, 6]);
+  const bad = paced(() => { throw new TypeError('no route'); });
+  await assert.rejects(bad('x', {}), /no route/);                                      // a throw frees its slot too
 });
 
 // ---- the keys of Couch 0.5.0: the rain of the next 2 h, the air, the fútbol -------------
@@ -284,18 +320,18 @@ test('air: the US AQI and the UV index, whole; "-" for one missing; none when bo
 });
 
 test('futbol: the live games, else the next one, else no more; none for no game, old data or another day', () => {
-  assert.equal(futbolLine(okR(futDay(), 120), NOW, env.TZ), 'futbol=0|5|Next: Rovers–Tegelsee 18:30');
+  assert.equal(futbolLine(okR(futDay(), 120), NOW, env.TZ), 'futbol=0|Next: Rovers–Tegelsee 18:30');
   const live = futDay();
   live.leagues[0].games[1] = { ...live.leagues[0].games[1], kind: 'live', status: "67'", sh: 0, sa: 1 };
   live.leagues[1].games[1] = { ...live.leagues[1].games[1], kind: 'live', status: 'HT', sh: 0, sa: 0 };
-  assert.equal(futbolLine(okR(live), NOW, env.TZ), 'futbol=2|5|2 live');
+  assert.equal(futbolLine(okR(live), NOW, env.TZ), 'futbol=2|2 live');
   const over = futDay();
   over.leagues[0].games = over.leagues[0].games.slice(0, 1);
-  assert.equal(futbolLine(okR(over), NOW, env.TZ), 'futbol=0|3|No more games today');
+  assert.equal(futbolLine(okR(over), NOW, env.TZ), 'futbol=0|No more games today');
   const tie = futDay();                               // the same start: the first in the list
   tie.leagues[0].games[2].start = tie.leagues[0].games[1].start;
-  assert.equal(futbolLine(okR(tie), NOW, env.TZ), 'futbol=0|5|Next: Rovers–Tegelsee 18:30');
-  assert.equal(futbolLine({ state: 'stale', reason: 'x', age: FUT_MAX_AGE, data: futDay() }, NOW, env.TZ), 'futbol=0|5|Next: Rovers–Tegelsee 18:30');
+  assert.equal(futbolLine(okR(tie), NOW, env.TZ), 'futbol=0|Next: Rovers–Tegelsee 18:30');
+  assert.equal(futbolLine({ state: 'stale', reason: 'x', age: FUT_MAX_AGE, data: futDay() }, NOW, env.TZ), 'futbol=0|Next: Rovers–Tegelsee 18:30');
   assert.equal(futbolLine({ state: 'stale', reason: 'x', age: FUT_MAX_AGE + 1, data: futDay() }, NOW, env.TZ), null);
   assert.equal(futbolLine(okR({ ...futDay(), day: '2026-10-15' }), NOW, env.TZ), null);
   assert.equal(futbolLine(okR({ day: '2026-10-16', leagues: [] }), NOW, env.TZ), null);
@@ -353,7 +389,7 @@ test('the /futbol reply\'s cap: whole leagues from the start, the rest counted i
 });
 
 test('the 4 KB guard with the keys of 0.5.0: the news, then the air, then the fútbol, the holiday and the series, the hours, ...', () => {
-  const groups = [['news='], ['air='], ['futbol=', 'holiday=', 'spark='], ['wx_hours='], ['rate_chg='], ['wx_rain=', 'wx_soon=', 'wx_sun=', 'wx_moon=', 'wx_fx=', 'days_fx=']];
+  const groups = [['news='], ['air='], ['futbol=', 'holiday=', 'spark='], ['wx_hours='], ['rate_chg='], ['wx_rain=', 'wx_soon=', 'wx_sun=', 'wx_fx=', 'days_fx=']];
   const seen = new Set();
   for (let k = 0; k <= 520; k += 4) {
     const e = { ...env, RATES: ['USD', 'GBP', 'CHF', 'JPY'].map((c, i) => `${c}:${'LMNO'[i].repeat(k)}`).join(',') };

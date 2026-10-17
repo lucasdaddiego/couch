@@ -319,7 +319,7 @@ int board_parse(const char *body, int n, int fold, board_data *b)
     long v;
     memset(b, 0, sizeof *b);
     b->rate_feed.age = b->wx_feed.age = b->news_feed.age = -1;
-    b->air_aqi = b->air_uv = b->fut_live = b->fut_total = -1;
+    b->air_aqi = b->air_uv = b->fut_live = -1;
     fx_none(b);
     if (!next_line(&p, end, &ls, &ll) || ll <= ml || memcmp(ls, magic, (size_t)ml) || !to_long(ls + ml, ll - ml, &v) || v < 0 ||
         v > 9999)
@@ -360,10 +360,10 @@ int board_parse(const char *body, int n, int fold, board_data *b)
         } else if (key_is(k, kl, "rate_state")) {
             feed_state(&b->rate_feed, val, vl, fold);
         } else if (key_is(k, kl, "wx_now")) {
-            /* 7 fields: the 7th is the source. split ends each field at its
-             * '|', so a Couch that splits 6 reads "day" and drops the rest. */
+            /* 6 fields; an older Worker's 7th (the source, never drawn) is
+             * dropped: split ends each field at its '|' */
             char dn[8];
-            c = split(val, vl, f, fl, 7);
+            c = split(val, vl, f, fl, 6);
             put(b->temp, sizeof b->temp, f, fl, c, 0, fold);
             put(b->feels, sizeof b->feels, f, fl, c, 1, fold);
             put(b->humidity, sizeof b->humidity, f, fl, c, 2, fold);
@@ -371,8 +371,6 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             put(b->wind, sizeof b->wind, f, fl, c, 4, fold);
             put(dn, sizeof dn, f, fl, c, 5, 1);
             b->is_day = !strcmp(dn, "day");
-            b->wx_src[0] = 0;                        /* absent or empty: "", not put's "-" */
-            if (c > 6) text_field(b->wx_src, sizeof b->wx_src, f[6], fl[6], fold);
             b->has_wx = 1;
         } else if (key_is(k, kl, "day")) {
             if (b->n_day == BOARD_DAYS) continue;
@@ -412,8 +410,6 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             put(b->sunrise, sizeof b->sunrise, f, fl, c, 0, fold);
             put(b->sunset, sizeof b->sunset, f, fl, c, 1, fold);
             b->has_sun = strcmp(b->sunrise, "-") && strcmp(b->sunset, "-");
-        } else if (key_is(k, kl, "wx_moon")) {
-            text_field(b->moon, sizeof b->moon, val, vl, fold);
         } else if (key_is(k, kl, "holiday")) {
             /* YYYY-MM-DD|name|days: a bad date or day count leaves no holiday */
             c = split(val, vl, f, fl, 3);
@@ -477,12 +473,11 @@ int board_parse(const char *body, int n, int fold, board_data *b)
             b->air_uv = field_c(f, fl, c, 1, 0, 30, 0, -1);
             b->has_air = b->air_aqi >= 0 || b->air_uv >= 0;
         } else if (key_is(k, kl, "futbol")) {
-            /* live|total|words: the words end at a '|', which the Worker removes from upstream text */
-            c = split(val, vl, f, fl, 3);
+            /* live|words: the words end at a '|', which the Worker removes from upstream text */
+            c = split(val, vl, f, fl, 2);
             b->fut_live = field_c(f, fl, c, 0, 0, 999, 1, -1);
-            b->fut_total = field_c(f, fl, c, 1, 0, 999, 1, -1);
             b->fut_words[0] = 0;
-            if (c > 2) text_field(b->fut_words, sizeof b->fut_words, f[2], fl[2], fold);
+            if (c > 1) text_field(b->fut_words, sizeof b->fut_words, f[1], fl[1], fold);
             b->has_futbol = b->fut_words[0] && strcmp(b->fut_words, "-");
         }
     }
@@ -727,10 +722,10 @@ int night_in(int start, int end, int hour)
     return start < end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
-int net_quality(int answered, long long total_us)
+int net_quality(int answered, long long connect_us)
 {
     if (!answered) return NQ_DOWN;
-    return total_us >= NQ_SLOW_US ? NQ_SLOW : NQ_OK;
+    return connect_us >= NQ_SLOW_US ? NQ_SLOW : NQ_OK;
 }
 
 /* A walk over the 3 x 3 grid of -6, 0 and 6 pixels, one 6-pixel move per
@@ -749,30 +744,6 @@ void ambient_shift(long step, int *dx, int *dy)
 }
 
 int ambient_page(long step, int has_news) { return has_news && (step % 2 == 1 || step % 2 == -1); }
-
-void ambient_place(double t, float *x, float *y)
-{
-    if (t < 0) t = 0;
-    long step = (long)(t / AMBIENT_STEP_SEC);
-    double in = t - (double)step * AMBIENT_STEP_SEC, k = in >= AMBIENT_GLIDE_S ? 1 : in / AMBIENT_GLIDE_S;
-    int x1, y1, x0, y0;
-    ambient_shift(step, &x1, &y1);
-    ambient_shift(step - 1, &x0, &y0);
-    if (step == 0) x0 = x1, y0 = y1;
-    k = k * k * (3 - 2 * k);                     /* ease in and out */
-    *x = (float)((x0 + (x1 - x0) * k) / AMBIENT_PX * AMBIENT_BLOCK_X);
-    *y = (float)((y0 + (y1 - y0) * k) / AMBIENT_PX * AMBIENT_BLOCK_Y);
-}
-
-int ambient_line(long minute, unsigned has)
-{
-    if (minute < 0) minute = 0;
-    for (int k = 0; k < 3; k++) {
-        int l = (int)((minute + k) % 3);
-        if (has & (1u << l)) return l;
-    }
-    return -1;
-}
 
 double ticker_offset(double t, double px_s, double period)
 {
@@ -838,10 +809,10 @@ int news_parse(const char *body, int n, int fold, news_data *d)
         if (key_is(k, kl, "now")) {
             if (to_long(val, vl, &v) && v > 0) d->now = v;
         } else if (key_is(k, kl, "item")) {
-            /* id|source|category|age|title|summary: the summary ends at a '|', which the Worker never sends */
+            /* id|source|category|age|title: the title ends at a '|' (an older Worker's 6th field, the summary, is dropped) */
             if (d->n == NEWS_ITEMS) continue;
-            const char *f[6];
-            int fl[6], c = split(val, vl, f, fl, 6);
+            const char *f[5];
+            int fl[5], c = split(val, vl, f, fl, 5);
             news_item *it = &d->item[d->n];
             memset(it, 0, sizeof *it);
             if (c > 0) id_field(it->id, f[0], fl[0]);
@@ -849,7 +820,6 @@ int news_parse(const char *body, int n, int fold, news_data *d)
             if (c > 2) cat_field(it->category, sizeof it->category, f[2], fl[2], fold);
             it->age = c > 3 ? age_field(f[3], fl[3]) : -1;
             if (c > 4) text_field(it->title, sizeof it->title, f[4], fl[4], fold);
-            if (c > 5) text_field(it->summary, sizeof it->summary, f[5], fl[5], fold);
             if (it->title[0]) d->n++;                /* a line with no title is not an item */
         } else if (key_is(k, kl, "news_age")) {
             feed_age(&d->feed, val, vl);
@@ -935,7 +905,6 @@ int futbol_parse(const char *body, int n, int fold, futbol_data *d)
 {
     const char *p = body, *end = body + n, *ls;
     int ll;
-    long v;
     int cur = 0;                                     /* the last league line: 1 kept, -1 past the array, 0 none yet */
     memset(d, 0, sizeof *d);
     d->feed.age = -1;
@@ -949,9 +918,7 @@ int futbol_parse(const char *body, int n, int fold, futbol_data *d)
         int kl = (int)(eq - ls), vl = ll - kl - 1;
         const char *f[7];
         int fl[7], c;
-        if (key_is(k, kl, "now")) {
-            if (to_long(val, vl, &v) && v > 0) d->now = v;
-        } else if (key_is(k, kl, "day")) {
+        if (key_is(k, kl, "day")) {
             text_field(d->day, sizeof d->day, val, vl, fold);
         } else if (key_is(k, kl, "league")) {
             if (d->n_league == FUT_LEAGUES || d->n_game == FUT_GAMES) {   /* no room for it or for its games */
@@ -976,7 +943,6 @@ int futbol_parse(const char *body, int n, int fold, futbol_data *d)
             fut_game *g = &d->game[d->n_game];
             char kind[8];
             c = split(val, vl, f, fl, 7);
-            g->league = d->n_league - 1;
             put(g->when, sizeof g->when, f, fl, c, 0, fold);
             put(g->home, sizeof g->home, f, fl, c, 1, fold);
             put(g->away, sizeof g->away, f, fl, c, 2, fold);

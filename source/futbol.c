@@ -89,7 +89,7 @@ void futbol_tick(void)
     pos = scroll_follow(pos, target, dt, TAU);
     long today = local_date();
     for (int k = 0; k < 2; k++)
-        if (asked_at[k] && ask_date[k] != today + k) {   /* midnight: the day is another one, asked again */
+        if ((asked_at[k] && ask_date[k] != today + k) || (have[k] && got_date[k] != today + k)) {   /* midnight: the day is another one, asked again */
             have[k] = 0;
             asked_at[k] = 0;
             last_ok[k] = 1;
@@ -134,24 +134,35 @@ int futbol_input(void)
 
 /* ---- the replies ------------------------------------------------------------------------------- */
 
+/* A reply is filed by the date it was asked for (0.5.0's review): one that
+ * comes after midnight is not today's. Tomorrow's list asked before
+ * midnight is today's (j 0); today's is a day gone by, dropped (the tick
+ * asks again). */
 void futbol_take(const board_reply *b)
 {
-    int k = b->day ? 1 : 0;
+    int k = b->day ? 1 : 0, j = (int)(ask_date[k] - local_date());   /* the asked day now: 0 today, 1 tomorrow, else gone */
     char what[200] = "", cn[24] = "no connection";
     if (pending == k) pending = -1;
     fetches[k]++;
-    last_ok[k] = b->prc == BP_OK;
-    snprintf(words[k], sizeof words[k], "%s", b->words);
-    if (last_ok[k]) {
-        int first = !have[k];
-        D[k] = *b->fut;
-        have[k] = 1;
-        got_at[k] = b->at;
-        got_date[k] = ask_date[k];
-        if (first && k == day) pos = target = 0;
-        const futbol_data *d = &D[k];
-        snprintf(what, sizeof what, "%d leagues, %d games, %d live%s, state %s%s%s", d->n_league, d->n_game, futbol_live(d),
-                 d->more_games ? " (more left out)" : "", d->feed.state[0] ? d->feed.state : "-", d->feed.reason[0] ? ", " : "", d->feed.reason);
+    if (j == 0 || j == 1) {
+        last_ok[j] = b->prc == BP_OK;
+        snprintf(words[j], sizeof words[j], "%s", b->words);
+        if (j != k) {                                    /* the schedule of the day it is now */
+            asked_at[j] = b->at - b->us > 0 ? b->at - b->us : 1;
+            ask_date[j] = ask_date[k];
+        }
+    } else snprintf(what, sizeof what, "a list of a day gone by (asked before midnight): dropped");
+    if ((j == 0 || j == 1) && last_ok[j]) {
+        int first = !have[j];
+        D[j] = *b->fut;
+        have[j] = 1;
+        got_at[j] = b->at;
+        got_date[j] = ask_date[k];
+        if (first && j == day) pos = target = 0;
+        const futbol_data *d = &D[j];
+        snprintf(what, sizeof what, "%d leagues, %d games, %d live%s, state %s%s%s%s", d->n_league, d->n_game, futbol_live(d),
+                 d->more_games ? " (more left out)" : "", d->feed.state[0] ? d->feed.state : "-", d->feed.reason[0] ? ", " : "", d->feed.reason,
+                 j != k ? "; tomorrow's list, today's since midnight" : "");
     }
     if (logged >= LOG_FUT) return;
     logged++;

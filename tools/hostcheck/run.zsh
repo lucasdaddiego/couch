@@ -86,8 +86,8 @@ fix, out = sys.argv[1], sys.argv[2]
 link = 'https://news.example.org/world/leaders-meet-in-z%C3%BCrich'
 head = 'couch-article 1\nnow=1792164000\nid=1a2b3c4d\nsource=Zürich Post\ncategory=world\ntitle=Leaders meet in Zürich to agree on a new plan for river shipping\ndate=Fri 16 Oct 17:10|600\nlink=%s\n' % link
 files = {
-    'r_news.txt': 'couch-news 1\nnow=1792164000\nitem=1a2b3c4d|Zürich Post|world|600|Leaders meet in Zürich to agree on a new plan for river shipping|'
-                  'A short summary of the story, and the café\'s climate plan.\nnews_age=0\nnews_state=ok\nend\n',
+    'r_news.txt': 'couch-news 1\nnow=1792164000\nitem=1a2b3c4d|Zürich Post|world|600|Leaders meet in Zürich to agree on a new plan for river shipping\n'
+                  'news_age=0\nnews_state=ok\nend\n',
     'r_art_ok.txt': head + 'state=ok\np=First paragraph: café, naïve.\np=Second paragraph with spaces.\nend\n',
     'r_art_summary.txt': head + 'state=summary|news.example.org: HTTP 403\np=A short summary of the story.\nend\n',
     'r_art_cut.txt': 'couch-article 1\nnow=1792000600\nid=abcdef01\nsource=L\ncategory=-\ntitle=T whole\ndate=Wed 14 Oct 17:46|600\nlink=https://x.example/a%7Cb\nstate=cut\np=one\np=two\nend\n',

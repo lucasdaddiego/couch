@@ -34,7 +34,6 @@
 #define LAST_MAX_S 86400L            /* an older one is not shown */
 
 char board_url[200];
-int board_url_file;
 char board_url_note[160];
 static http_url url;                 /* set before the thread starts, only read after */
 static char news_path[160];          /* /news and /article?id= beside the Board's path (url_sibling) */
@@ -106,12 +105,10 @@ void board_init(void)
 {
     char line[200];
     int n = fs_read_line(APP_DIR "/board_url.txt", line, sizeof line);
-    board_url_file = 0;
     board_url_note[0] = 0;
     if (n > 0) {
         int rc = url_split(line, url.host, sizeof url.host, &url.port, url.path, sizeof url.path);
         if (rc == 0) {
-            board_url_file = 1;
             snprintf(board_url, sizeof board_url, "%s", line);
             return;
         }
@@ -233,8 +230,8 @@ static void board_thread(void *unused)
         int kind = -1;
         if (!ready) {
             if (take_article()) kind = REQ_ARTICLE;     /* the viewer waits for it: first */
+            else if (want_fut) kind = REQ_FUTBOL;   /* the page waits for it: before the Board (0.5.0's review) and the news list */
             else if (now >= next || (want && now - last_us >= GAP_US)) kind = REQ_BOARD;
-            else if (want_fut) kind = REQ_FUTBOL;   /* the page waits for it: before the news list */
             else if (want_news) kind = REQ_NEWS;
         }
         if (kind >= 0) {
@@ -373,22 +370,17 @@ static void fetch_words(char *w, int n, const http_result *r, int prc, int brief
 /* The internet as any reply shows it (the Board's, the news list's, an
  * article's, a futbol list's): no answer when the DNS lookup, the socket,
  * the connect, the send or the recv failed (also the 10 s timeout); any
- * answer, also an HTTP error or a bad reply, reached the Worker. An
- * article's time is the Worker's fetch of the page (up to its 8 s), not
- * the internet's, and a futbol list's may hold the Worker's fetch of its
- * source (up to 4 s): an answered one only ends a "No internet", it never
- * says slow. */
-static void net_seen(const http_result *r, long utc, int article)
+ * answer, also an HTTP error or a bad reply, reached the Worker. Slow or
+ * ok by the connect's time since 0.5.0's review (parse.h's net_quality):
+ * a reply's whole time holds the Worker's own fetches (the Board's
+ * upstreams and a futbol list's source up to 4 s, an article's page up to
+ * 8 s), which said "slow" of a fast line. */
+static void net_seen(const http_result *r, long utc)
 {
     if (r->step == H_STOPPED) return;
     int answered = r->step != H_DNS && r->step != H_SOCKET && r->step != H_CONNECT && r->step != H_SEND && r->step != H_RECV;
-    if (article && answered) {
-        if (board_net_q == NQ_DOWN || board_net_q == NQ_NONE) board_net_q = NQ_OK;
-        board_net_down_utc = 0;
-        return;
-    }
     board_connect_us = r->connect_us;
-    board_net_q = net_quality(answered, (long long)slot.us);
+    board_net_q = net_quality(answered, (long long)r->connect_us);
     board_net_us = slot.us;
     if (answered) board_net_down_utc = 0;
     else if (!board_net_down_utc) board_net_down_utc = utc;
@@ -414,7 +406,7 @@ static void take_reader(void)
     b.qr = slot.qr;
     fetch_words(b.words, sizeof b.words, &slot.r, slot.prc, 0, slot.kind,
                 slot.kind == REQ_NEWS ? slot.news.version : slot.kind == REQ_FUTBOL ? slot.fut.version : slot.art.version);
-    net_seen(&slot.r, clock_utc(), slot.kind != REQ_NEWS);
+    net_seen(&slot.r, clock_utc());
     if (net_state == NET_UP) net_addr();    /* the thread is idle while ready is set (board_take's note) */
     if (slot.kind == REQ_FUTBOL) futbol_take(&b);
     else reader_take(&b);
@@ -455,7 +447,7 @@ void board_take(void)
     board_last_us = slot.us;
     board_last_http = r->http;
     board_last_len = r->len;
-    net_seen(r, board_last_utc, 0);          /* the internet's state */
+    net_seen(r, board_last_utc);             /* the internet's state */
     /* The address again, for the status line and the Info screen (DHCP may have
      * answered since): here the thread is idle, since it starts no fetch while
      * ready is set, so no two network calls overlap. */

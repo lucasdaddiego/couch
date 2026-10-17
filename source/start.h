@@ -47,7 +47,7 @@ void start_log_late(void);
 /* The start animation: start_anim_begin at the loop's first frame; any
  * button ends it (start_anim_input). start_k(part) is how far a part is, 0
  * (where it starts) to 1 (in place), eased; 1 when the animation is off. */
-enum { SA_FADE, SA_HEADER, SA_LEFT, SA_RIGHT, SA_BOTTOM, SA_CLOCK };
+enum { SA_FADE, SA_HEADER, SA_LEFT, SA_RIGHT, SA_BOTTOM };
 void start_anim_begin(void);
 void start_anim_input(unsigned pressed_now);
 float start_k(int part);

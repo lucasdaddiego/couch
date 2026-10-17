@@ -7,9 +7,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { clean, MAX_BYTES } from '../src/board.js';
-import { CATEGORY_RE, decodeEntities, feedItems, FEED_ITEMS, itemId, parseFeed, parseFeeds, SUMMARY_MAX, TITLE_MAX, FULL_MAX } from '../src/news.js';
+import { CATEGORY_RE, decodeEntities, feedItems, FEED_ITEMS, ITEMS_MAX, itemId, parseFeeds, SUMMARY_MAX, TITLE_MAX, FULL_MAX } from '../src/news.js';
 import { articleText, ARTICLE_BYTES, capParas, dateWords, LINK_BYTES, NEWS_BYTES, NEWS_LIST, newsText, PARA_MAX, quotas, TEXT_BYTES } from '../src/reader.js';
-import { get, handle, newsUpstream, RETRY_S } from '../src/index.js';
+import { get, handle, LISTED_MAX, newsUpstream, RETRY_S } from '../src/index.js';
 
 const text = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
 const feeds = { world: text('feed_world.xml'), business: text('feed_business.xml'), tech: text('feed_tech.xml') };
@@ -86,7 +86,7 @@ test('feedItems: the id, the link, the whole title and the summary of each item,
   assert.deepEqual([first.title, first.at, first.summary], ['Leaders meet to agree on a new plan for river shipping', NOW - 600,
     'A short summary of the story: leaders meet to agree on a new plan for river shipping. The full text is on the page.']);
   assert.equal(new Set([...w, ...b, ...t].map((x) => x.id)).size, 31);
-  assert.deepEqual(parseFeed(feeds.world), w.slice(0, 8).map(({ title, at }) => ({ title, at })));
+  assert.deepEqual(feedItems(feeds.world, ITEMS_MAX), w.slice(0, 8));                // the Board takes the first ITEMS_MAX
   // an id stays while its item is in the feed; no link: the title gives the id
   const later = feeds.world.replace('<item>', '<item><title>New</title><link>https://news.example.org/world/new</link><pubDate>Fri, 16 Oct 2026 15:15:00 GMT</pubDate></item><item>');
   const after = feedItems(later);
@@ -121,18 +121,20 @@ test('quotas: each feed\'s share by weight, largest remainder, ties to the earli
 test('/news: the headlines of the feeds by weight, the newest first; then from the cache', async () => {
   const d = deps({ answers: feedRoutes });
   const t = await body(d, '/news');
-  assert.deepEqual([d.calls.length, d.cache.ops], [3, 6]);                               // cold: 3 fetches, 3 reads, 3 writes
+  await Promise.all(d.waits);
+  assert.deepEqual([d.calls.length, d.cache.ops], [3, 8]);                               // cold: 3 fetches, 3 reads, 3 writes, the listed items' read and write
   assert.deepEqual(t.split('\n').slice(0, 2), ['couch-news 1', `now=${NOW}`]);
   assert.ok(t.endsWith('\nnews_age=0\nnews_state=ok\nend\n'));
   const f = itemLines(t).map((l) => l.slice(5).split('|'));
   assert.equal(f.length, NEWS_LIST);
-  assert.deepEqual(f[0], [first.id, 'BBC', 'world', '600', first.title, first.summary]);
-  assert.ok(f.every((x) => x.length === 6 && /^[0-9a-f]{8}$/.test(x[0]) && /^\d+$/.test(x[3])));
+  assert.deepEqual(f[0], [first.id, 'BBC', 'world', '600', first.title]);             // no summary since 0.5.0's review
+  assert.ok(f.every((x) => x.length === 5 && /^[0-9a-f]{8}$/.test(x[0]) && /^\d+$/.test(x[3])));
   assert.ok(f.every((x, i) => i === 0 || +f[i - 1][3] <= +x[3]));
   assert.ok(utf8ok(t) && bytesOf(t) <= NEWS_BYTES);
   const w = deps({ cache: d.cache, answers: feedRoutes, now: NOW + 60 });
   const again = await body(w, '/news');
-  assert.deepEqual([w.calls.length, w.cache.ops - 6], [0, 3]);
+  await Promise.all(w.waits);
+  assert.deepEqual([w.calls.length, w.cache.ops - 8], [0, 4]);                           // nothing new: no write
   assert.equal(itemLines(again)[0].split('|')[3], '660');
 });
 
@@ -166,11 +168,13 @@ test('/news: the size cap drops the oldest items; 3-byte text stays whole UTF-8'
       id: (j * 100 + i).toString(16).padStart(8, '0'), title: '€'.repeat(TITLE_MAX), summary: '€'.repeat(SUMMARY_MAX), at: NOW - j - 10 * i,
     })) },
   }));
-  const t = newsText({ now: NOW, feeds: many });
+  // 120 items of 110 three-byte code points (no summary since 0.5.0's review: 30 such items fit)
+  const t = newsText({ now: NOW, feeds: many, max: 120 });
   const n = itemLines(t).length;
-  assert.ok(bytesOf(t) <= NEWS_BYTES && n >= 25 && n < 30 && utf8ok(t), `${bytesOf(t)} bytes, ${n} items`);
+  assert.ok(bytesOf(t) <= NEWS_BYTES && n >= 80 && n < 120 && utf8ok(t), `${bytesOf(t)} bytes, ${n} items`);
   const ages = itemLines(t).map((l) => +l.split('|')[3]);
-  assert.ok(ages.every((x, i) => i === 0 || ages[i - 1] <= x) && ages.at(-1) < 60);
+  const all = many.flatMap((f) => f.r.data.map((x) => NOW - x.at)).sort((a, b) => a - b);
+  assert.deepEqual(ages, all.slice(0, n));                                             // the newest stay
   assert.ok(t.endsWith('\nnews_state=ok\nend\n'));
   const dup = newsText({ now: NOW, feeds: [many[0], { ...many[0], label: 'Other' }].map((f) => ({ ...f, r: { ...f.r, data: f.r.data.slice(0, 2) } })) });
   assert.deepEqual(itemLines(dup).map((l) => l.split('|')[1]), ['Source0', 'Source0']);   // the same item lists once
@@ -211,6 +215,22 @@ test('/article: a blocked page answers the summary at once, remembered (negative
   assert.ok((await body(node, `/article?id=${first.id}`)).includes('\nstate=summary|news.example.org: no HTMLRewriter\n'));
   const slow = deps({ answers: { ...feedRoutes, [pathOf(first.link)]: Object.assign(new Error('x'), { name: 'TimeoutError' }) } });
   assert.ok((await body(slow, `/article?id=${first.id}`)).includes('\nstate=summary|news.example.org: no answer in 8 s\n'));
+});
+
+test('/article: a headline that left its feed after /news listed it still opens (the listed items)', async () => {
+  const d = deps({ answers: feedRoutes });
+  await body(d, '/news');
+  const listed = JSON.parse(d.cache.m.get('https://couch.internal/listed')).items;
+  assert.ok(listed.length <= LISTED_MAX && listed.some((x) => x.id === first.id && x.label === 'BBC' && x.category === 'world'));
+  // 11 min later the world feed no longer holds the item (NEWS_TTL 600 s: fetched again)
+  const item0 = feeds.world.match(/<item\b[\s\S]*?<\/item>/g).find((x) => x.includes(first.link.replace(/&/g, '&amp;')) || x.includes(first.link));
+  const gone = { ...feedRoutes, 'feeds.bbci.co.uk/news/world/rss.xml': { body: feeds.world.replace(item0, '') }, [pathOf(first.link)]: { body: PAGE } };
+  const l = deps({ cache: d.cache, answers: gone, now: NOW + 660 });
+  const t = await body(l, `/article?id=${first.id}`);
+  assert.ok(t.includes('\nsource=BBC\ncategory=world\n') && t.includes('\nstate=ok\np=First paragraph: café, naïve.\n'), t);
+  assert.equal(l.calls.at(-1), first.link);
+  assert.equal(await body(deps({ cache: d.cache, answers: gone, now: NOW + 660 }), `/article?id=${itemId('https://evil.example/x')}`),
+    `couch-article 1\nnow=${NOW + 660}\nstate=none|unknown id\nend\n`);
 });
 
 test('/article: no open proxy: only an id of a cached feed item is fetched', async () => {

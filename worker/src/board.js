@@ -1,10 +1,10 @@
 // The Board's reply for Couch, version 1: UTF-8 text that the PS3 parses with no JSON library.
 // Line 1 is "couch-board 1", then key=value lines with "|" between the fields of a value, then
 // "end" (README.md, "The Board reply"). Pure functions: the Worker (index.js) gets the upstream
-// data, this file only formats it. The weather comes from Open-Meteo, the moon from the date, the
-// rates from Frankfurter (the ECB's reference rates), the holidays from Nager.Date, the news from
-// RSS feeds (news.js), the air from Open-Meteo's air quality, the fútbol from futbol.js's day. Couch
-// skips a key it does not know.
+// data, this file only formats it. The weather comes from Open-Meteo (Couch works out the moon),
+// the rates from Frankfurter (the ECB's reference rates), the holidays from Nager.Date, the news
+// from RSS feeds (news.js), the air from Open-Meteo's air quality, the fútbol from futbol.js's day.
+// Couch skips a key it does not know.
 
 import { futbolLine } from './futbol.js';
 
@@ -23,6 +23,18 @@ export function wmoWords(code) {
   return 'Unknown';
 }
 
+// Intl's formatters, made once per locale, time zone and options: a formatter costs far more
+// than a format, and a reply formats about 60 values. A bad time zone throws, as before.
+const FMTS = new Map();
+function cached(kind, make, locale, opts) {
+  const k = `${kind}|${locale}|${JSON.stringify(opts)}`;
+  let f = FMTS.get(k);
+  if (!f) FMTS.set(k, (f = make(locale, opts)));
+  return f;
+}
+export const dateFmt = (locale, opts) => cached('d', (l, o) => new Intl.DateTimeFormat(l, o), locale, opts);
+export const numFmt = (locale, opts) => cached('n', (l, o) => new Intl.NumberFormat(l, o), locale, opts);
+
 // Upstream text for a field: no "|", no control character, no space at the ends.
 export function clean(s) {
   return String(s ?? '').replace(/[|\u0000-\u001f\u007f]/g, ' ').replace(/ +/g, ' ').trim();
@@ -34,7 +46,7 @@ export function fold(s) {
 }
 
 function parts(t, tz) {
-  const f = new Intl.DateTimeFormat('en-US', {
+  const f = dateFmt('en-US', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   });
@@ -63,7 +75,7 @@ function stateLine(u) {
 
 const NONE = { state: 'none', reason: '', age: 0, data: null };
 
-// ---- the sky: the rain of the next 12 h, the sun, the moon --------------------------------------
+// ---- the sky: the rain of the next 12 h, the sun ------------------------------------------------
 
 // An hour is wet when its chance of precipitation is at least 40 % (where most weather apps start
 // to show rain) or its precipitation is at least 0.2 mm (the smallest amount a rain gauge counts).
@@ -154,26 +166,13 @@ export function sunTimes(daily, today) {
   return { rise: hm(d.sunrise), set: hm(d.sunset) };
 }
 
-// The moon's phase from the date alone: the age since the new moon of 2000-01-06 18:14 UTC in
-// synodic months (29.530588853 days), in eight phases of 3.7 days each, each centred on its
-// moment (a new moon is within 1.85 days of one).
-export const SYNODIC_DAYS = 29.530588853;
-export const NEW_MOON_2000 = Date.UTC(2000, 0, 6, 18, 14) / 1000;
-const MOON = ['New moon', 'Waxing crescent moon', 'First quarter moon', 'Waxing gibbous moon', 'Full moon',
-  'Waning gibbous moon', 'Last quarter moon', 'Waning crescent moon'];
-
-export function moonPhase(now) {
-  const age = ((((now - NEW_MOON_2000) / 86400) % SYNODIC_DAYS) + SYNODIC_DAYS) % SYNODIC_DAYS;
-  return MOON[Math.floor((age / SYNODIC_DAYS) * 8 + 0.5) % 8];
-}
-
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // A number in the locale's format with at most `max` decimals (at least `min`), or "-".
 function num(v, locale, min, max) {
   if (typeof v !== 'number' || !Number.isFinite(v)) return '-';
-  return new Intl.NumberFormat(locale, { minimumFractionDigits: min, maximumFractionDigits: max }).format(v);
+  return numFmt(locale, { minimumFractionDigits: min, maximumFractionDigits: max }).format(v);
 }
 
 // "2026-10-12" as "Today" on now's local date, else "12 Oct"; "-" for a value that is not a date.
@@ -368,7 +367,7 @@ export function fxLines({ fx, env, locale }) {
 // that is not one ASCII character (a narrow no-break space in fr-FR: Couch then shows the value
 // as text and writes its own numbers without one).
 export function numfmtLine(locale) {
-  const p = new Intl.NumberFormat(locale).formatToParts(12345.6);
+  const p = numFmt(locale, {}).formatToParts(12345.6);
   const g = (p.find((x) => x.type === 'group') || {}).value || '', dc = (p.find((x) => x.type === 'decimal') || {}).value || '.';
   const ascii = (c) => c.length === 1 && c.charCodeAt(0) > 32 && c.charCodeAt(0) < 127;
   return `numfmt=${ascii(g) ? g : '_'}${ascii(dc) ? dc : '.'}`;
@@ -377,7 +376,7 @@ export function numfmtLine(locale) {
 // ---- the news -----------------------------------------------------------------------------------
 
 // The news lines from the feeds' results ([{label, weight, r}], r as get() gives it, r.data the
-// items of news.js's parseFeed): first each feed's share, its weight (1 when absent) of its newest
+// items of news.js's feedItems): first each feed's share, its weight (1 when absent) of its newest
 // items, in the feeds' order; then one item per feed in turn until NEWS_MAX, so a feed with no
 // items leaves its share to the others. Then the newest first. With weight 1 for every feed this
 // is a fair share in turn. news=source|age|title, the age in seconds at now ("-" for an item with
@@ -385,23 +384,31 @@ export function numfmtLine(locale) {
 // with the first failed feed's reason while any feed has items, else none. The
 // shares take only the items of the last `fresh` seconds (NEWS_FRESH, 6 h: a slow feed
 // keeps no stale headline on the Board); older items and items with no date fill the places left, newest first.
+// An item that two feeds carry (the same id: the same link; else the same title) counts once, as
+// in reader.js's newsText.
 export const NEWS_FRESH = 21600;
 export function newsLines(feeds, now, max, fresh = NEWS_FRESH) {
   if (!Array.isArray(feeds) || !feeds.length) return [];
   const all = feeds.map(({ label, r }) => ((r && Array.isArray(r.data) ? r.data : [])
     .filter((x) => x && typeof x.title === 'string' && clean(x.title))
-    .map((x) => ({ label: clean(label), title: clean(x.title), at: Number.isFinite(x.at) ? x.at : null }))
+    .map((x) => ({ key: x.id || clean(x.title), label: clean(label), title: clean(x.title), at: Number.isFinite(x.at) ? x.at : null }))
     .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity))));
   const isFresh = (x) => x.at !== null && now - x.at <= fresh;
   const lists = all.map((l) => l.filter(isFresh));
-  const picked = [], taken = lists.map(() => 0);
+  const picked = [], seen = new Set(), taken = lists.map(() => 0);
+  const add = (x) => {
+    if (seen.has(x.key)) return false;
+    seen.add(x.key);
+    picked.push(x);
+    return true;
+  };
   const take = (j, k) => {
-    for (; k > 0 && taken[j] < lists[j].length && picked.length < max; k--) picked.push(lists[j][taken[j]++]);
+    while (k > 0 && taken[j] < lists[j].length && picked.length < max) if (add(lists[j][taken[j]++])) k--;
   };
   feeds.forEach((f, j) => take(j, Number.isInteger(f.weight) && f.weight > 0 ? f.weight : 1));
   while (picked.length < max && lists.some((l, j) => taken[j] < l.length)) lists.forEach((_, j) => take(j, 1));
   const old = all.flat().filter((x) => !isFresh(x)).sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity));
-  picked.push(...old.slice(0, Math.max(0, max - picked.length)));
+  for (const x of old) if (picked.length < max) add(x);
   picked.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity));
   const out = picked.map((x) => `news=${x.label}|${x.at === null ? '-' : Math.max(0, now - x.at)}|${x.title}`);
   const rs = feeds.map((f) => f.r || NONE);
@@ -431,10 +438,11 @@ export function boardText({ now, fx = NONE, wx, news = [], hol = NONE, air = NON
   const deg = (v) => (Number.isFinite(v) ? `${Math.round(v)}°` : '-');
   const pct = (v) => (Number.isFinite(v) ? `${Math.round(v)}%` : '-');
   const kmh = (v) => (Number.isFinite(v) ? `${Math.round(v)} km/h` : '-');
-  // The 7th field names the now line's source (Couch's footer).
+  // Six fields since Couch 0.5.0's review: the 7th, the source, was never drawn (Couch 0.4.1 reads
+  // a missing one as none).
   if (c) {
     out.push(`wx_now=${deg(c.temperature_2m)}|${deg(c.apparent_temperature)}|${pct(c.relative_humidity_2m)}|` +
-      `${wmoWords(c.weather_code)}|${kmh(c.wind_speed_10m)}|${c.is_day ? 'day' : 'night'}|Open-Meteo`);
+      `${wmoWords(c.weather_code)}|${kmh(c.wind_speed_10m)}|${c.is_day ? 'day' : 'night'}`);
   }
   const wfx = fxLine(c);
   if (wfx) out.push(wfx);
@@ -448,7 +456,7 @@ export function boardText({ now, fx = NONE, wx, news = [], hol = NONE, air = NON
       .slice(0, 3);
     for (const [d, i] of days) {
       const label = d === today ? 'Today'
-        : new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(new Date(`${d}T12:00:00Z`));
+        : dateFmt('en-US', { timeZone: 'UTC', weekday: 'short' }).format(new Date(`${d}T12:00:00Z`));
       const num = (a, unit) => (a && Number.isFinite(a[i]) ? `${Math.round(a[i])}${unit}` : '-');
       out.push(`day=${label}|${wmoWords(dy.weather_code && dy.weather_code[i])}|${num(dy.temperature_2m_max, '°')}|` +
         `${num(dy.temperature_2m_min, '°')}|${num(dy.precipitation_probability_max, '%')}`);
@@ -457,8 +465,8 @@ export function boardText({ now, fx = NONE, wx, news = [], hol = NONE, air = NON
     if (days.length) out.push(`days_fx=${days.map(([, i]) => wmoCode(dy.weather_code && dy.weather_code[i])).join('|')}`);
   }
   // The sky, from the same forecast: the rain of the next 12 h (wx_rain=rain|words or dry|words),
-  // today's sunrise and sunset, the next 12 hours (wx_hours), and the moon from the date (also
-  // with no forecast).
+  // today's sunrise and sunset, the next 12 hours (wx_hours). No wx_moon since Couch 0.5.0's
+  // review: Couch works the moon out from its clock (Couch 0.4.1 reads a missing one as none).
   let hours = null;
   if (wx.data) {
     const p = parts(now, tz), rain = rainWords(wx.data.hourly, now, tz), sun = sunTimes(dy, `${p.year}-${p.month}-${p.day}`);
@@ -468,11 +476,10 @@ export function boardText({ now, fx = NONE, wx, news = [], hol = NONE, air = NON
     if (sun) out.push(`wx_sun=${sun.rise}|${sun.set}`);
     hours = hoursLine(wx.data.hourly, now, tz);
   }
-  out.push(`wx_moon=${moonPhase(now)}`);
   if (hours) out.push(hours);
   out.push(`wx_age=${Math.max(0, wx.age | 0)}`, `wx_state=${stateLine(wx)}`);
   // Since Couch 0.5.0: the air now (air=aqi|uv), and after the holiday the fútbol of today
-  // (futbol=live|total|words, futbol.js).
+  // (futbol=live|words, futbol.js).
   const a = airLine(air);
   if (a) out.push(a);
   const h = holidayLine(hol, now, tz);
@@ -485,7 +492,7 @@ export function boardText({ now, fx = NONE, wx, news = [], hol = NONE, air = NON
   // until it fits: the news first, then the air, the fútbol, the holiday and the series, the 12
   // hours, the changes, the sky lines, then the rate and day lines. city, numfmt and geo stay.
   const drop = [['news='], ['air='], ['futbol=', 'holiday=', 'spark='], ['wx_hours='], ['rate_chg='],
-    ['wx_rain=', 'wx_soon=', 'wx_sun=', 'wx_moon=', 'wx_fx=', 'days_fx='], ['rate=', 'feature=', 'day=']];
+    ['wx_rain=', 'wx_soon=', 'wx_sun=', 'wx_fx=', 'days_fx='], ['rate=', 'feature=', 'day=']];
   for (const keys of drop) {
     while (new TextEncoder().encode(text).length > MAX_BYTES) {
       const i = out.findLastIndex((l) => keys.some((k) => l.startsWith(k)));

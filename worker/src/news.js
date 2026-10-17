@@ -1,6 +1,6 @@
 // The Board's news (index.js's news upstreams, one per feed of NEWS_FEEDS): an RSS 2.0 feed's
-// items as [{title, at}] (feedItems: also the id, the link and the summary, for /news and
-// /article), with no XML library (Workers have no DOMParser): each <item>'s <title>
+// items as [{id, title, full, at, link, summary}] (feedItems; the id, the link and the summary for
+// /news and /article), with no XML library (Workers have no DOMParser): each <item>'s <title>
 // and <pubDate>, the CDATA unwrapped, the tags stripped, the entities decoded, the publisher that
 // Google News appends removed, the title cut to TITLE_MAX code points at a word, then the newest
 // first. The Worker reads only the head of a feed's body (readFeedHead): a feed can be 1 MB, and
@@ -22,7 +22,7 @@ export const SUMMARY_MAX = 280;        // code points of a summary (/news, /arti
 export const CATEGORY_RE = /^[a-z]{1,16}$/;   // a category of NEWS_FEEDS: economy, politics, world
 
 // The head of a feed's body (a ReadableStream of bytes, as UTF-8): the text up to the end of its
-// items-th </item>, else up to bytes bytes (an item cut there is not complete, and parseFeed
+// items-th </item>, else up to bytes bytes (an item cut there is not complete, and feedItems
 // skips it), else the whole body. At the items-th </item>, more(head) can raise both limits once
 // ({items, bytes}, or null to stop there). The rest of the stream is cancelled, not read. A
 // </item> that two chunks split counts too. A stall or a break of the body throws, as r.text() did.
@@ -60,9 +60,9 @@ export async function readHead(body, { items = ITEMS_MAX, bytes = HEAD_BYTES, mo
   }
 }
 
-// The head of a feed for parseFeed: up to the end of its ITEMS_MAX-th item (at most HEAD_BYTES)
+// The head of a feed for feedItems: up to the end of its ITEMS_MAX-th item (at most HEAD_BYTES)
 // when those items are newest first, else up to SORT_ITEMS items (at most SORT_BYTES), so that
-// parseFeed can sort them. Google News' search sorts by relevance, BBC's feeds are not in order:
+// feedItems can sort them. Google News' search sorts by relevance, BBC's feeds are not in order:
 // for them the head of a feed in its own order does not hold its newest items.
 // keep: the items wanted (index.js reads FEED_ITEMS, the tests the Board's ITEMS_MAX).
 export function readFeedHead(body, keep = ITEMS_MAX) {
@@ -145,9 +145,16 @@ export function feedLink(s) {
   }
 }
 
+// An item's date: its pubDate (or dc:date) as Unix seconds, null when absent or before 2000 (a
+// feed that writes "30 Nov -0001").
+function itemAt(body) {
+  const d = /<(pubDate|dc:date)\b[^>]*>([\s\S]*?)<\/\1>/.exec(body);
+  const ms = d ? Date.parse(elementText(d[2])) : NaN;
+  return Number.isFinite(ms) && ms >= Date.UTC(2000, 0, 1) ? Math.floor(ms / 1000) : null;
+}
+
 // The items of a feed's text, in the feed's order, at most SORT_ITEMS: {id, title, full, at,
-// link, summary}, at the item's pubDate (or dc:date) as Unix seconds, null when absent or before
-// 2000 (a feed that writes "30 Nov -0001"). title is cut to TITLE_MAX code points, full to
+// link, summary}, at the item's date (itemAt). title is cut to TITLE_MAX code points, full to
 // FULL_MAX, the summary (the <description>, tags stripped: some feeds write a <ul> of <li>) to
 // SUMMARY_MAX. The title is '' when the item has none, the link and the summary ''.
 function items(xml) {
@@ -157,13 +164,11 @@ function items(xml) {
     const t = /<title\b[^>]*>([\s\S]*?)<\/title>/.exec(m[1]);
     const s = /<source\b[^>]*>([\s\S]*?)<\/source>/.exec(m[1]);
     const full = t ? cutTitle(dropPublisher(elementText(t[1]), s ? elementText(s[1]) : ''), FULL_MAX) : '';
-    const d = /<(pubDate|dc:date)\b[^>]*>([\s\S]*?)<\/\1>/.exec(m[1]);
-    const ms = d ? Date.parse(elementText(d[2])) : NaN;
     const l = /<link\b[^>]*>([\s\S]*?)<\/link>/.exec(m[1]);
     const link = l ? feedLink(elementText(l[1])) : '';
     const ds = /<description\b[^>]*>([\s\S]*?)<\/description>/.exec(m[1]);
     out.push({
-      id: itemId(link, full), title: cutTitle(full), full, at: Number.isFinite(ms) && ms >= Date.UTC(2000, 0, 1) ? Math.floor(ms / 1000) : null,
+      id: itemId(link, full), title: cutTitle(full), full, at: itemAt(m[1]),
       link, summary: ds ? cutTitle(elementText(ds[1]), SUMMARY_MAX) : '',
     });
   }
@@ -171,10 +176,13 @@ function items(xml) {
 }
 
 // True when the dated items of a feed's text are newest first (an item with no date is not
-// counted; equal dates are in order).
+// counted; equal dates are in order). Only the dates are read (itemAt), at most SORT_ITEMS:
+// readFeedHead asks this of every feed's head.
 export function newestFirst(xml) {
-  let last = Infinity;
-  for (const { at } of items(String(xml ?? ''))) {
+  const re = /<item\b[^>]*>([\s\S]*?)<\/item>/g, text = String(xml ?? '');
+  let last = Infinity, m;
+  for (let n = 0; n < SORT_ITEMS && (m = re.exec(text)); n++) {
+    const at = itemAt(m[1]);
     if (at === null) continue;
     if (at > last) return false;
     last = at;
@@ -182,16 +190,10 @@ export function newestFirst(xml) {
   return true;
 }
 
-// A feed's items, the newest first, at most ITEMS_MAX: {title, at}. Items with equal dates keep
-// the feed's order, items with no date come last. An item with an empty title is skipped. [] for
-// text that is no RSS.
-export function parseFeed(xml) {
-  return feedItems(xml, ITEMS_MAX).map(({ title, at }) => ({ title, at }));
-}
-
 // A feed's items as the cache keeps them (index.js's readFeed, shared by /board and /news): the
-// newest first, at most max, each {id, title, full, at, link, summary} (items above). Sorted as
-// parseFeed's, so the first ITEMS_MAX are parseFeed's items.
+// newest first, at most max, each {id, title, full, at, link, summary} (items above). Items with
+// equal dates keep the feed's order, items with no date come last. An item with an empty title
+// is skipped. [] for text that is no RSS.
 export function feedItems(xml, max = FEED_ITEMS) {
   return items(String(xml ?? '')).filter((x) => x.title)
     .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, max);

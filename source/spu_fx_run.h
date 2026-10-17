@@ -78,8 +78,11 @@ void fx_stop(void);
 /* Each frame at the top of the loop, after the last ui_flip and before
  * page_begin: the frame budget, the scene, and the pictures. A picture's
  * five reports swap its textures in (the frame after shows it), then the
- * next picture is sent; mode is what the frame shows: */
-enum { FXM_SKY, FXM_AURORA };
+ * next picture is sent; mode is what the frame shows. FXM_NONE (0.5.0's
+ * review: the night's black clock): no new picture, so the five SPUs rest;
+ * a picture already out is still polled and swapped in, so the 2 s check
+ * (a late picture: RSX only) never runs out on the wake. */
+enum { FXM_SKY, FXM_AURORA, FXM_NONE };
 void fx_tick(int mode);
 
 /* The draws, between begin_frame and ui_flip, over the whole screen
@@ -88,10 +91,9 @@ void fx_tick(int mode);
  * glow), then the clouds (the SPU's picture, or four sprites); the rain or
  * the snow after the background layers (thread 5's block, or the PPU's);
  * the aurora in place of the sky (0 when none: RSX only, or no picture
- * yet). fx_draw_sky is the gradient and the clouds. */
+ * yet). */
 void fx_draw_gradient(void);
 void fx_draw_clouds(void);
-void fx_draw_sky(void);
 void fx_draw_rain(float alpha);      /* alpha 0 to 1: every particle's alpha times this */
 int fx_draw_aurora(void);
 
@@ -114,9 +116,6 @@ void fx_flash(float level);
 extern int fx_step;
 int fx_reduced(void);                /* 1 from step 5 */
 
-/* The Info page's line, and the fetch line's suffix in couch.txt (the last
- * job serials and the late frames: a freeze hours in leaves a trace). */
-void fx_words(char *buf, int n);
 /* The numbers of the Info page's Effects tile: the pictures shown, the
  * slowest SPU's mean busy time of each kind (and the sky's most), the rain
  * jobs and their mean, the late rain reports, the pictures a second at
@@ -128,6 +127,8 @@ typedef struct {
     const char *step_words;
 } fx_stats;
 void fx_get_stats(fx_stats *st);
+/* The fetch line's suffix in couch.txt (the last job serials and the late
+ * frames: a freeze hours in leaves a trace). */
 void fx_log_words(char *buf, int n);
 
 #endif

@@ -95,21 +95,20 @@ typedef struct {
      * 24 code points when it has no English words for it (2 bytes each in
      * Latin-1, and the NUL) */
     char temp[12], feels[12], humidity[12], words[52], wind[16];
-    int is_day;                      /* wx_now's 6th field: 1 day, 0 night */
-    char wx_src[24];                 /* wx_now's 7th field, the now line's source ("Open-Meteo"); "" when absent */
+    int is_day;                      /* wx_now's 6th field: 1 day, 0 night (a 7th, from an older Worker, is skipped) */
     int n_day;
     board_day day[BOARD_DAYS];
     board_feed wx_feed;
     /* since 2026-10-13, keys a Couch 0.1.0 skips: the extras, the
-     * sky (wx_rain=rain|words or dry|words, wx_sun=rise|set, wx_moon=words)
-     * and the news; each absent from an older Worker's reply */
+     * sky (wx_rain=rain|words or dry|words, wx_sun=rise|set; an older
+     * Worker's wx_moon is skipped: astro.h has the moon) and the news; each
+     * absent from an older Worker's reply */
     int n_extra;
     board_extra extra[BOARD_EXTRAS];
     int has_rain, rain_wet;
     char rain[64];
     int has_sun;
     char sunrise[8], sunset[8];
-    char moon[32];
     int n_news;
     board_news news[BOARD_NEWS];
     board_feed news_feed;            /* state "" when the reply had no news_state: the Worker has no feeds */
@@ -146,15 +145,15 @@ typedef struct {
     /* since 0.5.0, keys a Couch 0.4.1 skips: wx_soon=words (the rain of
      * the next 2 h from Open-Meteo's 15-minute values: "Rain from 18:45",
      * "Rain until 19:30"), air=aqi|uv (whole numbers, "-" missing: -1) and
-     * futbol=live|total|words (the private Worker: "2 live", "Next:
-     * Lions-Bears 21:00"); each absent from an older Worker's reply */
+     * futbol=live|words (the private Worker: "2 live", "Next: Lions-Bears
+     * 21:00"); each absent from an older Worker's reply */
     int has_soon;
     char soon[64];
     int has_air;
     int air_aqi;                     /* the US AQI now, 0 to 999 */
     int air_uv;                      /* the UV index now, 0 to 30 */
     int has_futbol;
-    int fut_live, fut_total;         /* games live now and games today, 0 to 999 */
+    int fut_live;                    /* games live now, 0 to 999 */
     char fut_words[128];
 } board_data;
 
@@ -318,14 +317,17 @@ int night_parse(const char *s, int n, int *start, int *end);
 /* 1 when hour (0 to 23) is in the span: from start, up to but not with end. */
 int night_in(int start, int end, int hour);
 
-/* The internet as one Board fetch shows it: NQ_DOWN when the fetch got no
+/* The internet as one fetch shows it: NQ_DOWN when the fetch got no
  * answer (answered 0: DNS, the connect, the send or the recv failed),
- * NQ_SLOW when the answer took NQ_SLOW_US or more, else NQ_OK. Round 1 on
- * the console fetched the Board in 0.75 s; 3 s is four times that, and far
- * under the 10 s socket timeouts. */
+ * NQ_SLOW when its connect (the DNS lookup and the TCP handshake, http.h's
+ * connect_us) took NQ_SLOW_US or more, else NQ_OK. Since 0.5.0's review
+ * the connect, not the whole fetch: the answer's time holds the Worker's
+ * own waits for its upstreams (up to 4 s), which say nothing of this
+ * line. The handshake is one round trip to Cloudflare's edge; 1.5 s leaves
+ * room for a DNS lookup that is not cached. */
 enum { NQ_NONE, NQ_OK, NQ_SLOW, NQ_DOWN };
-#define NQ_SLOW_US 3000000LL
-int net_quality(int answered, long long total_us);
+#define NQ_SLOW_US 1500000LL
+int net_quality(int answered, long long connect_us);
 
 /* The ambient mode (page.c): after AMBIENT_SEC with no button, the screen
  * dims, and each AMBIENT_STEP_SEC after that the picture moves to the next
@@ -346,18 +348,6 @@ void ambient_shift(long step, int *dx, int *dy);
  * headlines). */
 int ambient_page(long step, int has_news);
 
-/* The ambient block over the aurora (0.3.0, design 3.12): the clock, the
- * date and a line, at the next of 9 places each AMBIENT_STEP_SEC (the
- * places of ambient_shift, times AMBIENT_BLOCK_X and AMBIENT_BLOCK_Y px from
- * the canvas's centre), gliding to it over AMBIENT_GLIDE_S (ease in and
- * out, so the text moves by whole pixels for a moment only). t: seconds
- * since the mode began; *x, *y the offset. The line of the minute: 0 the
- * weather, 1 the hero rate, 2 the newest headline (by minute, then the next
- * that has data: has is a mask of 1 << line). */
-#define AMBIENT_BLOCK_X 300
-#define AMBIENT_BLOCK_Y 150
-#define AMBIENT_GLIDE_S 6.0
-void ambient_place(double t, float *x, float *y);
 /* The waiting screen's block (the TV's burn-in guard): its place for the
  * k-th span of AMB_MOVE_S (page.c), at most AMBIENT_DRIFT_X and
  * AMBIENT_DRIFT_Y px from the centre, whole pixels; span 0 is the centre.
@@ -366,7 +356,6 @@ void ambient_place(double t, float *x, float *y);
 #define AMBIENT_DRIFT_X 40
 #define AMBIENT_DRIFT_Y 24
 void ambient_spot(long k, float *x, float *y);
-int ambient_line(long minute, unsigned has);
 
 /* The ticker's offset in px at t seconds for a speed of px_s px a second,
  * wrapped to [0, period): any fraction (the marquee draws it bilinear). */
@@ -375,8 +364,9 @@ double ticker_offset(double t, double px_s, double period);
 /* ---- the reader (0.3.1, stage 11): the Worker's /news and /article -------------- */
 
 /* GET /news (worker/README.md, "The news reader"): "couch-news 1",
- * now=, item=id|source|category|age|title|summary (0 to 30, the newest
- * first), news_age=, news_state=, end. At most NEWS_MAX bytes (the Worker's
+ * now=, item=id|source|category|age|title (0 to 30, the newest first; a
+ * 6th field, the summary of an older Worker, is skipped), news_age=,
+ * news_state=, end. At most NEWS_MAX bytes (the Worker's
  * NEWS_BYTES). The same rules as the Board's: unknown keys and lines with
  * no '=' skipped, nothing after "end" read, the version on line 1. */
 #define NEWS_MAX 32768
@@ -387,7 +377,6 @@ typedef struct {
     char category[20];               /* the Worker's word ("economy"), "" for "-" or a missing field */
     long age;                        /* seconds at the Worker's now, -1 for "-" */
     char title[336];                 /* 110 code points of 3 bytes and the NUL */
-    char summary[848];               /* 280 code points of 3 bytes and the NUL; "" when none */
 } news_item;
 typedef struct {
     int version;
@@ -430,8 +419,8 @@ int article_parse(const char *body, int n, int fold, article_data *a);
 
 /* ---- the futbol page (0.5.0): the private Worker's /futbol ---------------------- */
 
-/* GET /futbol?d=0 (today) or d=1 (tomorrow): "couch-futbol 1", now=,
- * day=words ("Today, Fri 16 Oct"), league=name|country, then each game of
+/* GET /futbol?d=0 (today) or d=1 (tomorrow): "couch-futbol 1", now= (not
+ * kept), day=words ("Today, Fri 16 Oct"), league=name|country, then each game of
  * that league as game=when|home|away|score|score|tv|kind, more=leagues|games
  * (what the Worker's cap left out), futbol_age=, futbol_state=, end. when:
  * "21:00", "67'", "Final", "Postponed"; a score "-" before the game; kind
@@ -439,12 +428,11 @@ int article_parse(const char *body, int n, int fold, article_data *a);
  * (the Worker's FUTBOL_BYTES). A game before any league line is not kept;
  * the games and leagues past the arrays count in more (a league that
  * comes when the games' array is full too). */
-#define FUTBOL_MAX 12288
+#define FUTBOL_MAX 16384             /* 12288 before 0.5.0's review; a Saturday of 87 games made 5.8 KB */
 #define FUT_LEAGUES 40
 #define FUT_GAMES 240
 enum { FK_PRE, FK_LIVE, FK_END, FK_OFF };
 typedef struct {
-    int league;                      /* its league's index */
     int kind;                        /* FK_* */
     char when[24];
     char home[88], away[88];         /* 28 code points of 3 bytes and the NUL */
@@ -458,7 +446,6 @@ typedef struct {
 } fut_league;
 typedef struct {
     int version;
-    long now;
     char day[48];
     int n_league, n_game;
     fut_league league[FUT_LEAGUES];

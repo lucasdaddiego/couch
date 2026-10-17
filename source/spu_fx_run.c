@@ -800,6 +800,7 @@ void fx_tick(int mode)
     if (P.busy) pics_poll();
     if (fx_state != FXS_SPU || P.busy) return;
     entries_check();
+    if (mode == FXM_NONE) return;            /* no picture: the SPUs rest (the one out was polled above) */
     if (P.frame - P.sent_frame >= period(mode) || !P.job) pics_send(mode);
 }
 
@@ -845,12 +846,6 @@ void fx_draw_clouds(void)
     if (fx_state != FXS_SPU || !P.have_sky) return;
     screen_origin(&ox, &oy);
     tex_rect(tex_pair_shown(&cloud), ox, oy, 1920, 1080, 0xffffffff);
-}
-
-void fx_draw_sky(void)
-{
-    fx_draw_gradient();
-    fx_draw_clouds();
 }
 
 int fx_draw_aurora(void)
@@ -1056,17 +1051,6 @@ void fx_stop(void)
 /* ---- the words -------------------------------------------------------------------- */
 
 int fx_reduced(void) { return fx_step >= 5; }
-
-void fx_words(char *buf, int n)
-{
-    const char *jf = journal_state("fx_first") == J_OK ? "ok" : journal_state("fx_first") == J_PENDING ? "running"
-                   : journal_state("fx_first") == J_BAD ? "failed" : journal_state("fx_first") == J_FROZEN ? "froze" : "not run";
-    if (fx_state == FXS_SPU)
-        snprintf(buf, (size_t)n, "SPUs, %s; sky %.2f ms, rain %.3f ms a job (the slowest SPU's mean); fx_first %s", step_words[fx_step],
-                 P.sky_n ? P.sky_ms / P.sky_n : 0.0, R.jobs ? R.ms / R.jobs : 0.0, jf);
-    else if (fx_state == FXS_RSX) snprintf(buf, (size_t)n, "RSX only: %s", fx_why);
-    else snprintf(buf, (size_t)n, "not started");
-}
 
 void fx_get_stats(fx_stats *st)
 {

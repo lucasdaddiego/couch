@@ -35,7 +35,6 @@
 #define DOT_R 7
 #define DOT_STEP 24
 #define SLIDE_S 0.28                 /* a page's slide */
-#define PI_F 3.14159265f
 
 int page = PAGE_BOARD;
 const char *const page_name[PAGE_N] = {"Board", "News", "Futbol", "Info"};
@@ -174,7 +173,7 @@ static u32 net_words(char *buf, int n)
     }
     switch (board_net_q) {
     case NQ_OK: snprintf(buf, (size_t)n, "Internet ok"); return GREEN;
-    case NQ_SLOW: snprintf(buf, (size_t)n, "Internet slow (%.1f s)", (double)board_net_us / 1e6); return YELLOW;
+    case NQ_SLOW: snprintf(buf, (size_t)n, "Internet slow (connect %.1f s)", (double)board_connect_us / 1e6); return YELLOW;
     case NQ_DOWN:
         clock_words(t, sizeof t, board_net_down_utc, 0);
         snprintf(buf, (size_t)n, "No internet since %s", t);
@@ -223,7 +222,7 @@ static float header_right(float y)
 static int futbol_line(char *buf, int n)
 {
     const char *w = board_cur.fut_words;
-    if (!board_have || !board_cur.has_futbol) return 0;
+    if (!board_have || !board_cur.has_futbol || board_age() > BOARD_FRESH_S) return 0;   /* an old reply's games have moved on */
     if (!strncmp(w, "Next: ", 6)) snprintf(buf, (size_t)n, "Futbol next: %s", w + 6);
     else snprintf(buf, (size_t)n, "Futbol: %c%s", w[0] >= 'A' && w[0] <= 'Z' && w[1] >= 'a' && w[1] <= 'z' ? w[0] + 32 : w[0], w + 1);
     return 1;
@@ -255,7 +254,7 @@ static float big_clock(float x, float y, float right)
     if (src != CLK_CONSOLE || !board_have || !holiday_words(&board_cur, clock_utc() + off, line, sizeof line)) clock_source(line, sizeof line);
     u32 lc = src == CLK_UTC ? YELLOW : GREY;
     char fl[160];
-    if (futbol_line(fl, sizeof fl)) {
+    if (src != CLK_UTC && futbol_line(fl, sizeof fl)) {      /* the UTC clock's warning stays: never rotated away */
         double ph = fmod(sky_time(), 2 * HDR_ROT_S), q = fmod(ph, HDR_ROT_S);
         float k = q < HDR_FADE_S ? (float)(q / HDR_FADE_S) : q > HDR_ROT_S - HDR_FADE_S ? (float)((HDR_ROT_S - q) / HDR_FADE_S) : 1.0f;
         if (ph >= HDR_ROT_S) {
@@ -537,7 +536,7 @@ static void ambient_frame(void)
         if (text_w(F_MED, b->news[i].title) > aw - 72) nl = 2;
     float cardh = 192, newsh = 92 + (float)nl * (float)wrap_step(F_MED);
     float hrsh = 220;
-    int has_hrs = has_wx && board_hours_left(c.hour) >= 2;
+    int has_hrs = has_wx && board_hours_left(NULL) >= 2;
     float rest = (has_wx || has_side ? 28 + cardh : 0) + (nn ? 20 + newsh : 0), room = (float)SH - 64;   /* 64: the drift's 2 x 24 and a margin */
     if (has_hrs && big >= 0 && (float)line_h(F_MED) + ch + rest + 20 + hrsh > room) {
         big = D_L;                               /* a narrow area: a smaller clock first */
@@ -589,7 +588,7 @@ static void ambient_frame(void)
     if (has_hrs) {
         y += 20;
         amb_card(x0, y, aw, hrsh, day);
-        board_ambient_hours(x0, y, aw, hrsh, c.hour, c1, c2);
+        board_ambient_hours(x0, y, aw, hrsh, c1, c2);
         y += hrsh;
     }
     if (nn) {

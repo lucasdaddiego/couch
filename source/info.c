@@ -208,6 +208,7 @@ int info_input(void)
         else snprintf(msg, sizeof msg, "Could not clear the freeze journal: rc 0x%08x", (unsigned)rc);
         msg_color = rc == 0 ? GREEN : RED;
         fan_ask = 0;
+        fan_pct = -1;                        /* the fan is not read until its prompt says run again: no frozen value (0.5.0's review) */
     } else if (pressed & BTN_TRIANGLE) {
         armed = 0;
         if (!fs_ok) {
@@ -297,8 +298,8 @@ static void tile_board(float x0, float y0, float w0, float h0)
             clock_words(c, sizeof c, board_net_down_utc, 0);
             y = row(x, y, w, yb, "Internet", RED, "no answer since %s (%s)", c, cn);
         } else
-            y = row(x, y, w, yb, "Internet", board_net_q == NQ_SLOW ? YELLOW : WHITE, "%s: %.2f s, %s (slow from %.0f s)",
-                    board_net_q == NQ_SLOW ? "slow" : "ok", (double)board_net_us / 1e6, cn, (double)NQ_SLOW_US / 1e6);
+            y = row(x, y, w, yb, "Internet", board_net_q == NQ_SLOW ? YELLOW : WHITE, "%s: %s, the reply %.2f s (slow from a %.1f s connect)",
+                    board_net_q == NQ_SLOW ? "slow" : "ok", cn, (double)board_net_us / 1e6, (double)NQ_SLOW_US / 1e6);
     }
     if (board_have && board_has_skew) {
         long s = board_skew < 0 ? -board_skew : board_skew;
@@ -309,7 +310,9 @@ static void tile_board(float x0, float y0, float w0, float h0)
     } else row(x, y, w, yb, "Worker", DIM, "no reply yet");
 }
 
-/* The Hardware row: "Cell 58 C, RSX 54 C, fan 32 %", or why a value is missing. */
+/* The Hardware row: "Cell 58 C, RSX 54 C, fan 32 %", or why a value is
+ * missing; the temperatures only while the fan's prompt has not run since
+ * SQUARE twice cleared the journal (it comes at the page's next opening). */
 static float hardware_row(float x, float y, float w, float yb)
 {
     char t[96], f[96];
@@ -324,10 +327,11 @@ static float hardware_row(float x, float y, float w, float yb)
     if (fan_pct >= 0) snprintf(f, sizeof f, "fan %d %%", fan_pct);
     else if (fj == J_SKIPPED) snprintf(f, sizeof f, "fan skipped at the prompt");
     else if (fj == J_FROZEN) snprintf(f, sizeof f, "fan read froze before");
-    else if (!fan_allowed()) snprintf(f, sizeof f, "fan not read (unattended)");
+    else if (!fan_allowed() && unattended >= 0) snprintf(f, sizeof f, "fan not read (unattended)");
+    else if (!fan_allowed()) f[0] = 0;       /* the journal was cleared: the prompt first */
     else snprintf(f, sizeof f, "fan not read (409 rc 0x%08x)", (unsigned)fan_rc);
     int warm = cpu_c >= 70 || rsx_c >= 70;   /* PS3 Health's mark: 70 C and up */
-    return row(x, y, w, yb, "Hardware", cpu_c < 0 || warm ? YELLOW : WHITE, "%s%s%s", t, sep, f);
+    return row(x, y, w, yb, "Hardware", cpu_c < 0 || warm ? YELLOW : WHITE, "%s%s%s", t, f[0] ? sep : "", f);
 }
 
 /* The Night row: night.txt's hours, or the edit (TRIANGLE): the three

@@ -66,7 +66,7 @@ static int news_bounded(void)
     int ok = nd.n >= 0 && nd.n <= NEWS_ITEMS && IN(nd.feed.state) && IN(nd.feed.reason);
     for (int i = 0; i < nd.n; i++) {
         const news_item *it = &nd.item[i];
-        ok = ok && IN(it->id) && id_ok(it->id) && IN(it->source) && IN(it->category) && IN(it->title) && IN(it->summary) && it->title[0] &&
+        ok = ok && IN(it->id) && id_ok(it->id) && IN(it->source) && IN(it->category) && IN(it->title) && it->title[0] &&
              it->age >= -1;
     }
     return ok;
@@ -95,13 +95,11 @@ static void news_worker(const char *w, int wn)
     STR(nd.item[0].category, "world");
     CHECK(nd.item[0].age == 600);
     STR(nd.item[0].title, "Leaders meet in Z\xc3\xbcrich to agree on a new plan for river shipping");
-    CHECK(!strncmp(nd.item[0].summary, "A short summary of the story", 28));
-    CHECK(strstr(nd.item[0].summary, "caf\xc3\xa9's climate plan.") != NULL);
     STR(nd.feed.state, "ok");
     CHECK(nd.feed.age == 0 && !nd.feed.reason[0]);
     CHECK(news_parse(w, wn, 1, &nd) == BP_OK);
     STR(nd.item[0].source, "Zurich Post");
-    CHECK(strstr(nd.item[0].summary, "cafe's climate plan.") != NULL);
+    STR(nd.item[0].title, "Leaders meet in Zurich to agree on a new plan for river shipping");
     group("the Worker's /news item: every field, and folded", f0);
 }
 
@@ -136,7 +134,7 @@ static void news_live(const char *w, int wn)
         if (w[i] == '\n') c[m++] = '\r';
         c[m++] = w[i];
     }
-    CHECK(news_parse(c, m, 0, &nd) == BP_OK && nd.n == 30 && strlen(nd.item[29].summary) > 10 && nd.item[29].summary[strlen(nd.item[29].summary) - 1] != '\r');
+    CHECK(news_parse(c, m, 0, &nd) == BP_OK && nd.n == 30 && strlen(nd.item[29].title) > 10 && nd.item[29].title[strlen(nd.item[29].title) - 1] != '\r');
     free(c);
     group("the live /news of 2026-10-14: 30 items, the newest first, cut at every byte, CR LF", f0);
 }
@@ -153,7 +151,7 @@ static void news_rules(void)
                     "item=0123abcd|BBC|-|-|No category, no age|\n"
                     "item=XYZ|BBC|world|5|A bad id|s\n"
                     "item=01234567|BBC|world|5||no title: not an item\n"
-                    "item=89abcdef|BBC|world|7|Seven fields|the summary|and more\n"
+                    "item=89abcdef|BBC|world|7|An older Worker's summary|the summary|and more\n"
                     "noequals\n"
                     "unknown=1\n"
                     "item=fedcba98|  Spaced  |  world |  9  |  T  |  S  \n"
@@ -163,10 +161,10 @@ static void news_rules(void)
                     "item=00000000|After|end|1|not read|x\n";
     CHECK(news_parse(r, (int)strlen(r), 0, &nd) == BP_OK && nd.n == 4);
     STR(nd.item[0].category, "");
-    CHECK(nd.item[0].age == -1 && !nd.item[0].summary[0]);
+    CHECK(nd.item[0].age == -1);
     STR(nd.item[1].id, "");
     STR(nd.item[1].title, "A bad id");
-    STR(nd.item[2].summary, "the summary");
+    STR(nd.item[2].title, "An older Worker's summary");   /* its 6th field (the summary) and more: dropped */
     STR(nd.item[3].source, "Spaced");
     STR(nd.item[3].category, "world");
     CHECK(nd.item[3].age == 9);
@@ -180,15 +178,13 @@ static void news_rules(void)
     k += snprintf(b + k, sizeof b - (size_t)k, "end\n");
     CHECK(news_parse(b, k, 0, &nd) == BP_OK && nd.n == 30);
     STR(nd.item[29].title, "Title 29");
-    /* long fields: 150 three-byte code points of title (450 bytes) and 400 of summary: cut on a code point */
+    /* a long title: 150 three-byte code points (450 bytes), cut on a code point */
     k = snprintf(b, sizeof b, "couch-news 1\nitem=00000001|S|world|1|");
     for (int i = 0; i < 150; i++) k += snprintf(b + k, sizeof b - (size_t)k, "\xe2\x82\xac");
-    k += snprintf(b + k, sizeof b - (size_t)k, "|");
-    for (int i = 0; i < 400; i++) k += snprintf(b + k, sizeof b - (size_t)k, "\xe2\x82\xac");
     k += snprintf(b + k, sizeof b - (size_t)k, "\nend\n");
     CHECK(news_parse(b, k, 0, &nd) == BP_OK && nd.n == 1);
-    CHECK(strlen(nd.item[0].title) == 333 && strlen(nd.item[0].summary) == 846);
-    /* a 32 KB list: 30 items of 110 and 280 three-byte code points (the Worker's caps) and the cap's rest */
+    CHECK(strlen(nd.item[0].title) == 333);
+    /* an older Worker's 32 KB list: 30 items of 110 and 280 three-byte code points (title and summary) */
     k = snprintf(b, sizeof b, "couch-news 1\nnow=1792022941\n");
     for (int i = 0; i < 30; i++) {
         k += snprintf(b + k, sizeof b - (size_t)k, "item=%08x|Z\xc3\xbcrich Post|politics|%d|", i, 100 + i);
@@ -199,7 +195,7 @@ static void news_rules(void)
     }
     k += snprintf(b + k, sizeof b - (size_t)k, "news_age=0\nnews_state=ok\nend\n");
     CHECK(k <= NEWS_MAX + 4096);
-    CHECK(news_parse(b, k, 0, &nd) == BP_OK && nd.n == 30 && strlen(nd.item[29].title) == 330 && strlen(nd.item[29].summary) == 840);
+    CHECK(news_parse(b, k, 0, &nd) == BP_OK && nd.n == 30 && strlen(nd.item[29].title) == 330);
     group("/news's rules: version, keys, ids, '-', fields, 30 items, long fields, a list at the Worker's caps", f0);
 }
 
@@ -401,7 +397,7 @@ static int fut_bounded(void)
     ok = ok && sum == fd.n_game;
     for (int i = 0; i < fd.n_game; i++) {
         const fut_game *g = &fd.game[i];
-        ok = ok && IN(g->when) && IN(g->home) && IN(g->away) && IN(g->tv) && g->league >= 0 && g->league < fd.n_league &&
+        ok = ok && IN(g->when) && IN(g->home) && IN(g->away) && IN(g->tv) &&
              g->kind >= FK_PRE && g->kind <= FK_OFF && g->sh >= -1 && g->sh <= 99 && g->sa >= -1 && g->sa <= 99;
     }
     return ok;
@@ -413,14 +409,14 @@ static int fparse(const char *s, int fold) { return futbol_parse(s, (int)strlen(
 static void futbol_worker(const char *w, int wn)
 {
     int f0 = fails;
-    CHECK(futbol_parse(w, wn, 0, &fd) == BP_OK && fd.version == 1 && fd.now == 1792164000L);
+    CHECK(futbol_parse(w, wn, 0, &fd) == BP_OK && fd.version == 1);
     STR(fd.day, "Today, Fri 16 Oct");
     CHECK(fd.n_league == 2 && fd.n_game == 5 && !fd.more_leagues && !fd.more_games && futbol_live(&fd) == 0);
     STR(fd.league[0].name, "Spree League");
     STR(fd.league[0].country, "Germany");
     CHECK(fd.league[0].first == 0 && fd.league[0].n == 3 && fd.league[1].first == 3 && fd.league[1].n == 2);
     const fut_game *g = &fd.game[0];
-    CHECK(g->kind == FK_END && g->sh == 2 && g->sa == 1 && g->league == 0);
+    CHECK(g->kind == FK_END && g->sh == 2 && g->sa == 1);
     STR(g->when, "Final");
     STR(g->home, "FC Kiezblau");
     STR(g->away, "Union Mitte");
@@ -429,7 +425,7 @@ static void futbol_worker(const char *w, int wn)
     CHECK(g->kind == FK_PRE && g->sh == -1 && g->sa == -1 && hm_parse(g->when) == 18 * 60 + 30);
     STR(g->tv, "Spree TV, Kanal 9");
     CHECK(fd.game[2].tv[0] == 0);                                     /* "-": no channel */
-    CHECK(fd.game[3].kind == FK_END && fd.game[3].sh == 1 && fd.game[3].league == 1);
+    CHECK(fd.game[3].kind == FK_END && fd.game[3].sh == 1);                    /* the second league's first game */
     STR(fd.game[3].when, "Pens 4-3");
     CHECK(fd.game[4].kind == FK_OFF);
     STR(fd.game[4].home, "Gr\xc3\xbcnau 04");
@@ -491,7 +487,7 @@ static void futbol_worker(const char *w, int wn)
     snprintf(big + bk, sizeof big - bk, "|B|1|2|T|end\nend\n");
     CHECK(fparse(big, 0) == BP_OK && fut_bounded() && strlen(fd.league[0].name) == sizeof fd.league[0].name - 1);
     CHECK(strlen(fd.game[0].when) == 22 && strlen(fd.game[0].home) == 87);   /* cut on a code point boundary */
-    group("futbol rules: a game's league, the ranges, an unknown kind, more=, the states, past the arrays, long fields", f0);
+    group("futbol rules: the games before a league, the ranges, an unknown kind, more=, the states, past the arrays, long fields", f0);
 }
 
 static void fuzz(const char *w, int wn, int article, const char *name)

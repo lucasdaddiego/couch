@@ -42,9 +42,9 @@ static int bounded(void)
 {
 #define IN(f) (memchr((f), 0, sizeof(f)) != NULL)
 #define RNG(v, lo, hi, none) ((v) == (none) || ((v) >= (lo) && (v) <= (hi)))
-    int ok = IN(b.city) && IN(b.temp) && IN(b.feels) && IN(b.humidity) && IN(b.words) && IN(b.wind) && IN(b.wx_src) && IN(b.rate_feed.state) &&
+    int ok = IN(b.city) && IN(b.temp) && IN(b.feels) && IN(b.humidity) && IN(b.words) && IN(b.wind) && IN(b.rate_feed.state) &&
              IN(b.rate_feed.reason) && IN(b.wx_feed.state) && IN(b.wx_feed.reason) && b.n_rate <= BOARD_RATES && b.n_day <= BOARD_DAYS &&
-             IN(b.rain) && IN(b.sunrise) && IN(b.sunset) && IN(b.moon) && IN(b.news_feed.state) && IN(b.news_feed.reason) &&
+             IN(b.rain) && IN(b.sunrise) && IN(b.sunset) && IN(b.news_feed.state) && IN(b.news_feed.reason) &&
              b.n_extra <= BOARD_EXTRAS && b.n_news <= BOARD_NEWS;
     for (int i = 0; i < b.n_rate; i++) ok = ok && IN(b.rate[i].label) && IN(b.rate[i].buy) && IN(b.rate[i].sell) && IN(b.rate[i].when);
     for (int i = 0; i < b.n_day; i++)
@@ -54,7 +54,7 @@ static int bounded(void)
     for (int i = 0; i < b.n_news; i++) ok = ok && IN(b.news[i].source) && IN(b.news[i].title) && b.news[i].title[0];
     ok = ok && (!b.has_geo || (b.lat >= -90 && b.lat <= 90 && b.lon >= -180 && b.lon <= 180));
     ok = ok && IN(b.soon) && IN(b.fut_words) && RNG(b.air_aqi, 0, 999, -1) && RNG(b.air_uv, 0, 30, -1) && RNG(b.fut_live, 0, 999, -1) &&
-         RNG(b.fut_total, 0, 999, -1) && (!b.has_soon || b.soon[0]) && (!b.has_futbol || b.fut_words[0]);
+         (!b.has_soon || b.soon[0]) && (!b.has_futbol || b.fut_words[0]);
     ok = ok && RNG(b.fx_code, 0, 99, -1) && RNG(b.fx_cover, 0, 100, -1) && RNG(b.fx_dir, 0, 359, -1) && RNG(b.fx_speed, 0, 500, -1) &&
          RNG(b.fx_gusts, 0, 500, -1) && (b.fx_mm == -1 || (b.fx_mm >= 0 && b.fx_mm <= 1000)) && RNG(b.hours_start, 0, 23, -1);
     ok = ok && b.n_hours >= 0 && b.n_hours <= HOURS_MAX && b.n_day_code >= 0 && b.n_day_code <= BOARD_DAYS;
@@ -113,7 +113,6 @@ static void worker_reply(const char *w, int wn)
     STR(b.humidity, "57%");
     STR(b.words, "Partly cloudy");
     STR(b.wind, "8 km/h");
-    STR(b.wx_src, "Open-Meteo");
     CHECK(b.n_day == 3);
     STR(b.day[0].label, "Today");
     STR(b.day[0].words, "Fog");
@@ -133,7 +132,6 @@ static void worker_reply(const char *w, int wn)
     CHECK(b.has_sun);
     STR(b.sunrise, "07:33");
     STR(b.sunset, "18:09");
-    STR(b.moon, "Waxing crescent moon");
     CHECK(b.has_holiday && b.hol_year == 2026 && b.hol_month == 12 && b.hol_day == 25 && b.hol_days == 70);
     STR(b.hol_name, "Erster Weihnachtstag");
     CHECK(b.n_news == 8);
@@ -143,7 +141,7 @@ static void worker_reply(const char *w, int wn)
     STR(b.news[7].title, "Talks on fishing rights resume after a short break");
     STR(b.news_feed.state, "ok");
     CHECK(b.news_feed.age == 120);
-    CHECK(!b.has_soon && !b.has_air && !b.has_futbol && b.air_aqi == -1 && b.fut_total == -1);   /* the keys of 0.5.0 are derived ones */
+    CHECK(!b.has_soon && !b.has_air && !b.has_futbol && b.air_aqi == -1 && b.fut_live == -1);   /* the keys of 0.5.0 are derived ones */
     CHECK(bounded());
     CHECK(board_has_end(w, wn));
     group("the Worker test's reply (the keys a minimal Worker sends), every field", f0);
@@ -167,7 +165,7 @@ static void worker_reply(const char *w, int wn)
     crlf[k] = 0;
     CHECK(board_parse(crlf, k, 0, &b) == BP_OK && b.n_rate == 4 && b.n_day == 3 && b.n_extra == 0 && b.n_news == 8 && board_has_end(crlf, k));
     STR(b.news[7].source, "BBC");
-    STR(b.moon, "Waxing crescent moon");
+    STR(b.sunset, "18:09");
     STR(b.rate[0].when, "16 Oct");
     STR(b.wx_feed.state, "ok");
     free(crlf);
@@ -288,40 +286,31 @@ static void rules(void)
     STR(b.day[0].rain, "-");
     STR(b.temp, "5");
     STR(b.wind, "-");
-    CHECK(!b.is_day && !b.wx_src[0]);               /* no 7th field: no source, not "-" */
+    CHECK(!b.is_day);
     STR(b.rate[1].label, "-");
     group("missing and empty fields read as \"-\"", f0);
 
     f0 = fails;
-    CHECK(parse("couch-board 1\ncity=M\xc3\xa1laga\nwx_now=10\xc2\xb0|10\xc2\xb0|84%|Cloudy|3 km/h|day|Station 23:00\nend\n", 0) == BP_OK);
+    CHECK(parse("couch-board 1\ncity=M\xc3\xa1laga\nwx_now=10\xc2\xb0|10\xc2\xb0|84%|Cloudy|3 km/h|day\nend\n", 0) == BP_OK);
     CHECK(b.has_wx && b.is_day);
     STR(b.city, "M\xc3\xa1laga");
     STR(b.temp, "10\xc2\xb0");
     STR(b.words, "Cloudy");
     STR(b.wind, "3 km/h");
-    STR(b.wx_src, "Station 23:00");
-    CHECK(parse("couch-board 1\ncity=M\xc3\xa1laga\nwx_now=10\xc2\xb0|10|84%|Cloudy|3 km/h|night|Station 23:00\nend\n", 1) == BP_OK);
+    CHECK(parse("couch-board 1\ncity=M\xc3\xa1laga\nwx_now=10\xc2\xb0|10|84%|Cloudy|3 km/h|night\nend\n", 1) == BP_OK && !b.is_day);
     STR(b.city, "Malaga");                          /* the fold: U+00E1 is a */
     STR(b.temp, "10");
-    STR(b.wx_src, "Station 23:00");
-    /* an 8th field is dropped and the 7th ends at its '|': the rule that makes
-     * a Couch of before 2026-10-12, which splits 6, read "day" from "day|Station 23:00" */
-    CHECK(parse("couch-board 1\nwx_now=10|10|84%|Cloudy|3 km/h|day|Station 23:00|later\nend\n", 0) == BP_OK && b.is_day);
-    STR(b.wx_src, "Station 23:00");
-    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|night\nend\n", 0) == BP_OK && !b.is_day && !b.wx_src[0]);
-    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|day|\nend\n", 0) == BP_OK && b.is_day && !b.wx_src[0]);
-    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|day| \x01 \nend\n", 0) == BP_OK && !b.wx_src[0]);
-    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|day|Station 23:00\nwx_now=11|10|92%|Overcast|9 km/h|day\nend\n", 0) == BP_OK &&
-          !b.wx_src[0]);                            /* a repeated wx_now: the last one's source */
-    CHECK(parse("couch-board 1\nwx_now=1|2|3|4|5|day|Station-23:00-and-a-source-longer-than-its-buffer\nend\n", 0) == BP_OK && bounded() &&
-          strlen(b.wx_src) == sizeof b.wx_src - 1);
+    /* an older Worker's 7th field (the source) is dropped, and the 6th ends at its '|' */
+    CHECK(parse("couch-board 1\nwx_now=10|10|84%|Cloudy|3 km/h|day|Station 23:00|later\nend\n", 0) == BP_OK && b.is_day && bounded());
+    STR(b.wind, "3 km/h");
+    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|night|Open-Meteo\nend\n", 0) == BP_OK && !b.is_day);
+    CHECK(parse("couch-board 1\nwx_now=11|10|92%|Overcast|9 km/h|day|\nend\n", 0) == BP_OK && b.is_day);
     static char w24[128];                            /* 24 two-byte letters: a station's words the Worker cut to 24 code points */
     int wk = snprintf(w24, sizeof w24, "couch-board 1\nwx_now=1|2|3|");
     for (int i = 0; i < 24; i++) wk += snprintf(w24 + wk, sizeof w24 - wk, "\xc3\xa9");
-    snprintf(w24 + wk, sizeof w24 - wk, "|5|day|Station 23:00\nend\n");
+    snprintf(w24 + wk, sizeof w24 - wk, "|5|day\nend\n");
     CHECK(parse(w24, 0) == BP_OK && strlen(b.words) == 48 && b.is_day);
-    STR(b.wx_src, "Station 23:00");
-    group("wx_now's 7th field: the source, absent or empty as \"\", an 8th field dropped; 24 accented letters of words", f0);
+    group("wx_now: 6 fields, an older Worker's 7th (the source) dropped; 24 accented letters of words", f0);
 
     f0 = fails;
     CHECK(parse("couch-board 1\ncity= \t A\x01" "B \x7f \nnow=abc\noffset=60000\nend\n", 0) == BP_OK);
@@ -356,14 +345,13 @@ static void extras(void)
 
     f0 = fails;
     CHECK(parse("couch-board 1\nwx_rain=dry|No rain in the next 12 h\nwx_sun=06:24|19:16\nwx_moon=Full moon\nend\n", 0) == BP_OK);
-    CHECK(b.has_rain && !b.rain_wet && b.has_sun);
+    CHECK(b.has_rain && !b.rain_wet && b.has_sun);  /* an older Worker's wx_moon: skipped */
     STR(b.rain, "No rain in the next 12 h");
-    STR(b.moon, "Full moon");
     CHECK(parse("couch-board 1\nwx_rain=rain\nwx_sun=06:24\nend\n", 0) == BP_OK);
     CHECK(b.has_rain && b.rain_wet && !b.has_sun);
     STR(b.rain, "-");
-    CHECK(parse("couch-board 1\nend\n", 0) == BP_OK && !b.has_rain && !b.has_sun && !b.moon[0]);
-    group("the sky: wx_rain rain or dry, wx_sun with both times, wx_moon; absent from an older Worker", f0);
+    CHECK(parse("couch-board 1\nend\n", 0) == BP_OK && !b.has_rain && !b.has_sun);
+    group("the sky: wx_rain rain or dry, wx_sun with both times (an older Worker's wx_moon skipped); absent from an older Worker", f0);
 
     f0 = fails;
     static char s[8192];
@@ -387,7 +375,8 @@ static void extras(void)
 
     f0 = fails;
     CHECK(net_quality(0, 0) == NQ_DOWN && net_quality(0, 9000000) == NQ_DOWN);
-    CHECK(net_quality(1, 750000) == NQ_OK && net_quality(1, NQ_SLOW_US - 1) == NQ_OK && net_quality(1, NQ_SLOW_US) == NQ_SLOW);
+    CHECK(net_quality(1, 50000) == NQ_OK && net_quality(1, NQ_SLOW_US - 1) == NQ_OK && net_quality(1, NQ_SLOW_US) == NQ_SLOW);
+    CHECK(NQ_SLOW_US == 1500000LL);                  /* by the connect's time since 0.5.0's review: a 4 s reply of a fast connect is ok */
     int dx, dy, seen[3][3] = {{0}}, far = 0, jump = 0, px = 0, py = 0;
     for (long st = 0; st < AMBIENT_SHIFTS; st++) {
         ambient_shift(st, &dx, &dy);
@@ -408,11 +397,9 @@ static void extras(void)
     CHECK(dx == AMBIENT_PX && dy == -AMBIENT_PX);
     CHECK(ambient_page(0, 1) == 0 && ambient_page(1, 1) == 1 && ambient_page(2, 1) == 0 && ambient_page(1, 0) == 0);
     CHECK(AMBIENT_SEC == 600 && AMBIENT_STEP_SEC == 60);
-    group("net_quality (slow from 3 s), the ambient shift (each of 9 places once, 6 px a step), the ambient page", f0);
+    group("net_quality (slow from a 1.5 s connect), the ambient shift (each of 9 places once, 6 px a step), the ambient page", f0);
 }
 
-/* 0.3.0's stage 10: the ambient block's places and lines, the News page's
- * categories, the ticker's offset. */
 /* 0.3.2: holiday= (the Worker of 2026-10-16), the header's holiday words, the ambient drift. */
 static void check_032(void)
 {
@@ -448,36 +435,14 @@ static void check_032(void)
     group("0.3.2: holiday= and its words, bad lines left out; the block's places (whole pixels, its range, a new one each span)", f0);
 }
 
+/* 0.3.0's stage 10: the ticker's offset. */
 static void check_stage10(void)
 {
     int f0 = fails;
-    float x, y, px = 0, py = 0;
-    ambient_place(0, &x, &y);
-    CHECK(x == 0 && y == 0);                                   /* the centre first, no glide in from nowhere */
-    int seen = 0, bad = 0;
-    for (long st = 0; st < AMBIENT_SHIFTS; st++) {             /* each minute's place, after its glide */
-        int dx, dy;
-        ambient_shift(st, &dx, &dy);
-        ambient_place(st * AMBIENT_STEP_SEC + AMBIENT_GLIDE_S + 1, &x, &y);
-        if (x != (float)dx / AMBIENT_PX * AMBIENT_BLOCK_X || y != (float)dy / AMBIENT_PX * AMBIENT_BLOCK_Y) bad++;
-        seen++;
-    }
-    CHECK(!bad && seen == 9);
-    int jumps = 0;                                             /* the glides: no frame moves more than 2 px */
-    for (double t = 0; t < 9 * AMBIENT_STEP_SEC; t += 1.0 / 60) {
-        ambient_place(t, &x, &y);
-        if (t > 0 && (fabsf(x - px) > 2.0f || fabsf(y - py) > 2.0f)) jumps++;
-        px = x, py = y;
-    }
-    CHECK(!jumps);
-    ambient_place(-5, &x, &y);
-    CHECK(x == 0 && y == 0);
-    CHECK(ambient_line(0, 7) == 0 && ambient_line(1, 7) == 1 && ambient_line(2, 7) == 2 && ambient_line(3, 7) == 0);
-    CHECK(ambient_line(2, 3) == 0 && ambient_line(1, 4) == 2 && ambient_line(5, 0) == -1 && ambient_line(-3, 1) == 0);
     CHECK(ticker_offset(0, 55, 1000) == 0 && ticker_offset(2, 55, 1000) == 110 && fabs(ticker_offset(20, 55, 1000) - 100) < 1e-9);
     CHECK(ticker_offset(1.0 / 59.94, 55, 1000) > 0.9 && ticker_offset(1.0 / 59.94, 55, 1000) < 0.92);   /* 0.92 px a frame: a fraction */
     CHECK(ticker_offset(5, 55, 0) == 0 && ticker_offset(-1, 55, 100) == 0 && ticker_offset(5, 0, 100) == 0);
-    group("stage 10: the ambient block's places and glides, its lines; the News categories; the ticker's offset", f0);
+    group("stage 10: the ticker's offset", f0);
 }
 
 /* ---- the keys of 0.3.0 (design 5.1) ------------------------------------------------ */
@@ -526,7 +491,6 @@ static void new_reply(const char *w, int wn, const char *w2, int w2n)
     CHECK(board_parse(w2, w2n, 0, &b) == BP_OK && board_has_end(w2, w2n));
     CHECK(b.n_rate == 4 && b.n_day == 3 && b.n_extra == 0 && b.n_news == 8 && b.has_wx && b.has_sun);   /* the minimal fields stay */
     STR(b.rate[1].sell, "1,1850");
-    STR(b.moon, "Waxing crescent moon");
     STR(b.feature, "USD");
     STR(b.feature_sym, "$");
     CHECK(b.has_geo && fabs(b.lat - 52.52) < 1e-9 && fabs(b.lon - 13.4) < 1e-9);
@@ -563,7 +527,7 @@ static void new_reply(const char *w, int wn, const char *w2, int w2n)
     wind_words(ww, sizeof ww, b.fx_dir, b.fx_gusts);
     STR(ww, "S, gusts 23");
     CHECK(b.has_air && b.air_aqi == 38 && b.air_uv == 1);                             /* 0.5.0 */
-    CHECK(b.has_futbol && b.fut_live == 0 && b.fut_total == 5);
+    CHECK(b.has_futbol && b.fut_live == 0);
     STR(b.fut_words, "Next: Rovers\xe2\x80\x93Tegelsee 18:30");
     CHECK(!b.has_soon);                                                               /* a dry fixture: no line */
     CHECK(bounded());
@@ -950,13 +914,13 @@ static void moon_check(const char *w, int wn)
     CHECK(moon_phase(0) == 0 && moon_phase(MOON_SYNODIC / 2) == 4 && moon_phase(MOON_SYNODIC - 0.1) == 0 && moon_phase(1.84) == 0 &&
           moon_phase(1.86) == 1);
     CHECK(fabs(moon_lit(0)) < 1e-12 && fabs(moon_lit(MOON_SYNODIC / 2) - 1) < 1e-12 && fabs(moon_lit(MOON_SYNODIC / 4) - 0.5) < 1e-12);
-    /* the Worker's words for the reply's now: the same formula */
+    /* the reply's now: the words the Worker's wx_moon gave before 0.5.0's review (the same formula) */
     CHECK(board_parse(w, wn, 0, &b) == BP_OK);
     double age = moon_age(b.now);
     int p = moon_phase(age);
     char word[40];
     snprintf(word, sizeof word, "%s%s", moon_phase_name[p], strstr(moon_phase_name[p], "moon") ? "" : " moon");
-    STR(word, b.moon);
+    STR(word, "Waxing crescent moon");
     CHECK(p == 1 && fabs(age - 5.2542) < 2e-3 && fabs(moon_lit(age) - 0.2812) < 2e-3);
     int full;
     long t = moon_next(1791913620L, &full);
@@ -966,7 +930,7 @@ static void moon_check(const char *w, int wn)
     STR(s, "Full moon 26 Oct");
     moon_next_words(s, sizeof s, 1792987920L, -10800);
     STR(s, "New moon 9 Nov");
-    group("moon_age, moon_phase, moon_lit, moon_next: the Worker's formula and words", f0);
+    group("moon_age, moon_phase, moon_lit, moon_next: the old wx_moon's formula and words", f0);
 
     f0 = fails;
     /* The 2026 new and full moons, UTC (the four eclipses, and October's two). At a new moon the moon's ecliptic
@@ -1187,22 +1151,21 @@ static void fuzz(const char *w, int wn, const char *name)
 static void check_050(void)
 {
     int f0 = fails;
-    CHECK(parse("couch-board 1\nwx_soon=Rain from 18:45\nair=42|3\nfutbol=2|14|2 live\nend\n", 0) == BP_OK);
-    CHECK(b.has_soon && b.has_air && b.has_futbol && b.air_aqi == 42 && b.air_uv == 3 && b.fut_live == 2 && b.fut_total == 14);
+    CHECK(parse("couch-board 1\nwx_soon=Rain from 18:45\nair=42|3\nfutbol=2|2 live\nend\n", 0) == BP_OK);
+    CHECK(b.has_soon && b.has_air && b.has_futbol && b.air_aqi == 42 && b.air_uv == 3 && b.fut_live == 2);
     STR(b.soon, "Rain from 18:45");
     STR(b.fut_words, "2 live");
     CHECK(parse("couch-board 1\nair=-|4.6\nend\n", 0) == BP_OK && b.has_air && b.air_aqi == -1 && b.air_uv == 5);   /* a decimal UV is rounded */
     CHECK(parse("couch-board 1\nair=-|-\nend\n", 0) == BP_OK && !b.has_air);
     CHECK(parse("couch-board 1\nair=1000|31\nend\n", 0) == BP_OK && !b.has_air && b.air_aqi == -1 && b.air_uv == -1);   /* out of range */
     CHECK(parse("couch-board 1\nair=12\nend\n", 0) == BP_OK && b.has_air && b.air_aqi == 12 && b.air_uv == -1);
-    CHECK(parse("couch-board 1\nwx_soon=-\nfutbol=1|2|\nend\n", 0) == BP_OK && !b.has_soon && !b.has_futbol);
-    CHECK(parse("couch-board 1\nfutbol=x|1.5|Next: A\xe2\x80\x93" "B 21:00\nend\n", 1) == BP_OK && b.has_futbol && b.fut_live == -1 &&
-          b.fut_total == -1);
+    CHECK(parse("couch-board 1\nwx_soon=-\nfutbol=1|\nend\n", 0) == BP_OK && !b.has_soon && !b.has_futbol);
+    CHECK(parse("couch-board 1\nfutbol=x|Next: A\xe2\x80\x93" "B 21:00\nend\n", 1) == BP_OK && b.has_futbol && b.fut_live == -1);
     STR(b.fut_words, "Next: A-B 21:00");                                              /* folded: the en dash a '-' */
-    CHECK(parse("couch-board 1\nfutbol=0|3|No more games today|extra\nend\n", 0) == BP_OK);
-    STR(b.fut_words, "No more games today");                                          /* the third field ends at a '|' */
+    CHECK(parse("couch-board 1\nfutbol=0|No more games today|extra\nend\n", 0) == BP_OK);
+    STR(b.fut_words, "No more games today");                                          /* the second field ends at a '|' */
     CHECK(bounded());
-    group("the keys of 0.5.0: wx_soon, air (missing and out of range: -1), futbol", f0);
+    group("the keys of 0.5.0: wx_soon, air (missing and out of range: -1), futbol=live|words", f0);
 
     f0 = fails;
     int a = -1, e = -1;

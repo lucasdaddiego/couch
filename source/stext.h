@@ -29,7 +29,6 @@
 /* After ui_flip, each frame (the frame loop): the next rows of the
  * atlases until they are built. 1 when they are ready. */
 int stext_tick(void);
-int stext_ready(void);
 
 /* The band: canvas y top to bot, faded over fade_top px under its top and
  * fade_bot px over its bottom (0: a hard cut). stext_band_off: no band. */

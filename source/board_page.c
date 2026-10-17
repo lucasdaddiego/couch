@@ -253,17 +253,6 @@ static void wx_icon_m(int wi, float cx, float cy, float angle, float scale)
 
 static void hero_icon(int k, int day, float cx, float cy, float box);
 
-/* The weather icon of now (the hero's) for the ambient mode: 0 when there is none. */
-int board_wx_icon(float cx, float cy, float box)
-{
-    const board_data *b = &board_cur;
-    int has = board_have && b->has_wx;
-    int k = board_have && b->has_fx ? wmo_kind(b->fx_code) : WK_NONE, day = has ? b->is_day : fx_sc.elev > 0;
-    if (k == WK_NONE) return 0;
-    hero_icon(k, day, cx, cy, box);
-    return 1;
-}
-
 /* The waiting screen's weather card (0.3.2) in the box x, y, w, h: the
  * hero's moving icon (120 px), the temperature in D_M, then a column with
  * the words (F_LARGE), today's high and low and the rain's chance (F_MED). */
@@ -295,26 +284,42 @@ void board_ambient_wx(float x, float y, float w, float h, u32 c1, u32 c2)
     }
 }
 
-/* The hours of wx_hours from the hour of local_hour on: all of them for a
- * list that starts up to 3 hours later, none for a list whose hours have
- * all gone. The hourly card needs 2. */
-int board_hours_left(int local_hour)
+/* Hours since 1970 of a time t (Unix seconds plus an offset). */
+static long hour_of(long t) { return t >= 0 ? t / 3600 : (t - 3599) / 3600; }
+
+/* The hours of wx_hours from now on, by the reply's date and in its zone
+ * (0.5.0's review: by the hour alone, a board_last.txt of yesterday showed
+ * its hours as the next ones, and the console's zone was compared with the
+ * Worker's). The list starts at the first whole hour after the reply's now
+ * (the hour of hours_start nearest to it); now is the Worker's clock moved
+ * on by the reply's age (the console's clock for a reply with no now). All
+ * of them for a list that starts in the next 3 hours, none for one whose
+ * hours have all gone. *now_hour (when not NULL): now's hour in the reply's
+ * zone, 0 to 23. The hourly card needs 2. */
+int board_hours_left(int *now_hour)
 {
     const board_data *b = &board_cur;
-    int n = board_have ? b->n_hours : 0, skip = (local_hour - (board_have ? b->hours_start : 0) + 24) % 24;
-    if (skip < n) return n - skip;
-    return skip >= 21 ? n : 0;                               /* a list that starts in the next 3 hours, else an old one */
+    int n = board_have ? b->n_hours : 0, off = board_have && b->has_offset ? b->offset : 0;
+    long h = hour_of((board_have && b->now > 0 ? b->now + board_age() : clock_utc()) + off);
+    if (now_hour) *now_hour = (int)(((h % 24) + 24) % 24);
+    if (!n || b->hours_start < 0) return 0;
+    long first = hour_of((b->now > 0 ? b->now : clock_utc() - board_age()) + off) + 1;
+    int d = (int)(((b->hours_start - first) % 24 + 24) % 24);
+    first += d < 12 ? d : d - 24;                            /* hours_start's hour nearest to the reply's next one */
+    long skip = h - first;
+    if (skip < 0) return skip >= -3 ? n : 0;                 /* a list that starts in the next 3 hours */
+    return skip < n ? n - (int)skip : 0;                     /* else its hours from now, none when all have gone */
 }
 
 /* The waiting screen's hourly card (0.3.2) in the box x, y, w, h: a
- * column per hour of wx_hours (up to 12, from the hour of local_hour when
- * the reply is older): the hour ("Now" for local_hour), the M icon (the moon between the sunset and the
+ * column per hour of wx_hours (up to 12, from now's hour when the reply is
+ * older: board_hours_left): the hour ("Now" for now's hour), the M icon (the moon between the sunset and the
  * sunrise), the rain's chance in blue from 20 %, the temperature. 0 when
  * there are fewer than 2 hours (no card). */
-int board_ambient_hours(float x, float y, float w, float h, int local_hour, u32 c1, u32 c2)
+int board_ambient_hours(float x, float y, float w, float h, u32 c1, u32 c2)
 {
     const board_data *b = &board_cur;
-    int n = board_hours_left(local_hour), skip = board_have ? b->n_hours - n : 0;
+    int local_hour = 0, n = board_hours_left(&local_hour), skip = board_have ? b->n_hours - n : 0;
     if (n < 2) return 0;
     int rise = b->has_sun ? hm_parse(b->sunrise) : -1, set = b->has_sun ? hm_parse(b->sunset) : -1;
     float cw = (w - 72) / (float)n, ly = rnd(y + 22), iy = rnd(ly + (float)line_h(F_SMALL) + 36), py = rnd(iy + 30);
@@ -576,7 +581,8 @@ static void hero(float x, float y, float w, float h, const board_data *b)
     dial(dcx, dcy, R, b);
     /* the bottom band: the rain line (the next 2 h's words when the reply has them, 0.5.0), then the curve */
     float band = rnd((wide ? 170 : 130) * sc), yb = rnd(y + h - band - 14);
-    int soon = board_have && b->has_soon, wet = soon || (board_have && b->has_rain && b->rain_wet);
+    int soon = board_have && b->has_soon && board_age() <= BOARD_FRESH_S;   /* the next 2 h of an old reply have passed */
+    int wet = soon || (board_have && b->has_rain && b->rain_wet);
     icon(IC_S_DROP, x + 42, yb + (float)line_h(F_BODY) / 2, wet ? BLUE : board_have && b->has_rain ? GREY : DIM);
     float ww = 0, xw = x + w - 32;
     if (feed_warn(warn, sizeof warn, &b->wx_feed)) {         /* the weather is stale or none: why, at the row's right */

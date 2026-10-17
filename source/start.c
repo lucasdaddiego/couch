@@ -171,7 +171,6 @@ float start_k(int which)
     case SA_LEFT: return part(t, 0.25, 0.5);
     case SA_RIGHT: return part(t, 0.32, 0.5);
     case SA_BOTTOM: return part(t, 0.40, 0.5);
-    case SA_CLOCK: return (float)t;                        /* the clock's flips start at 0.3 s (page.c) */
     default: return 1;
     }
 }

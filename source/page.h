@@ -72,10 +72,9 @@ int ambient_input(void);
 void ambient_tick(void);
 int ambient_aurora(void);            /* 1: the mode shows the SPUs' picture (the sky or the aurora), not a dimmed page */
 int ambient_day(void);               /* 0.3.2: 1 while the sun is up (the sky), 0 at night (the aurora) */
-int board_wx_icon(float cx, float cy, float box);   /* board_page.c: the weather icon of now; 0 when none */
 void board_ambient_wx(float x, float y, float w, float h, u32 c1, u32 c2);   /* board_page.c: the waiting screen's weather card */
-int board_ambient_hours(float x, float y, float w, float h, int local_hour, u32 c1, u32 c2);   /* board_page.c: its hourly card */
-int board_hours_left(int local_hour);   /* board_page.c: the hours from local_hour on */
+int board_ambient_hours(float x, float y, float w, float h, u32 c1, u32 c2);   /* board_page.c: its hourly card */
+int board_hours_left(int *now_hour);   /* board_page.c: the hours from now on, and now's hour in the reply's zone */
 
 /* Night mode (0.5.0): night.txt in the app folder, "off" or "HH-HH"
  * (parse.h's night_parse), read at start and written by the Info page.

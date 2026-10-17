@@ -207,8 +207,6 @@ static void build_row(int i, int r)
     }
 }
 
-int stext_ready(void) { return state == 2; }
-
 int stext_tick(void)
 {
     if (state == 2 || state < 0) return state == 2;

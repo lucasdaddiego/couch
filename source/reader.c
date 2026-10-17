@@ -35,7 +35,6 @@
 #define REP_EVERY 0.11               /* then every 110 ms */
 #define HOLD_PX_S 900.0              /* a held UP or DOWN in an article: 900 px a second */
 #define LOG_READER 60                /* reader lines in couch.txt per start */
-#define PI_F 3.14159265f
 
 static float rnd(float x) { return floorf(x + 0.5f); }
 
@@ -68,8 +67,9 @@ static float a_view = 1, a_total = 1, a_step = 50;   /* the article's band, cont
 /* the article's rows: the title's lines, the meta row, the state line, the rule, the paragraphs' lines, the end */
 enum { R_TITLE, R_META, R_STATE, R_RULE, R_LINE, R_END };
 #define AROWS 900
+#define TITLE_LINES 6                /* the title's lines, at most: the last ends in "..." when it goes on */
 static struct {
-    short kind, para;
+    short kind, para;                /* para: the paragraph of an R_LINE; 1 for a cut title's last R_TITLE */
     int off, len;                    /* a line's bytes: of A.title (R_TITLE) or of A.text */
     float y;
 } row[AROWS];
@@ -623,9 +623,10 @@ static void make_rows(float w)
     float y = 0, step = body_step();
     nrows = 0;
     a_col = w;
-    int k = wrap_lines(A.title, (int)strlen(A.title), w, measure, &f, off, len, 6);
-    for (int i = 0; i < k && nrows < AROWS; i++, nrows++) {
+    int k = wrap_lines(A.title, (int)strlen(A.title), w, measure, &f, off, len, TITLE_LINES + 1);
+    for (int i = 0; i < k && i < TITLE_LINES && nrows < AROWS; i++, nrows++) {
         row[nrows].kind = R_TITLE, row[nrows].off = off[i], row[nrows].len = len[i], row[nrows].y = y;
+        row[nrows].para = (short)(i == TITLE_LINES - 1 && k > TITLE_LINES);   /* 0.5.0's review: a cut title said so */
         y += title_step();
     }
     y += (float)(line_h(F_TITLE) - wrap_step(F_TITLE)) + 18;
@@ -745,7 +746,10 @@ static void article_body(void)
         if (y > L.bb + 4) break;
         if (y + 70 < L.bt) continue;
         switch (row[i].kind) {
-        case R_TITLE: stext(L.col_x, y, F_TITLE, WHITE, A.title + row[i].off, row[i].len); break;
+        case R_TITLE:
+            if (row[i].para) stext_fit(L.col_x, y, F_TITLE, WHITE, L.col_w, A.title + row[i].off);   /* the rest, cut with "..." */
+            else stext(L.col_x, y, F_TITLE, WHITE, A.title + row[i].off, row[i].len);
+            break;
         case R_META: {
             char cat[20];
             snprintf(cat, sizeof cat, "%s", A.category);
