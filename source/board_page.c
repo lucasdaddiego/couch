@@ -252,6 +252,7 @@ static void wx_icon_m(int wi, float cx, float cy, float angle, float scale)
 }
 
 static void hero_icon(int k, int day, float cx, float cy, float box);
+static int days_gone(void);
 
 /* The waiting screen's weather card (0.3.2) in the box x, y, w, h: the
  * hero's moving icon (120 px), the temperature in D_M, then a column with
@@ -264,8 +265,9 @@ void board_ambient_wx(float x, float y, float w, float h, u32 c1, u32 c2)
     int k = b->has_fx ? wmo_kind(b->fx_code) : WK_NONE;
     temp_digits(t, sizeof t, b->temp);
     hl[0] = rain[0] = 0;
-    if (b->n_day > 0 && !strcmp(b->day[0].label, "Today")) {
-        const board_day *d = &b->day[0];
+    int gone = days_gone();
+    if (gone < b->n_day && !strcmp(b->day[0].label, "Today")) {   /* today's line: an old reply's later one */
+        const board_day *d = &b->day[gone];
         if (!miss(d->max) && !miss(d->min)) snprintf(hl, sizeof hl, "H %s   L %s", d->max, d->min);
         if (!miss(d->rain)) snprintf(rain, sizeof rain, "Rain %s", d->rain);
     }
@@ -287,23 +289,47 @@ void board_ambient_wx(float x, float y, float w, float h, u32 c1, u32 c2)
 /* Hours since 1970 of a time t (Unix seconds plus an offset). */
 static long hour_of(long t) { return t >= 0 ? t / 3600 : (t - 3599) / 3600; }
 
+/* The hours since 1970 in the reply's zone of the reply's now (*at) and
+ * of now (*now): now is the Worker's clock moved on by the reply's age (the
+ * console's clock for a reply with no now). */
+static void reply_hours(long *at, long *now)
+{
+    const board_data *b = &board_cur;
+    int off = board_have && b->has_offset ? b->offset : 0;
+    long age = board_age(), t = board_have && b->now > 0 ? b->now : clock_utc() - age;
+    *at = hour_of(t + off);
+    *now = hour_of(t + age + off);
+}
+
+/* The local days from the reply's date to now's in the reply's zone, by
+ * reply_hours (0.5.1's review: a reply of 23:50 kept its "Today" and its
+ * days the next morning): the day lines and days_fx skip that many. 0 for
+ * a reply of today, BOARD_DAYS at most. */
+static int days_gone(void)
+{
+    long at, now;
+    reply_hours(&at, &now);
+    long d = (now >= 0 ? now / 24 : (now - 23) / 24) - (at >= 0 ? at / 24 : (at - 23) / 24);
+    return d <= 0 ? 0 : d >= BOARD_DAYS ? BOARD_DAYS : (int)d;
+}
+
 /* The hours of wx_hours from now on, by the reply's date and in its zone
  * (0.5.0's review: by the hour alone, a board_last.txt of yesterday showed
  * its hours as the next ones, and the console's zone was compared with the
  * Worker's). The list starts at the first whole hour after the reply's now
- * (the hour of hours_start nearest to it); now is the Worker's clock moved
- * on by the reply's age (the console's clock for a reply with no now). All
+ * (the hour of hours_start nearest to it); now as reply_hours gives it. All
  * of them for a list that starts in the next 3 hours, none for one whose
  * hours have all gone. *now_hour (when not NULL): now's hour in the reply's
  * zone, 0 to 23. The hourly card needs 2. */
 int board_hours_left(int *now_hour)
 {
     const board_data *b = &board_cur;
-    int n = board_have ? b->n_hours : 0, off = board_have && b->has_offset ? b->offset : 0;
-    long h = hour_of((board_have && b->now > 0 ? b->now + board_age() : clock_utc()) + off);
+    int n = board_have ? b->n_hours : 0;
+    long at, h;
+    reply_hours(&at, &h);
     if (now_hour) *now_hour = (int)(((h % 24) + 24) % 24);
     if (!n || b->hours_start < 0) return 0;
-    long first = hour_of((b->now > 0 ? b->now : clock_utc() - board_age()) + off) + 1;
+    long first = at + 1;
     int d = (int)(((b->hours_start - first) % 24 + 24) % 24);
     first += d < 12 ? d : d - 24;                            /* hours_start's hour nearest to the reply's next one */
     long skip = h - first;
@@ -486,37 +512,40 @@ static int feed_warn(char *buf, int n, const board_feed *f)
     return 0;
 }
 
-/* The 12 h curve: the line and the fill under it, a BLUE
- * column of each hour's rain chance, the hours under the points, the
- * temperature over every second (narrow: third) point. */
+/* The 12 h curve from now's hour (board_hours_left: an old reply's past
+ * hours left out, 0.5.1's review), each hour in its place from the left:
+ * the line and the fill under it, a BLUE column of each hour's rain
+ * chance, the hours under the points, the temperature over every second
+ * (narrow: third) point. */
 static void curve(float x0, float x1, float ytop, float ybase, const board_data *b)
 {
     float pts[2 * HOURS_MAX], cx[HOURS_MAX];
-    int n = board_have ? b->n_hours : 0, lo = 999, hi = -999, np = 0;
+    int n = board_hours_left(NULL), skip = b->n_hours - n, lo = 999, hi = -999, np = 0;
     for (int i = 0; i < HOURS_MAX; i++) cx[i] = rnd(x0 + (x1 - x0) * (float)i / (HOURS_MAX - 1));
     rect(x0 - 16, ybase, x1 - x0 + 32, 1, 0xffffff26);
-    if (n < 2) {                                             /* no wx_hours: the axis and "-" */
+    if (n < 2) {                                             /* no wx_hours, or its hours have gone: the axis and "-" */
         text_c((x0 + x1) / 2, rnd((ytop + ybase) / 2 - 14), F_SMALL, DIM, "12 h: -");
         return;
     }
-    for (int i = 0; i < n; i++)
+    for (int i = skip; i < b->n_hours; i++)
         if (b->hour_temp[i] != TEMP_NONE) {
             if (b->hour_temp[i] < lo) lo = b->hour_temp[i];
             if (b->hour_temp[i] > hi) hi = b->hour_temp[i];
         }
     float span = (float)(hi - lo + 2), top = ytop + 34;     /* room for the labels over the points */
-    for (int i = 0; i < n; i++) {
+    for (int j = 0; j < n; j++) {
+        int i = j + skip;
         if (b->hour_pop[i] > 0) {
             float h = (float)b->hour_pop[i] / 100.0f * (wide ? 40 : 30) * sc;
-            rect(cx[i] - 10, rnd(ybase - h), 20, rnd(h), (BLUE & ~0xffu) | 0x90);
+            rect(cx[j] - 10, rnd(ybase - h), 20, rnd(h), (BLUE & ~0xffu) | 0x90);
         }
-        text_c(cx[i], ybase + 4, F_SMALL | TNUM, DIM, "%02d", (b->hours_start + i) % 24);
+        text_c(cx[j], ybase + 4, F_SMALL | TNUM, DIM, "%02d", (b->hours_start + i) % 24);
         if (b->hour_temp[i] == TEMP_NONE) continue;
         float y = ybase - 12 - (ybase - 12 - top) * (float)(b->hour_temp[i] - lo + 1) / span;
-        pts[2 * np] = cx[i];
+        pts[2 * np] = cx[j];
         pts[2 * np + 1] = y;
         np++;
-        if (i % (wide ? 2 : 3) == 0) text_c(cx[i], rnd(y - 31), F_SMALL | TNUM, WHITE, "%d%s", b->hour_temp[i], deg);
+        if (j % (wide ? 2 : 3) == 0) text_c(cx[j], rnd(y - 31), F_SMALL | TNUM, WHITE, "%d%s", b->hour_temp[i], deg);
     }
     if (np < 2) return;
     area(pts, np, ybase, 0xffd36b40, 0xffd36b00);
@@ -561,8 +590,8 @@ static void hero(float x, float y, float w, float h, const board_data *b)
         text_fit(tx2, rnd(y + l1 + 32), F_BODY, GREY, tw, "Humidity %s", has ? b->humidity : "-");
     }
     /* the min/max bar: today's min, 8 steps from TEMP_COLD to TEMP_HOT, the now marker, today's max */
-    int vmin, vmax, vnow;
-    const char *smin = b->n_day ? b->day[0].min : "-", *smax = b->n_day ? b->day[0].max : "-";
+    int vmin, vmax, vnow, gone = days_gone();
+    const char *smin = gone < b->n_day ? b->day[gone].min : "-", *smax = gone < b->n_day ? b->day[gone].max : "-";
     float by = rnd(y + (wide ? 196 * sc : 150)), bx = wide ? tx2 : tx;
     snprintf(lo, sizeof lo, "%s", smin);
     snprintf(hi, sizeof hi, "%s", smax);
@@ -616,13 +645,14 @@ static u32 aqi_colour(int v) { return v <= 50 ? GREEN : v <= 100 ? YELLOW : v <=
 static u32 uv_colour(int v) { return v <= 2 ? GREEN : v <= 5 ? YELLOW : v <= 7 ? 0xff9f40ff : v <= 10 ? RED : 0xb57bffff; }
 
 /* The air's two chips (0.5.0), "AQI 42" and "UV 4", right-aligned at xr
- * in the tint of their level, a missing value's chip left out; their left
- * x (xr for none). */
+ * in the tint of their level, a missing value's chip left out, none once
+ * the reply is older than BOARD_FRESH_S (0.5.1's review: an old reply's
+ * air is not now's); their left x (xr for none). */
 static float air_chips(float xr, float y, const board_data *b)
 {
     char s[16];
     float x = xr;
-    for (int i = 1; board_have && b->has_air && i >= 0; i--) {   /* the UV chip on the right */
+    for (int i = 1; board_have && b->has_air && board_age() <= BOARD_FRESH_S && i >= 0; i--) {   /* the UV chip on the right */
         int v = i ? b->air_uv : b->air_aqi;
         if (v < 0) continue;
         u32 c = i ? uv_colour(v) : aqi_colour(v);
@@ -715,15 +745,19 @@ static void sky_tile(float x, float y, float w, float h, const board_data *b)
 
 /* ---- the three days ------------------------------------------------------------------ */
 
-/* The three days: the day, the M icon at 1.25 times (80 px) that bobs 4 px
- * on 5 s, sways 3 px on 7 s and tilts 2.5 deg on 6 s, each card a third of
- * a period apart, by fractions of a pixel (icon_rot, bilinear); max and
- * min; the rain chip. Before the first reply: the skeleton. */
+/* The three days from today (days_gone: an old reply's past days
+ * left out, its last cards "-"): the day, the M icon at 1.25 times (80 px)
+ * that bobs 4 px on 5 s, sways 3 px on 7 s and tilts 2.5 deg on 6 s, each
+ * card a third of a period apart, by fractions of a pixel (icon_rot,
+ * bilinear); max and min; the rain chip. Before the first reply: the
+ * skeleton. */
 static void days(float x, float y, float w, float h, const board_data *b)
 {
     float cw = (w - 2 * G) / 3;
+    int gone = days_gone();
     for (int i = 0; i < 3; i++) {
-        const board_day *d = board_have && i < b->n_day ? &b->day[i] : NULL;
+        int k = i + gone;                                    /* the day line and days_fx entry */
+        const board_day *d = board_have && k < b->n_day ? &b->day[k] : NULL;
         float cx = rnd(x + (float)i * (cw + G));
         tile(cx, y, rnd(cw), h);
         if (!board_have) {
@@ -732,11 +766,11 @@ static void days(float x, float y, float w, float h, const board_data *b)
             continue;
         }
         text_fit(cx + 24, y + 18, wide ? F_MED : F_BODY, d ? WHITE : DIM, cw - 130, "%s", d ? d->label : "-");
-        int k = d && i < b->n_day_code ? wmo_kind(b->day_code[i]) : WK_NONE;
+        int kind = d && k < b->n_day_code ? wmo_kind(b->day_code[k]) : WK_NONE;
         float ph = (float)i / 3, still = (float)fx_reduced();
         float bob = still ? 0 : 4 * sinf(2 * PI_F * ((float)T / 5 + ph)), sway = still ? 0 : 3 * sinf(2 * PI_F * ((float)T / 7 + ph));
         float tilt = still ? 0 : 2.5f * PI_F / 180 * sinf(2 * PI_F * ((float)T / 6 + ph));
-        wx_icon_m(wx_icon(k, 1), cx + cw - 66 + sway, y + h / 2 - 2 + bob, tilt, wide ? 1.25f : 1.1f);
+        wx_icon_m(wx_icon(kind, 1), cx + cw - 66 + sway, y + h / 2 - 2 + bob, tilt, wide ? 1.25f : 1.1f);
         float yy = rnd(y + h - (wide ? 76 : 66)), xx;
         xx = text(cx + 24, yy, F_MED | TNUM, d && !miss(d->max) ? WHITE : DIM, "%s", d ? d->max : "-");
         text(xx + 8, yy + (float)base_dy(F_MED, F_BODY), F_BODY | TNUM, GREY, "/ %s", d ? d->min : "-");
@@ -822,9 +856,9 @@ static void hero_rate(float x, float y, float w, float h, const board_data *b)
     aa_disc(pts[2 * np - 2], pts[2 * np - 1], 5, WHITE);
 }
 
-/* A small tile's words: the label (and in narrow form its first word),
- * the foot: "buy 1.485,00, Fri 15:00" for a rate, the date for an extra
- * ("TNA, 14:47" when the label ends in "(TNA)"). */
+/* A small tile's words: the label, the foot: "buy 1.485,00, 16 Oct" for a
+ * rate, the date for an extra ("TNA, 14:47" when the label ends in
+ * "(TNA)"). */
 typedef struct {
     const char *label, *val, *when, *buy;
     const board_chg *chg;
@@ -856,19 +890,18 @@ static void small_tile(float x, float y, float w, float h, const item *it)
         if (!it->extra && !it->none) snprintf(foot, sizeof foot, "%s", it->when);
         if (cl >= x + w - 16 && text_w(F_SMALL, lab) + text_w(F_SMALL, foot) + 14 > w - 44) {   /* no room: a shorter foot */
             char *cm = strstr(foot, ", "), *sp = strchr(foot, ' ');
-            if (cm) memmove(foot, cm + 2, strlen(cm + 2) + 1);                /* "TNA, 14:47" -> "14:47" */
+            if (!it->extra) foot[0] = 0;                                      /* a rate's date whole or none ("16 Oct", not "16") */
+            else if (cm) memmove(foot, cm + 2, strlen(cm + 2) + 1);           /* "TNA, 14:47" -> "14:47" */
             else if (sp) *sp = 0;                                             /* "Aug 2026" -> "Aug" */
         }
         float fw = cl < x + w - 16 ? 0 : (float)text_w(F_SMALL, foot), lw = (cl < x + w - 16 ? cl - 10 : x + w - 22 - fw - 14) - (x + 22);
         text_fit(x + 22, y + 14, F_SMALL, GREY, lw, "%s", lab);
         if (fw > 0) text_fit(rnd(x + w - 22 - fw), y + 14, F_SMALL, fc, fw, "%s", foot);
     } else {
-        /* narrow (no room for a foot row): the label's first word and the time or the date on the label row */
-        const char *sp = strchr(lab, ' ');
-        int fw = sp ? (int)(sp - lab) : (int)strlen(lab);
+        /* narrow (no room for a foot row): the label left of the chip, cut to its room, and the whole date
+         * when it fits after it (0.5.1's review: the label's first word and the date's last, "1000 Oct") */
         const char *t = it->none ? "" : it->when;
-        if (!it->extra && (sp = strrchr(it->when, ' '))) t = sp + 1;   /* a rate: "Fri 15:00" -> "15:00" */
-        float room = cl - x - 32, lx = text(x + 22, y + 10, F_SMALL, GREY, "%.*s", fw, lab);
+        float room = cl - x - 32, lx = text_fit(x + 22, y + 10, F_SMALL, GREY, room, "%s", lab);
         if (t[0] && lx + 10 + text_w(F_SMALL, t) <= x + 22 + room) text(lx + 10, y + 10, F_SMALL, fc, "%s", t);
     }
     const char *v = it->none || miss(it->val) ? "-" : shown(it->label, it->val, cnt, sizeof cnt);

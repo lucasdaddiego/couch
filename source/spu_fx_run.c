@@ -44,7 +44,7 @@
 #define RAIN_CHECK_EVERY 600         /* the rain's word sum: every 600th job */
 #define WINDOW_US 2000000            /* the frame budget's window */
 #define CALM_US 60000000             /* a step back after 60 s with no slow period */
-#define SLOW_PERIOD_US 20000         /* a display period over 20 ms */
+#define SLOW_PERIOD_US 25000         /* a missed vsync at 60 or 50 Hz */
 #define PICS 5                       /* threads 0 to 4: the pictures, a band each */
 #define RAIN_T 5                     /* thread 5: the rain */
 #define SEED 0x0c0c4c11u             /* the look of the clouds and the rain: fixed, so the particles live on */
@@ -740,7 +740,7 @@ static void entries_check(void)
     }
 }
 
-/* The frame budget: each 2 s, more than 3 periods over 20 ms
+/* The frame budget: each 2 s, more than 3 periods over 25 ms
  * or a late picture is a step down; 60 s with none, a step back up. Since
  * the round of 2026-10-14 the sky starts at 60 pictures a second. */
 static const char *const step_words[7] = {"60 pictures a second", "30 pictures a second", "20 pictures a second", "15 pictures a second",
@@ -772,7 +772,7 @@ static void budget(void)
 
 void fx_tick(int mode)
 {
-    static long minute = -1;
+    static long sec = -1;
     static int fetches = -1;
     long utc = clock_utc();
     s64 t = now();
@@ -783,8 +783,8 @@ void fx_tick(int mode)
         couch_log("%s", log_later);
         log_later = NULL;
     }
-    if (utc / 60 != minute || board_fetches != fetches) {   /* the scene each minute and at each reply */
-        minute = utc / 60;
+    if (utc != sec || board_fetches != fetches) {   /* the scene each second (0.5.1's review: each minute, the sun's disc */
+        sec = utc;                                  /* jumped about 3 px; sun_pos takes about 10 us) and at each reply */
         fetches = board_fetches;
         scene(utc);
     }

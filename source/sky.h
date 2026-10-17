@@ -17,8 +17,9 @@
 double sky_time(void);
 
 /* Each frame, after fx_tick: the moon's sphere (16 rows a frame, a new
- * picture when the age moved by 0.25 day), the moon's place each minute,
- * the lightning's schedule (a storm code now: a bolt every 6 to 20 s). */
+ * picture when the age moved by 0.25 day or the place crossed the
+ * equator), the moon's place each second and at each reply, the
+ * lightning's schedule (a storm code now: a bolt every 6 to 20 s). */
 void sky_tick(void);
 
 /* Between fx_draw_gradient and fx_draw_clouds, over the whole screen: the

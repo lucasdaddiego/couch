@@ -94,9 +94,10 @@ long board_net_down_utc;
 static board_data tmp;               /* the parse of the last reply, good or not */
 static s64 cur_at;                   /* the system time of the reply in board_cur */
 static int logged;
-/* The words of the stale status line: a redirect without its Location, so
- * that the line keeps the data's time at 1600 wide (the Info screen and
- * couch.txt keep the Location). */
+/* The words of the stale status line: a redirect without its Location, a
+ * short line (the Info screen and couch.txt keep the Location). Since
+ * 0.5.1 the data's time comes first in that line: a long reason cut it at
+ * 1600 wide. */
 static char stale_words[200];
 
 void board_init(void)
@@ -495,9 +496,26 @@ void board_next_words(char *buf, int n)
 
 /* ---- the page -------------------------------------------------------------------- */
 
+/* The time of the data in board_cur, "23:50", with its date before it
+ * ("16 Oct 23:50") when that is not today's (0.5.1's review: an old reply's
+ * time read as today's). */
+static void data_words(char *buf, int n)
+{
+    int off;
+    civil_time a, c;
+    char t[24];
+    long at = clock_utc() - board_age();
+    clock_offset(&off);
+    civil_from_unix(at + off, &a);
+    civil_from_unix(clock_utc() + off, &c);
+    clock_words(t, sizeof t, at, 0);
+    if (a.year == c.year && a.month == c.month && a.day == c.day) snprintf(buf, (size_t)n, "%s", t);
+    else snprintf(buf, (size_t)n, "%d %.3s %s", a.day, month_name[a.month - 1], t);
+}
+
 u32 board_status_words(char *buf, int n)
 {
-    char t[24];
+    char t[40];
     if (!board_url[0]) {                                     /* since 0.4.0: no default URL */
         snprintf(buf, (size_t)n, "No Board URL yet: the Board page has the steps.");
         return YELLOW;
@@ -518,7 +536,7 @@ u32 board_status_words(char *buf, int n)
     }
     if (!board_fetches) {
         if (board_have) {                                    /* since 0.4.1: board_last.txt's reply */
-            clock_words(t, sizeof t, clock_utc() - board_age(), 0);
+            data_words(t, sizeof t);
             snprintf(buf, (size_t)n, "Fetching the Board ... It shows the data of %s.", t);
         } else snprintf(buf, (size_t)n, "Fetching the Board ...");
         return GREY;
@@ -528,15 +546,15 @@ u32 board_status_words(char *buf, int n)
         return YELLOW;
     }
     if (!board_last_ok && board_have) {
-        clock_words(t, sizeof t, clock_utc() - board_age(), 0);
-        snprintf(buf, (size_t)n, "The last fetch failed: %s. The Board shows the data of %s.", stale_words, t);
+        data_words(t, sizeof t);
+        snprintf(buf, (size_t)n, "The Board shows the data of %s. The last fetch failed: %s.", t, stale_words);
         return YELLOW;
     }
     if (!board_last_ok) {
         snprintf(buf, (size_t)n, "No Board data yet: %s.", board_last_words);
         return YELLOW;
     }
-    clock_words(t, sizeof t, clock_utc() - board_age(), 0);
+    data_words(t, sizeof t);
     snprintf(buf, (size_t)n, "Board updated at %s.", t);
     return GREY;
 }

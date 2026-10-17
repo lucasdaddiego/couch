@@ -212,6 +212,8 @@ extras_line() {
     (*) print -r -- "$1";;
     esac
 }
+body_south() { each south_line; }   # Berlin's latitude mirrored south of the equator (no real place)
+south_line() { case $1 in geo=*) print -r -- "geo=-52.52|13.4";; *) print -r -- "$1";; esac; }
 body_rain() { each rain_line; }   # a rainy day: WMO 61, 88 % cover, 1.2 mm, wind 20 km/h from the south-east
 rain_line() { case $1 in wx_fx=*) print -r -- "wx_fx=61|88|1.2|135|20|30";; *) print -r -- "$1";; esac; }
 body_snow() { each snow_line; }   # moderate snow, 90 % cover, wind 10 km/h from the west
@@ -492,6 +494,9 @@ board_storm|all)   # a thunderstorm (WMO 95): heavy slanted rain; frame 360 is t
     BODY=storm scn board_storm "120:SNAP=board_storm_rain 360:SNAP=board_storm 361:EXIT" ;|
 board_snow|all)    # snow by day at -1 deg: the flakes, the hero's snowflakes, the minus sign
     BODY=snowday scn board_snow "120:SNAP=board_snow 121:EXIT" ;|
+board_south|all)   # 0.5.1's review: a place south of the equator: the moon's sphere lit from the other side (the north's left is
+                   # the south's right), also when its first picture, made before the first reply, had the north's view
+    BODY=south scn board_south "120:SNAP=board_south 121:EXIT" ;|
 board_old|all)     # a Worker of 0.2.0's time (no geo, wx_fx, wx_hours, days_fx, chips, spark): each value's "-" form,
                    # the sky from wx_now's day or night
     BODY=old scn board_old "120:SNAP=board_old 121:EXIT" ;|
@@ -524,6 +529,10 @@ last|all)          # 0.4.1: board_last.txt of 30 min ago and a 4 s answer: the f
     print -r -- "  couch.txt: $(command grep -h '^board_last' $P/build/sbx/last_old$SFX/$DIR/couch.txt)"
     LAST=1800 LASTURL=http://other.example.com/board scn last_url "30:EXIT" PV_BOARD_FAIL=slow
     print -r -- "  couch.txt: $(command grep -h '^board_last' $P/build/sbx/last_url$SFX/$DIR/couch.txt)" ;|
+last_day|all)      # 0.5.1's review: board_last.txt of 10 h ago (the Worker test's reply, 17:20 on Friday at the place) and every
+                   # fetch refused: at 03:20 on Saturday the days start at Sat, the hero's bar is Sat's, the 12 h curve starts at
+                   # 03, no air chips, the bar names the data's date; the waiting screen: Sat's high and low, the hours from 03
+    LAST=36000 scn last_day "120:SNAP=last_day 3720:SNAP=last_day_ambient 3721:EXIT" PV_BOARD_FAIL=refused PV_MAXFRAMES=4000 ;|
 skeleton|all)      # before the first reply (a 4 s answer): the skeleton's bars on the Board and on the News page
     scn skeleton "120:SNAP=skeleton 122:R1 150:SNAP=skeleton_news 151:EXIT" PV_BOARD_FAIL=slow ;|
 news_rain|all)     # the News page on the rainy day of the mockups (the sources' pills, the categories, the ages): since 0.3.1 the

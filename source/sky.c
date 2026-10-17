@@ -150,11 +150,14 @@ static void moon_tick(long utc)
     if (!moon_tex) return;
     double age = moon_age(utc);
     if (moon_row < 0) {
+        int south = board_have && board_cur.has_geo && board_cur.lat < 0;   /* the north's view when there is no geo */
         double d = fabs(age - moon_done);
         if (d > MOON_SYNODIC / 2) d = MOON_SYNODIC - d;
-        if (moon_have && d < MOON_STEP) return;
+        /* a new picture also when the place's side of the equator changed (0.5.1's review: the first picture,
+         * made before the first reply in the north's view, stayed mirrored for up to 6 h in the south) */
+        if (moon_have && d < MOON_STEP && south == moon_south) return;
         double th = 2 * 3.14159265358979 * age / MOON_SYNODIC;
-        moon_south = board_have && board_cur.has_geo && board_cur.lat < 0;      /* the north's view when there is no geo */
+        moon_south = south;
         moon_lx = (float)((moon_south ? -1 : 1) * sin(th));  /* waxing: lit on the right in the north, on the left in the south */
         moon_lz = (float)-cos(th);
         moon_doing = age;
@@ -174,7 +177,8 @@ static void moon_tick(long utc)
 
 /* ---- the tick ------------------------------------------------------------------------ */
 
-static long minute = -1;
+static long moon_sec = -1;
+static int moon_fetches = -1;
 static double moon_elev = -90, moon_azim;
 static int storm;
 static double bolt_next = 6;         /* the bolts' times from the start: 6 s, then gaps of 6 to 20 s */
@@ -226,8 +230,9 @@ void sky_tick(void)
     double t = sky_time();
     if (fx_state == FXS_NONE) return;
     moon_tick(utc);
-    if (utc / 60 != minute) {
-        minute = utc / 60;
+    if (utc != moon_sec || board_fetches != moon_fetches) {   /* the moon's place each second and at each reply, as the sun's (scene()) */
+        moon_sec = utc;                                       /* (0.5.1's review: once a minute, its disc jumped about 3 px) */
+        moon_fetches = board_fetches;
         if (board_have && board_cur.has_geo) moon_pos(utc, board_cur.lat, board_cur.lon, &moon_elev, &moon_azim);
         else moon_elev = -90;
     }

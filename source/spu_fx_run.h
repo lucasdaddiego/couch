@@ -41,7 +41,7 @@ extern int fx_state;
 extern char fx_why[120];             /* why RSX only, "" while the SPUs run */
 
 /* The scene the effects show, from the last good reply and the clock
- * (fx_tick recomputes it each minute and at each new reply). Colours are
+ * (fx_tick recomputes it each second and at each new reply). Colours are
  * 0xRRGGBB. The Board page and sky.c read it (the glass tint, the sun, the stars). */
 typedef struct {
     double elev, azim;               /* the sun, degrees (no geo: -20, 0) */
