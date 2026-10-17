@@ -61,9 +61,8 @@ typedef struct {
 
 /* The last whole reply that the thread saved (board_last.txt, same URL, at
  * most 24 h old) as board_cur, at start before the thread: the first frame
- * has the Board's data. board_last_age: its age in seconds then, -1 none. */
+ * has the Board's data. */
 void board_load_last(void);
-extern long board_last_age;
 int board_start(void);               /* the thread: 0, or sysThreadCreate's rc */
 int board_running(void);
 /* At exit: board_on 0, the open socket shut down (http_wake), then the

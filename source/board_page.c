@@ -197,13 +197,13 @@ static void halo(float x, float y, float w, float h, const char *label)
 /* ---- small pieces -------------------------------------------------------------------- */
 
 /* The change chip right-aligned at xr: caret and the change in
- * UP or DOWN, a grey dash for flat, nothing for none. Its left x. */
+ * UP or DOWN, nothing for flat or none. Its left x. */
 static float chip(float xr, float y, const board_chg *c, int extra)
 {
     if (!c || c->dir == CHG_NONE || c->dir == CHG_FLAT) return xr;   /* 0.3.2: a chip only for a move (no grey minus) */
-    u32 col = c->dir == CHG_UP ? UP : c->dir == CHG_DOWN ? DOWN : GREY;
-    int ic = c->dir == CHG_UP ? IC_S_CARET_UP : c->dir == CHG_DOWN ? IC_S_CARET_DOWN : IC_S_MINUS;
-    const char *s = c->dir == CHG_FLAT ? "" : extra ? c->abs : c->pct;
+    u32 col = c->dir == CHG_UP ? UP : DOWN;
+    int ic = c->dir == CHG_UP ? IC_S_CARET_UP : IC_S_CARET_DOWN;
+    const char *s = extra ? c->abs : c->pct;
     if (miss(s)) s = "";
     float w = 34 + (s[0] ? (float)text_w(F_SMALL, s) + 10 : 0), x = rnd(xr - w);
     round_rect(x, y, w, 30, 15, (col & ~0xffu) | 0x26);
@@ -422,24 +422,36 @@ static void dial(float cx, float cy, float R, const board_data *b)
     if (board_have && b->has_fx && b->fx_speed >= 0) snprintf(sp, sizeof sp, "%d", b->fx_speed);
     else if (board_have && b->has_wx && temp_num(b->wind, &v)) snprintf(sp, sizeof sp, "%d", v);   /* wx_now's "10 km/h" */
     else snprintf(sp, sizeof sp, "-");
+    static float tick_s[24], tick_c[24], nesw_s[4], nesw_c[4];   /* the ticks' and the letters' sines and cosines, made once */
+    static int made;
     float tk[20 * 4];
     int nt = 0;
+    if (!made) {
+        for (int k = 0; k < 24; k++) {
+            float a = (float)k * PI_F / 12;
+            tick_s[k] = sinf(a);
+            tick_c[k] = cosf(a);
+        }
+        for (int k = 0; k < 4; k++) {
+            float a = (float)k * PI_F / 2;
+            nesw_s[k] = sinf(a);
+            nesw_c[k] = cosf(a);
+        }
+        made = 1;
+    }
     aa_ring(cx, cy, R, 3, 0xffffff40);
     for (int k = 0; k < 24; k++) {                           /* the ticks inside the ring, to its inner edge (no overlap); */
         if (k % 6 == 0) continue;                            /* N, E, S and W have their letters (stage 9's 2 px there hid under the ring) */
-        float a = (float)k * PI_F / 12, r0 = R - 6, r1 = R - 1.5f;
-        tk[4 * nt] = cx + sinf(a) * r0;
-        tk[4 * nt + 1] = cy - cosf(a) * r0;
-        tk[4 * nt + 2] = cx + sinf(a) * r1;
-        tk[4 * nt + 3] = cy - cosf(a) * r1;
+        float r0 = R - 6, r1 = R - 1.5f;
+        tk[4 * nt] = cx + tick_s[k] * r0;
+        tk[4 * nt + 1] = cy - tick_c[k] * r0;
+        tk[4 * nt + 2] = cx + tick_s[k] * r1;
+        tk[4 * nt + 3] = cy - tick_c[k] * r1;
         nt++;
     }
     aa_lines(tk, nt, 2, 0xffffff60);
     const char *nesw = wide ? "NESW" : "N";
-    for (int k = 0; nesw[k]; k++) {
-        float a = (float)k * PI_F / 2;
-        text_c(rnd(cx + sinf(a) * (R - 18)), rnd(cy - cosf(a) * (R - 18) - 14), F_SMALL, DIM, "%c", nesw[k]);
-    }
+    for (int k = 0; nesw[k]; k++) text_c(rnd(cx + nesw_s[k] * (R - 18)), rnd(cy - nesw_c[k] * (R - 18) - 14), F_SMALL, DIM, "%c", nesw[k]);
     if (dir >= 0) {
         float wob = fx_reduced() ? 0 : 2 * sinf((float)T * 0.5f);
         float to = ((float)dir + 180 + wob) * PI_F / 180, L = R - 4;
@@ -550,7 +562,7 @@ static void hero(float x, float y, float w, float h, const board_data *b)
     }
     /* the min/max bar: today's min, 8 steps from TEMP_COLD to TEMP_HOT, the now marker, today's max */
     int vmin, vmax, vnow;
-    const char *smin = board_have && b->n_day ? b->day[0].min : "-", *smax = board_have && b->n_day ? b->day[0].max : "-";
+    const char *smin = b->n_day ? b->day[0].min : "-", *smax = b->n_day ? b->day[0].max : "-";
     float by = rnd(y + (wide ? 196 * sc : 150)), bx = wide ? tx2 : tx;
     snprintf(lo, sizeof lo, "%s", smin);
     snprintf(hi, sizeof hi, "%s", smax);
@@ -581,9 +593,9 @@ static void hero(float x, float y, float w, float h, const board_data *b)
     dial(dcx, dcy, R, b);
     /* the bottom band: the rain line (the next 2 h's words when the reply has them, 0.5.0), then the curve */
     float band = rnd((wide ? 170 : 130) * sc), yb = rnd(y + h - band - 14);
-    int soon = board_have && b->has_soon && board_age() <= BOARD_FRESH_S;   /* the next 2 h of an old reply have passed */
-    int wet = soon || (board_have && b->has_rain && b->rain_wet);
-    icon(IC_S_DROP, x + 42, yb + (float)line_h(F_BODY) / 2, wet ? BLUE : board_have && b->has_rain ? GREY : DIM);
+    int soon = b->has_soon && board_age() <= BOARD_FRESH_S;   /* the next 2 h of an old reply have passed */
+    int wet = soon || (b->has_rain && b->rain_wet);
+    icon(IC_S_DROP, x + 42, yb + (float)line_h(F_BODY) / 2, wet ? BLUE : b->has_rain ? GREY : DIM);
     float ww = 0, xw = x + w - 32;
     if (feed_warn(warn, sizeof warn, &b->wx_feed)) {         /* the weather is stale or none: why, at the row's right */
         ww = (float)text_w(F_SMALL, warn);
@@ -591,8 +603,7 @@ static void hero(float x, float y, float w, float h, const board_data *b)
         xw -= ww;
         text_fit(xw, yb + 3, F_SMALL, YELLOW, ww, "%s", warn);
     }
-    text_fit(x + 64, yb, F_BODY, wet ? BLUE : board_have && b->has_rain ? GREY : DIM, xw - 30 - (x + 64), "%s",
-             soon ? b->soon : board_have && b->has_rain ? b->rain : "Rain: -");
+    text_fit(x + 64, yb, F_BODY, wet ? BLUE : b->has_rain ? GREY : DIM, xw - 30 - (x + 64), "%s", soon ? b->soon : b->has_rain ? b->rain : "Rain: -");
     curve(x + 48, x + w - 48, yb + 34, rnd(yb + band - 34), b);
 }
 
@@ -643,7 +654,7 @@ static void sky_tile(float x, float y, float w, float h, const board_data *b)
     }
     float half = w / 2, ax0 = x + 50, ax1 = x + half - 50, aw = ax1 - ax0, ah = h - (wide ? 88 : 80);
     float acx = (ax0 + ax1) / 2, acy = rnd(y + h - 34);
-    int rise = board_have && b->has_sun ? hm_parse(b->sunrise) : -1, set = board_have && b->has_sun ? hm_parse(b->sunset) : -1;
+    int rise = b->has_sun ? hm_parse(b->sunrise) : -1, set = b->has_sun ? hm_parse(b->sunset) : -1;
     double frac = 0;
     int st = sun_arc(utc, off, rise, set, &frac, &to_next);
     age_words(a, sizeof a, to_next);
@@ -652,11 +663,20 @@ static void sky_tile(float x, float y, float w, float h, const board_data *b)
     else snprintf(line, sizeof line, "Sunset in -");
     float ax = air_chips(x + half - 24, y + (wide ? 14 : 10), b);   /* the air's chips at the half's top right */
     text_fit(x + 24, y + 12, wide ? F_BODY : F_SMALL, st < 0 ? DIM : WHITE, (ax < x + half - 24 ? ax - 16 : x + half - 16) - (x + 24), "%s", line);
+    static float arc_c[49], arc_s[49];                       /* the arc's cosines and sines, made once */
+    static int arc_made;
     float px[49], py[49];
+    if (!arc_made) {
+        for (int k = 0; k <= 48; k++) {
+            float an = PI_F * (float)k / 48;
+            arc_c[k] = cosf(an);
+            arc_s[k] = sinf(an);
+        }
+        arc_made = 1;
+    }
     for (int k = 0; k <= 48; k++) {
-        float an = PI_F * (float)k / 48;
-        px[k] = acx - cosf(an) * aw / 2;
-        py[k] = acy - sinf(an) * ah;
+        px[k] = acx - arc_c[k] * aw / 2;
+        py[k] = acy - arc_s[k] * ah;
     }
     rect(ax0 - 20, acy, aw + 40, 1, 0xffffff30);
     float ds[24 * 4], sp[2 * 50];
@@ -757,8 +777,8 @@ static void hero_rate(float x, float y, float w, float h, const board_data *b)
         skel_bar(x + 30, y + h - (wide ? 50 : 36), w - 60, 18);
         return;
     }
-    float cl = chip(x + w - 24, y + 20, board_have ? board_chg_find(b, 0, label) : NULL, 0);
-    const board_spark *sp = board_have ? board_spark_find(b, label) : NULL;
+    float cl = chip(x + w - 24, y + 20, board_chg_find(b, 0, label), 0);
+    const board_spark *sp = board_spark_find(b, label);
     int lo = 0, hi = 0, nv = sp ? spark_range(sp, &lo, &hi) : 0;
     float rr = cl < x + w - 24 ? cl - 16 : x + w - 24;
     if (stale) text_fit(x + 160, y + 23, F_SMALL, YELLOW, rr - x - 160, "%s", warn);
@@ -916,22 +936,27 @@ static void quotes(float x, float y, float w, float h, const board_data *b)
 static void ticker(float y, float h, const board_data *b)
 {
     const float sep = 56;
-    float ox, oy, wsum = 0, ws[BOARD_NEWS];
+    static float wsum, ws[BOARD_NEWS], pill;                 /* the widths, measured once per reply (board_gen) */
+    static int ws_gen = -1;
+    float ox, oy;
     screen_origin(&ox, &oy);
     ox += (float)page_dx;
     fx_glass(ox, y, 1920, h, 0, (glass_tint() & ~0xffu) | 0xa8);
     rect(ox, y, 1920, 1, GLASS_EDGE);
-    for (int i = 0; i < b->n_news; i++) {                    /* measured as text() draws it: its format buffer holds 320 bytes */
-        char t[320];
-        snprintf(t, sizeof t, "%s", b->news[i].title);
-        wsum += ws[i] = (float)text_w(F_BODY, t) + sep;
+    if (ws_gen != board_gen) {
+        ws_gen = board_gen;
+        wsum = pill = 0;
+        for (int i = 0; i < b->n_news; i++) {                /* measured as text() draws it: its format buffer holds 320 bytes */
+            char t[320];
+            snprintf(t, sizeof t, "%s", b->news[i].title);
+            wsum += ws[i] = (float)text_w(F_BODY, t) + sep;
+        }
+        for (int i = 0; i < b->n_news; i++) {                /* one width for every source: the widest one's */
+            float pw = (float)text_w(F_SMALL, b->news[i].source) + 28;
+            if (pw > pill) pill = pw;
+        }
+        if (pill > 260) pill = 260;
     }
-    float pill = 0;                                          /* one width for every source: the widest one's */
-    for (int i = 0; i < b->n_news; i++) {
-        float pw = (float)text_w(F_SMALL, b->news[i].source) + 28;
-        if (pw > pill) pill = pw;
-    }
-    if (pill > 260) pill = 260;
     float start = MG + pill + 20, off = (float)ticker_offset(T, TICKER_PX_S, (double)wsum);
     float ty = rnd(y + (h - (float)line_h(F_BODY)) / 2), x = start - off;
     while (x > ox) x -= wsum;                                /* from the screen's left edge */

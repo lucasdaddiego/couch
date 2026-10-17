@@ -5,8 +5,6 @@
  * 3.3): the RGB is set also where the alpha is 0, and an alpha under 0x30
  * gets a 4 x 4 ordered dither, so the alpha test at 0x10 makes grain, not
  * a step. */
-#include <stdio.h>
-#include <string.h>
 #include <math.h>
 #include <sys/systime.h>
 #include <lv2/systime.h>
@@ -262,23 +260,41 @@ static void sky_xy(double elev, double azim, float *x, float *y)
 
 /* The stars: each its own brightness in every frame, so the twinkle is
  * smooth (stage 9 drew 7 levels, and a star jumped a level at a time);
- * one quad each, 64 to a primitive, all one draw. */
+ * one quad each, 64 to a primitive, all one draw. Each star's place, size,
+ * brightness and twinkle come from its hash, made once (no division or
+ * int-to-float conversion a frame). */
+static struct {
+    float b, f, p, s, x, y;          /* the brightness, the twinkle's rate and phase, the size, the place */
+} star[STARS];
+static int stars_made;
+
 static void stars(float ox, float oy)
 {
     float vis = clampf((float)(-fx_sc.elev - 4) / 8.0f, 0, 1) * (1.0f - 0.95f * fx_sc.cover);
     if (vis < 0.02f) return;
     float t = (float)sky_time();
     int still = fx_reduced();
+    if (!stars_made) {
+        for (u32 i = 0; i < STARS; i++) {
+            u32 h = hash(i + 0x5a17);
+            star[i].b = 0.3f + 0.7f * hashf(h);
+            star[i].f = 1.1f + (float)(h % 7) * 0.35f;
+            star[i].p = (float)(h >> 8 & 63);
+            star[i].s = (h >> 20 & 15) < 2 ? 3 : 2;
+            star[i].x = (float)(h % 1920);
+            star[i].y = (float)((h >> 11) % 864);
+        }
+        stars_made = 1;
+    }
     gfx_texture(NULL);
     for (u32 i0 = 0; i0 < STARS; i0 += 64) {
         u32 n = STARS - i0 < 64 ? STARS - i0 : 64;
         gfx_vtx *q = gfx_prim(GFX_QUADS, (int)(4 * n));
         for (u32 i = i0; i < i0 + n; i++) {
-            u32 h = hash(i + 0x5a17);
-            float b = 0.3f + 0.7f * hashf(h);
-            if (!still) b *= 0.65f + 0.35f * sinf(t * (1.1f + (float)(h % 7) * 0.35f) + (float)(h >> 8 & 63));
+            float b = star[i].b;
+            if (!still) b *= 0.65f + 0.35f * sinf(t * star[i].f + star[i].p);
             u32 c = 0xebf0ff00u | (u32)(b * 0xe0 * vis + 0.5f);
-            float s = (h >> 20 & 15) < 2 ? 3 : 2, x = ox + (float)(h % 1920), y = oy + (float)((h >> 11) % 864);
+            float s = star[i].s, x = ox + star[i].x, y = oy + star[i].y;
             q = gfx_put(q, x, y, c, 0, 0);
             q = gfx_put(q, x + s, y, c, 0, 0);
             q = gfx_put(q, x + s, y + s, c, 0, 0);

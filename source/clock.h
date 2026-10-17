@@ -1,5 +1,5 @@
 /* The Board's clock: the console's UTC (sysGetCurrentTime) plus the offset
- * of the first source that works : the console's time
+ * of the first source that works: the console's time
  * zone setting (tz_params: TIMEZONE in minutes plus 60 when SUMMERTIME is
  * on), then the Board's offset for its city, else UTC. TIME_FORMAT picks 12
  * or 24 hours. */

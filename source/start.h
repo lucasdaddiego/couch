@@ -15,8 +15,8 @@
  *
  * Then the loop's first frame begins the start animation: the
  * sky fades in from the background's colour, the header moves down into
- * place, the two columns and the bottom rise into place, a little apart,
- * and the clock's digits flip from 00:00 to the time. Any button ends it.
+ * place, and the two columns and the bottom rise into place, a little
+ * apart. Any button ends it.
  * The main thread only. */
 #ifndef START_H
 #define START_H

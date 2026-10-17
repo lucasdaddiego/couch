@@ -15,7 +15,6 @@
  * shows) and night mode's hours, which TRIANGLE edits in place. */
 #include <stdio.h>
 #include <stdarg.h>
-#include <string.h>
 #include <math.h>
 #include <ps3gfx/ui.h>
 #include <ps3gfx/journal.h>
@@ -209,8 +208,7 @@ int info_input(void)
         msg_color = rc == 0 ? GREEN : RED;
         fan_ask = 0;
         fan_pct = -1;                        /* the fan is not read until its prompt says run again: no frozen value (0.5.0's review) */
-    } else if (pressed & BTN_TRIANGLE) {
-        armed = 0;
+    } else if (pressed & BTN_TRIANGLE) {             /* read_pad disarmed the gesture at this press (ps3gfx cb788b4) */
         if (!fs_ok) {
             snprintf(msg, sizeof msg, "The app cannot write " APP_DIR ", so night.txt cannot be saved.");
             msg_color = RED;

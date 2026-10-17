@@ -1,7 +1,6 @@
 /* The start (start.h): the steps' times, the first frame, the job
  * screen, the start animation. */
 #include <stdio.h>
-#include <string.h>
 #include <sys/thread.h>
 #include <lv2/systime.h>
 #include <sys/systime.h>

@@ -51,8 +51,8 @@ typedef struct {
 } board_feed;
 
 /* A change against the previous calendar day's close: rate_chg=label|dir|pct|abs|date and extra_chg=... with the same
- * fields. dir: CHG_UP, CHG_DOWN, CHG_FLAT (the chip's grey dash), CHG_NONE
- * for another word (no chip). pct and abs are the Worker's LOCALE text with
+ * fields. dir: CHG_UP, CHG_DOWN, CHG_FLAT (no chip), CHG_NONE for
+ * another word (no chip). pct and abs are the Worker's LOCALE text with
  * a sign ("+0,3%", "-3,20"), "-" when missing; when: the compared close's
  * date ("12 Oct"). */
 enum { CHG_NONE, CHG_UP, CHG_DOWN, CHG_FLAT };

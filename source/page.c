@@ -126,12 +126,17 @@ u32 source_colour(const char *s)
 }
 
 /* The width footer_at gives its items: a face button 44 px, a label its
- * text and 30, each action its text and 36. */
-static float footer_w(const char *s)
+ * text and 30, each action its text and 36. The last hints' width is kept:
+ * the bar draws the same hints every frame. */
+static float footer_w(const char *hints)
 {
+    static char last[128];
+    static float last_w;
+    static int have;
+    if (have && !strcmp(hints, last)) return last_w;
     float w = 0;
     char item_s[64];
-    while (*s) {
+    for (const char *s = hints; *s;) {
         const char *e = strstr(s, "  ");
         int n = e ? (int)(e - s) : (int)strlen(s);
         snprintf(item_s, sizeof item_s, "%.*s", n, s);
@@ -142,6 +147,11 @@ static float footer_w(const char *s)
         if (sp) w += (float)text_w(F_SMALL, sp + 1) + 36;
         s += n;
         while (*s == ' ') s++;
+    }
+    if (strlen(hints) < sizeof last) {
+        memcpy(last, hints, strlen(hints) + 1);
+        last_w = w - 36;
+        have = 1;
     }
     return w - 36;
 }
@@ -457,10 +467,23 @@ int ambient_day(void)
 #define AMB_ROT_S 10.0                       /* one headline at a time, the next every 10 s */
 #define AMB_FADE_S 0.6                       /* out and in over 0.6 s */
 #define AMB_MOVE_S 120.0                     /* the block moves every 2 min: out, a new place, in (0.4.1) */
-#define aw_MAX 1520                       /* the block's width, at most (1240 before 0.4.1) */
+#define AMB_W_MAX 1520                       /* the block's width, at most (1240 before 0.4.1) */
 
 float amb_ga = 1.0f;                         /* fade.h: the block's fade, 1 outside the waiting screen */
 #define AMB_R 28                             /* a card's corners */
+
+/* ambient_spot of span k, kept for its span: its two sin calls once per span, not each frame */
+static void spot(long k, float *x, float *y)
+{
+    static long at = -1;
+    static float sx, sy;
+    if (k != at) {
+        ambient_spot(k, &sx, &sy);
+        at = k;
+    }
+    *x = sx;
+    *y = sy;
+}
 
 /* A card of the waiting screen: a light, translucent rounded panel with a
  * 1 px edge (the glass of the Board needs the sky's blur, which the aurora
@@ -515,9 +538,9 @@ static void ambient_frame(void)
     long span = (long)(t / AMB_MOVE_S);
     double mt = t - (double)span * AMB_MOVE_S;
     float ga = mt > AMB_MOVE_S - AMB_FADE_S ? (float)((AMB_MOVE_S - mt) / AMB_FADE_S) : span > 0 && mt < AMB_FADE_S ? (float)(mt / AMB_FADE_S) : 1.0f;
-    ambient_spot(span, &px, &py);
+    spot(span, &px, &py);
     float aw = (float)SW - 2 * (AMBIENT_DRIFT_X + 60);
-    if (aw > aw_MAX) aw = aw_MAX;
+    if (aw > AMB_W_MAX) aw = AMB_W_MAX;
     aw = rnd(aw);
     u32 c1 = day ? WHITE : 0xdfe5eeff, c2 = day ? 0xdde3ecd0 : 0xaab5c6ff;
     clock_offset(&off);
@@ -531,9 +554,15 @@ static void ambient_frame(void)
     int nn = board_have ? b->n_news : 0;
     int big = !digits_rc ? D_XL : -1;
     float ch = big >= 0 ? (float)digits_h(D_XL) : (float)line_h(F_LARGE);
-    int nl = 1;                                  /* the headline's lines: two when any of them needs two (no jump at a change) */
-    for (int i = 0; i < nn; i++)
-        if (text_w(F_MED, b->news[i].title) > aw - 72) nl = 2;
+    static int nl = 1, nl_gen = -1;              /* the headline's lines: two when any of them needs two (no jump at a change), */
+    static float nl_aw;                          /* measured once per reply and width */
+    if (nl_gen != board_gen || nl_aw != aw) {
+        nl_gen = board_gen;
+        nl_aw = aw;
+        nl = 1;
+        for (int i = 0; i < nn; i++)
+            if (text_w(F_MED, b->news[i].title) > aw - 72) nl = 2;
+    }
     float cardh = 192, newsh = 92 + (float)nl * (float)wrap_step(F_MED);
     float hrsh = 220;
     int has_hrs = has_wx && board_hours_left(NULL) >= 2;
@@ -683,7 +712,7 @@ static void night_frame(void)
     long span = (long)(t / AMB_MOVE_S);
     double mt = t - (double)span * AMB_MOVE_S;
     float ga = mt > AMB_MOVE_S - AMB_FADE_S ? (float)((AMB_MOVE_S - mt) / AMB_FADE_S) : span > 0 && mt < AMB_FADE_S ? (float)(mt / AMB_FADE_S) : 1.0f;
-    ambient_spot(span, &px, &py);
+    spot(span, &px, &py);
     clock_offset(&off);
     civil_from_unix(clock_utc() + off, &c);
     clock_hm(hm, sizeof hm, c.hour, c.min, clock_h24(), &ampm);

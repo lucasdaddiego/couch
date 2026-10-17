@@ -21,7 +21,6 @@
 #include "board.h"
 #include "clock.h"
 #include "http.h"
-#include "page.h"
 #include "spu_fx_run.h"
 #include "reader.h"
 #include "futbol.h"
@@ -94,7 +93,6 @@ s64 board_net_us, board_connect_us = -1;
 long board_net_down_utc;
 static board_data tmp;               /* the parse of the last reply, good or not */
 static s64 cur_at;                   /* the system time of the reply in board_cur */
-long board_last_age = -1;
 static int logged;
 /* The words of the stale status line: a redirect without its Location, so
  * that the line keeps the data's time at 1600 wide (the Info screen and
@@ -195,7 +193,7 @@ void board_load_last(void)
 {
     static char buf[BOARD_MAX + 300];
     char why[80] = "";
-    long saved = 0;
+    long saved = 0, age = 0;
     int n = fs_ok && board_url[0] ? fs_read_file(LAST, buf, (int)sizeof buf - 1) : -1;
     if (n <= 0) return;
     buf[n] = 0;
@@ -204,7 +202,7 @@ void board_load_last(void)
     else {
         *nl = 0;
         saved = strtol(buf + 13, NULL, 10);
-        long age = clock_utc() - saved;
+        age = clock_utc() - saved;
         if (strcmp(bar + 1, board_url)) snprintf(why, sizeof why, "another URL");
         else if (age < 0 || age > LAST_MAX_S) snprintf(why, sizeof why, "%ld s old", age);
         else if (board_parse(nl + 1, n - (int)(nl + 1 - buf), utf8_rc != 0, &tmp) != BP_OK) snprintf(why, sizeof why, "no whole reply");
@@ -213,11 +211,10 @@ void board_load_last(void)
             board_have = 1;
             board_gen++;
             cur_at = sysGetSystemTime() - (s64)age * 1000000;
-            board_last_age = age;
         }
     }
     if (why[0]) couch_log("board_last.txt: not shown, %s", why);
-    else couch_log("board_last.txt: the reply of %ld s ago, shown until the first fetch", board_last_age);
+    else couch_log("board_last.txt: the reply of %ld s ago, shown until the first fetch", age);
 }
 
 static void board_thread(void *unused)

@@ -19,7 +19,6 @@
 #include "http.h"
 #include "parse.h"
 #include "sky.h"
-#include "spu_fx_run.h"
 #include "start.h"
 #include "stext.h"
 #include "reader.h"
@@ -74,7 +73,7 @@ static struct {
     float y;
 } row[AROWS];
 static int nrows, wrapped_w;         /* the column width the rows were made for (0: none) */
-static float a_col;
+static int a_words;                  /* the open article's words, for the bar's reading time */
 
 /* the QR code of the link (Health's help.c: the dark runs of each row) */
 #define QR_SIDE (QR_MAX_VERSION * 4 + 17)
@@ -323,6 +322,9 @@ void reader_take(const board_reply *b)
     if (!open) return;
     if (b->prc == BP_OK && strcmp(a->state, "none")) {
         A = *a;
+        a_words = A.n_para;                  /* the spaces and one a paragraph: counted once, not each frame */
+        for (int i = 0; i < A.n_para; i++)
+            for (const char *p = A.text + A.para_off[i]; *p; p++) a_words += (*p == ' ');
         if (!A.title[0]) snprintf(A.title, sizeof A.title, "%s", art_title);
         if (!A.source[0]) snprintf(A.source, sizeof A.source, "%s", art_source);
         qr_ok = 0;
@@ -622,7 +624,6 @@ static void make_rows(float w)
     int off[64], len[64], f = F_TITLE;
     float y = 0, step = body_step();
     nrows = 0;
-    a_col = w;
     int k = wrap_lines(A.title, (int)strlen(A.title), w, measure, &f, off, len, TITLE_LINES + 1);
     for (int i = 0; i < k && i < TITLE_LINES && nrows < AROWS; i++, nrows++) {
         row[nrows].kind = R_TITLE, row[nrows].off = off[i], row[nrows].len = len[i], row[nrows].y = y;
@@ -797,12 +798,8 @@ void news_bar(float y)
     if (art == ART_LOADING) {
         snprintf(line, sizeof line, "Fetching the article from %s ...", art_source[0] ? art_source : "the Worker");
     } else if (art == ART_SHOWN) {
-        int words = 0;
-        for (int i = 0; i < A.n_para; i++)
-            for (const char *p = A.text + A.para_off[i]; *p; p++) words += (*p == ' ');
-        words += A.n_para;
         snprintf(line, sizeof line, "%s: %d paragraph%s, about %d min to read.", A.source[0] ? A.source : "The article", A.n_para,
-                 A.n_para == 1 ? "" : "s", words / 200 + 1);
+                 A.n_para == 1 ? "" : "s", a_words / 200 + 1);
     } else if (art == ART_ERROR) {
         c = board_status_words(line, sizeof line);           /* the error is the panel's line */
     } else if (sky_time() - note_t < 3.0) {

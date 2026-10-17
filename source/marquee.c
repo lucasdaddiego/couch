@@ -47,7 +47,8 @@ static int top0, band_h;                     /* the band's first row from the li
 static tex_pair pic;
 static int pic_ok = -1;
 static u16 row_buf[64 * MQ_W];               /* one band's rows (band_h <= 64): 512 KB */
-static u32 shown_sum, want_sum;              /* the headlines' hash: in the shown picture, in the reply */
+static u32 shown_sum, want_sum, build_sum;   /* the headlines' hash: in the shown picture, in the reply, in the one being drawn */
+static int sum_gen = -1;                     /* the reply (board_gen) of want_sum */
 static int shown_n, building = -1;           /* headlines in the shown picture; the next one to draw, -1 idle */
 static float wid[BOARD_NEWS];                /* each headline's width in the picture (its text_w) */
 
@@ -214,7 +215,10 @@ void marquee_tick(void)
         if (have_latin) square = lmap(0x25a1) >= 0 && lmap(0x25a1) < ncp ? lmap(0x25a1) : -1;
     }
     if (parsed < 0) return;
-    want_sum = titles_sum();
+    if (sum_gen != board_gen) {                         /* the hash once per reply, not each frame */
+        sum_gen = board_gen;
+        want_sum = titles_sum();
+    }
     int n = board_have ? board_cur.n_news : 0;
     if (building < 0 && (shown_sum != want_sum || shown_n != n) && n > 0) {
         if (pic_ok < 0) {
@@ -223,15 +227,11 @@ void marquee_tick(void)
         }
         if (!pic_ok) return;
         building = 0;
+        build_sum = want_sum;
     }
     if (building < 0) return;
-    if (titles_sum() != want_sum || building >= n) {     /* a new reply while building: start again */
-        if (building >= n && titles_sum() == want_sum) {
-            tex_pair_swap(&pic);
-            shown_sum = want_sum;
-            shown_n = n;
-        }
-        building = -1;
+    if (want_sum != build_sum || building >= n) {       /* a new reply while building: start again (0.5.1: the */
+        building = -1;                                   /* test before compared two hashes of one frame) */
         return;
     }
     /* one headline a frame: after ui_flip, into the texture no frame draws */

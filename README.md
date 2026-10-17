@@ -133,6 +133,23 @@ night mode, the background; `reader.c`: the News page and the reader;
 `tools/preview/`, `tools/hostcheck/`, `tools/syscalls.allow`, `worker/`,
 `Makefile`, `build.sh`, `sfo.xml`, `pkgfiles/`, `art/`, `docs/`.
 
+## Versions
+
+**0.5.1** (2026-10-17): Couch on
+ps3gfx cb788b4 and its review fixes: `read_pad` cancels Info's SQUARE twice
+at any other button and releases the buttons of a pad that goes away, the
+journal writes a failed record again, and the effects program's loops are
+unrolled (the same pictures). `area` now splits its fill where a line
+crosses its base: the Board's curve and sparkline never cross it, so their
+pixels stay. Couch's own fixes keep every pixel of the preview: less PPU
+work a frame (the wind dial's and the sun arc's sines and the stars'
+constants made once, the ticker's and the waiting screen's headline widths
+measured once per reply, the reader's glyph quads from tables, a cut ASCII
+text measured in one pass, the bar's hints and an article's word count
+kept), dead code and stale comments removed, and a new reply while the
+ticker's picture is drawn starts that picture again (its old test never
+fired).
+
 ## License
 
 MIT (`LICENSE`). The pkg carries ps3gfx's fonts under the SIL Open Font

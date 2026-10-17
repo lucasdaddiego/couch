@@ -5,7 +5,6 @@
  * taken as 12 h and 1 as 24 h (not checked). The three calls are one
  * journal entry, behind the first-run prompt as the design says. */
 #include <stdio.h>
-#include <string.h>
 #include <sys/systime.h>
 #include <sysutil/sysutil.h>
 #include <ps3gfx/ui.h>

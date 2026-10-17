@@ -577,8 +577,6 @@ int url_split(const char *url, char *host, int hs, int *port, char *path, int ps
     return 0;
 }
 
-/* ---- the clock ------------------------------------------------------------- */
-
 int url_sibling(const char *path, const char *leaf, char *out, int n)
 {
     int q = (int)strcspn(path, "?#"), slash = -1;
@@ -588,6 +586,8 @@ int url_sibling(const char *path, const char *leaf, char *out, int n)
     if (slash < 0 && k >= 0 && k < n) k = snprintf(out, (size_t)n, "/%s", leaf);
     return k < 0 || k >= n ? -1 : 0;
 }
+
+/* ---- the clock ------------------------------------------------------------- */
 
 const char *const weekday_name[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 const char *const month_name[12] = {"January", "February", "March", "April", "May", "June",

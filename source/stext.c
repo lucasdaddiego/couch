@@ -8,14 +8,12 @@
  * its place: a bilinear sample at a cell's edge mixes in a clear texel,
  * never a neighbour's ink. A4R4G4B4, white also where the alpha is 0 (no
  * black at an edge). */
-#include <stdio.h>
 #include <string.h>
 #include <math.h>
 #include <ps3gfx/ui.h>
 #include <ps3gfx/gfx.h>
 #include <ps3gfx/fx.h>
 #include "couch.h"
-#include "page.h"
 #include "spu_fx_run.h"
 #include "stext.h"
 
@@ -33,6 +31,8 @@ static const int font_of[NF] = {F_SMALL, F_BODY, F_MED, F_TITLE};
 typedef struct {
     int cw, ch, base, pad, asc, aw, count;
     const u8 *adv, *px;                      /* the advances, the 4-bit alphas */
+    float fpad, fcw, fch, ftop, du, dv;      /* the quad's numbers as floats (glyph_tables) */
+    float fadv[LATIN_MAX];                   /* the advances as floats */
 } atlas;
 
 static struct {
@@ -40,6 +40,7 @@ static struct {
     int cellw, cellh, rows;
     gfx_tex tex;
     u16 *dst;                                /* the texture in RSX memory */
+    float u0[112 + LATIN_MAX], v0[112 + LATIN_MAX];   /* each cell's texel origin in the texture */
 } F[NF];
 
 static int first_char, have_latin, ncp, square = -1;
@@ -174,6 +175,30 @@ static int glyph_at(const char *s, int n, int i, int *len, int *slot)
 
 /* ---- the build ------------------------------------------------------------------------- */
 
+/* Font i's quad numbers once its texture is made: each cell's u0 and v0,
+ * each atlas's pad, size, ascent and advances as floats, its cell's size in
+ * texture units. stext() reads them per glyph: the values it made per glyph
+ * before, with four divisions and nine int-to-float conversions. */
+static void glyph_tables(int i)
+{
+    float W = (float)F[i].tex.w, H = (float)F[i].tex.h;
+    int total = F[i].a[0].count + (have_latin ? F[i].a[1].count : 0);
+    for (int j = 0; j < 2; j++) {
+        atlas *a = &F[i].a[j];
+        a->fpad = (float)a->pad;
+        a->fcw = (float)a->cw;
+        a->fch = (float)a->ch;
+        a->ftop = (float)(a->asc - a->base);
+        a->du = (float)a->cw / W;
+        a->dv = (float)a->ch / H;
+        for (int k = 0; k < a->count; k++) a->fadv[k] = (float)a->adv[k];
+    }
+    for (int g = 0; g < total; g++) {
+        F[i].u0[g] = (float)(g % COLS * F[i].cellw + 1) / W;
+        F[i].v0[g] = (float)(g / COLS * F[i].cellh + 1) / H;
+    }
+}
+
 /* Row r of cells of font i into the texture: the clear texels, then each cell's alphas. */
 static void build_row(int i, int r)
 {
@@ -226,6 +251,7 @@ int stext_tick(void)
                 return 0;
             }
             bytes += (u32)F[i].tex.pitch * F[i].tex.h;
+            glyph_tables(i);
         }
         frame_ev |= EV_TEX;
         couch_log("stext: the reader's atlases, %u KB of RSX memory%s", (unsigned)(bytes / 1024), have_latin ? "" : " (ASCII only)");
@@ -320,7 +346,6 @@ float stext(float x, float y, int font, u32 rgba, const char *s, int n)
     if (fi < 0 || state != 2) return plain(x, y, font, rgba, s, n);
     float px = floorf(x + 0.5f), lo = band_on ? bt : -1e9f, hi = band_on ? bb : 1e9f;
     if (y + 80 < lo || y - 80 > hi) return px + stext_w(font, s, n);   /* far outside: the pen only */
-    float W = (float)F[fi].tex.w, H = (float)F[fi].tex.h;
     int nascii = F[fi].a[0].count;
     gfx_texture(&F[fi].tex);
     for (int i = 0, len = 1; i < n && s[i]; i += len) {
@@ -329,10 +354,10 @@ float stext(float x, float y, int font, u32 rgba, const char *s, int n)
         const atlas *a = &F[fi].a[which];
         int g = which ? nascii + slot : slot;
         if (!(which == 0 && s[i] == ' ')) {
-            float x0 = px - (float)a->pad, x1 = x0 + (float)a->cw;
-            float y0 = y + (float)(a->asc - a->base), y1 = y0 + (float)a->ch;
-            float u0 = (float)(g % COLS * F[fi].cellw + 1) / W, u1 = u0 + (float)a->cw / W;
-            float v0 = (float)(g / COLS * F[fi].cellh + 1) / H, v1 = v0 + (float)a->ch / H;
+            float x0 = px - a->fpad, x1 = x0 + a->fcw;
+            float y0 = y + a->ftop, y1 = y0 + a->fch;
+            float u0 = F[fi].u0[g], u1 = u0 + a->du;
+            float v0 = F[fi].v0[g], v1 = v0 + a->dv;
             if (y1 > lo && y0 < hi) {
                 if (y0 < lo) {                   /* the band's cut: the quad and its texels */
                     v0 += (v1 - v0) * (lo - y0) / (y1 - y0);
@@ -352,7 +377,7 @@ float stext(float x, float y, int font, u32 rgba, const char *s, int n)
                 }
             }
         }
-        px += (float)a->adv[slot];
+        px += a->fadv[slot];
     }
     return px;
 }
@@ -363,13 +388,18 @@ float stext_fit(float x, float y, int font, u32 rgba, float maxw, const char *s)
     if (stext_w(font, s, n) <= maxw) return stext(x, y, font, rgba, s, n);
     float ell = (float)text_w(font, "...");
     char b[330];
-    int k = 0;
+    int k = 0, ascii = 1, w = 0;
+    for (int i = 0; i < n && i < 300 && ascii; i++) ascii = !(s[i] & 0x80);
     for (int i = 0, len; i < n && i < 300; i += len) {     /* whole code points that fit with the dots */
         len = 1;
         unsigned char c = (unsigned char)s[i];
         if (c >= 0xc2 && c <= 0xf4) len = c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : 2;
         if (i + len > n) break;
-        if (stext_w(font, s, i + len) + ell > maxw) break;
+        if (ascii) {                                         /* ASCII widths add up: the prefix's width a byte at a time, not each prefix again */
+            char one[2] = {s[i], 0};
+            w += text_w(font, one);
+            if ((float)w + ell > maxw) break;
+        } else if (stext_w(font, s, i + len) + ell > maxw) break;
         k = i + len;
     }
     memcpy(b, s, (size_t)k);
