@@ -148,7 +148,12 @@ measured once per reply, the reader's glyph quads from tables, a cut ASCII
 text measured in one pass, the bar's hints and an article's word count
 kept), dead code and stale comments removed, and a new reply while the
 ticker's picture is drawn starts that picture again (its old test never
-fired).
+fired). On the author's console (2026-10-17, through webMAN's virtual pad
+and a camera on the TV): every screen of the pad's tour, a sky picture in
+1.73 ms on the slowest SPU (1.84 ms at most; 0.5.0: 2.23 ms), 59.9 frames a
+second, and the unattended round's two screenshots, now copied by the RSX,
+whole and right; the journal 34 calls ok, no freeze. The aurora (the night
+sky) was not on the TV.
 
 ## License
 
