@@ -81,11 +81,10 @@ the chart, the hours, the changes, the sky lines, then the rates and days.
 | `now`, `offset`, `city` | the Worker's Unix time, the time zone's offset in seconds, the city |
 | `numfmt` | the thousands mark (`_` for none) and the decimal mark of the numbers |
 | `geo` | `lat\|lon` |
-| `rate` | `label\|buy\|value\|date` (`buy` is `-` for a mid rate) |
+| `rate` | `label\|buy\|value\|date` (`buy` is `-` for a mid rate; Couch 0.5.1 does not read it) |
 | `feature` | `label\|symbol`: the large tile's rate, `$` for Couch's dollar icon, other text as text, empty for none |
-| `rate_chg`, `extra_chg` | `label\|up, down or flat\|percent\|amount\|date` |
-| `spark` | `label\|first date\|30 values\|decimals` (the values times 10^decimals, `-` for none) |
-| `extra` | `label\|value\|date\|state\|reason`: a value of another kind (an index, a rate of interest); this Worker sends none |
+| `rate_chg` | `label\|up, down or flat\|percent\|amount\|date` (Couch reads the label, the direction and the percent) |
+| `spark` | `label\|first date\|30 values\|decimals` (the values times 10^decimals, `-` for none; Couch 0.5.1 does not read the first date) |
 | `rate_age`, `rate_state` | the rates' age in seconds, `ok` or `stale\|reason` or `none\|reason` |
 | `wx_now` | `temperature\|feels like\|humidity\|words\|wind\|day or night` |
 | `wx_fx` | `WMO code\|cloud cover\|mm per hour\|wind from (degrees)\|wind km/h\|gusts km/h` |
@@ -95,15 +94,16 @@ the chart, the hours, the changes, the sky lines, then the rates and days.
 | `wx_hours` | `first hour\|12 temperatures\|12 chances\|12 WMO codes` |
 | `wx_age`, `wx_state` | as the rates' |
 | `air` | `US AQI\|UV index`, whole, `-` for a missing one; absent when the data is over 3 h old (Couch 0.5.0) |
-| `holiday` | `date\|name\|days until it` |
+| `holiday` | `date\|name\|days until it` (Couch only checks that the days are 0 to 400: it counts them from the date) |
 | `futbol` | `games live\|words` (`2 live`, `Next: Home–Away 21:00`, `No more games today`); only from a Worker with a fútbol source (Couch 0.5.0) |
 | `news`, `news_age`, `news_state` | `source\|age in seconds\|title`, as the rates' |
 
-`/news` is `couch-news 1`, then `item=id|source|category|age|title` lines,
-`news_age`, `news_state`, `end`. `/article` is `couch-article 1`, then `id`,
-`source`, `category`, `title`, `date` (`words|age`), `link`, `state` (`ok`,
-`cut`, `summary|reason` or `none|reason`) and one `p=` line per paragraph,
-then `end`.
+`/news` is `couch-news 1`, then `now`, `item=id|source|category|age|title`
+lines, `news_age`, `news_state`, `end`. `/article` is `couch-article 1`, then
+`now`, `id`, `source`, `category`, `title`, `date` (`words|age`), `link`,
+`state` (`ok`, `cut`, `summary|reason` or `none|reason`) and one `p=` line per
+paragraph, then `end`. Couch 0.5.1 reads neither reply's `now` nor
+`/article`'s `id`: it matches an article to its request's id.
 
 `/futbol` is `couch-futbol 1`, then `now`, `day` (`Today, Fri 16 Oct`), per
 league a `league=name|country` line and its `game=when|home|away|home

@@ -10,7 +10,7 @@ deploy for your place (`worker/`).
 
 - **Board:** the clock in the console's time zone and the next holiday; the
   weather now with a moving icon, the rain of the next 2 hours, the next 12
-  hours, the sun's arc, the moon and the air (AQI and UV), three days; a large rate tile with its 30-day chart and up to eight
+  hours, the sun's arc, the moon and the air (AQI and UV), three days; a large rate tile with its 30-day chart and up to seven
   smaller tiles, each with its change since the day before; a news ticker.
   The sky behind the tiles follows the sun, the clouds and the rain.
 - **News:** the latest headlines of your feeds. CROSS opens one in a reader
@@ -129,6 +129,7 @@ night mode, the background; `reader.c`: the News page and the reader;
 `futbol.c`: the Futbol page; `info.c`: Info, the temperatures and the fan;
 `parse.c`: the pure parsers, also built by the host checks; `sky.c`,
 `spu_fx_run.c`, `astro.c`: the sky, the effects, the sun and the moon;
+`fontarch.c`: the font atlases' reader for `stext.c` and `marquee.c`;
 `http.c`, `clock.c`, `boot.c`, `stext.c`, `marquee.c`, `qrcodegen.c`),
 `tools/preview/`, `tools/hostcheck/`, `tools/syscalls.allow`, `worker/`,
 `Makefile`, `build.sh`, `sfo.xml`, `pkgfiles/`, `art/`, `docs/`.
@@ -136,24 +137,46 @@ night mode, the background; `reader.c`: the News page and the reader;
 ## Versions
 
 **0.5.1** (2026-10-17): Couch on
-ps3gfx cb788b4 and its review fixes: `read_pad` cancels Info's SQUARE twice
-at any other button and releases the buttons of a pad that goes away, the
-journal writes a failed record again, and the effects program's loops are
-unrolled (the same pictures). `area` now splits its fill where a line
-crosses its base: the Board's curve and sparkline never cross it, so their
-pixels stay. Couch's own fixes keep every pixel of the preview: less PPU
-work a frame (the wind dial's and the sun arc's sines and the stars'
-constants made once, the ticker's and the waiting screen's headline widths
-measured once per reply, the reader's glyph quads from tables, a cut ASCII
-text measured in one pass, the bar's hints and an article's word count
-kept), dead code and stale comments removed, and a new reply while the
-ticker's picture is drawn starts that picture again (its old test never
-fired). On the author's console (2026-10-17, through webMAN's virtual pad
-and a camera on the TV): every screen of the pad's tour, a sky picture in
-1.73 ms on the slowest SPU (1.84 ms at most; 0.5.0: 2.23 ms), 59.9 frames a
-second, and the unattended round's two screenshots, now copied by the RSX,
-whole and right; the journal 34 calls ok, no freeze. The aurora (the night
-sky) was not on the TV.
+ps3gfx 57b2eb0 and the fixes of its two reviews: `read_pad` cancels Info's
+SQUARE twice at any other button and releases the buttons of a pad that goes
+away, the journal writes a failed record again, the effects program's loops
+are unrolled (the same pictures), the fonts' texels are white also at alpha
+0 (text at 720p and 480p is brighter at its edges; 1080p keeps its pixels),
+and a band's glass comes from its own cloud samples (at most 8 levels a
+channel). `area` now splits its fill where a line crosses its base: the
+Board's curve and sparkline never cross it, so their pixels stay. Couch's
+own fixes: an old reply (`board_last.txt`, or fetches that fail) shows its
+days, the hero's min/max bar and the waiting screen's high and low from
+today in the reply's zone, its 12 h curve from now's hour and no air chips
+after 30 min, and the status line names the data's date when it is not
+today's (the stale line gives the data's time first: a long reason cut it
+at 1600 wide); the narrow rate tiles show the whole label (cut to its room,
+not to its first word) and the whole date when it fits ("1000 JPY 16 Oct",
+was "1000 Oct"), and a wide tile's date is whole or not there ("16 Oct" was
+cut to "16"); the moon's lit side follows the reply's side of the equator
+(the first picture, made before the first reply, kept the north's view for
+up to 6 h) and its disc shows at the first reply; the sun and the moon move each second (once a
+minute, their discs jumped about 3 px); the hero tile has no Buy text and
+the grid no extras (no Worker sends them); and the frame budget's slow
+period is 25 ms, a missed vsync at 60 or 50 Hz (20 ms counted about half of
+a 50 Hz mode's frames: RSX only in 12 s). Less work with the same pictures:
+the wind dial's and the sun arc's sines and the stars' constants made once,
+the Board's texts of a reply made once per reply, the ticker's and the
+waiting screen's headline widths measured once per reply, the reader's
+glyph quads and the glass outline's points from tables, a cut text measured
+in one pass, the ticker's rows cleared only up to the headline's ink, a
+Futbol reply copied up to its last game, the bar's hints and an article's
+word count kept, and SPU 5's rain word sum only in the jobs whose vertices
+the PPU checks (ps3gfx's `p.rain.check`). One reader of the font atlases
+(`fontarch.c`) serves the ticker and the scrolls, which had a copy each;
+dead code, dead fields and stale comments are removed, and a new reply while
+the ticker's picture is drawn starts that picture again (its old test never
+fired). On the author's console (2026-10-17, the build before the second
+review, through webMAN's virtual pad and a camera on the TV): every screen
+of the pad's tour, a sky picture in 1.73 ms on the slowest SPU (1.84 ms at
+most; 0.5.0: 2.23 ms), 59.9 frames a second, and the unattended round's two
+screenshots, now copied by the RSX, whole and right; the journal 34 calls
+ok, no freeze. The aurora (the night sky) was not on the TV.
 
 ## License
 
