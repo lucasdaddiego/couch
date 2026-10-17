@@ -153,26 +153,26 @@ function itemAt(body) {
   return Number.isFinite(ms) && ms >= Date.UTC(2000, 0, 1) ? Math.floor(ms / 1000) : null;
 }
 
-// The items of a feed's text, in the feed's order, at most SORT_ITEMS: {id, title, full, at,
-// link, summary}, at the item's date (itemAt). title is cut to TITLE_MAX code points, full to
-// FULL_MAX, the summary (the <description>, tags stripped: some feeds write a <ul> of <li>) to
-// SUMMARY_MAX. The title is '' when the item has none, the link and the summary ''.
-function items(xml) {
+// The items of a feed's text, in the feed's order, at most SORT_ITEMS: each {body, at}, the text
+// inside its <item> and its date (itemAt), the rest not parsed yet (item below).
+function dated(xml) {
   const out = [], re = /<item\b[^>]*>([\s\S]*?)<\/item>/g;
   let m;
-  while (out.length < SORT_ITEMS && (m = re.exec(xml))) {
-    const t = /<title\b[^>]*>([\s\S]*?)<\/title>/.exec(m[1]);
-    const s = /<source\b[^>]*>([\s\S]*?)<\/source>/.exec(m[1]);
-    const full = t ? cutTitle(dropPublisher(elementText(t[1]), s ? elementText(s[1]) : ''), FULL_MAX) : '';
-    const l = /<link\b[^>]*>([\s\S]*?)<\/link>/.exec(m[1]);
-    const link = l ? feedLink(elementText(l[1])) : '';
-    const ds = /<description\b[^>]*>([\s\S]*?)<\/description>/.exec(m[1]);
-    out.push({
-      id: itemId(link, full), title: cutTitle(full), full, at: itemAt(m[1]),
-      link, summary: ds ? cutTitle(elementText(ds[1]), SUMMARY_MAX) : '',
-    });
-  }
+  while (out.length < SORT_ITEMS && (m = re.exec(xml))) out.push({ body: m[1], at: itemAt(m[1]) });
   return out;
+}
+
+// An item (dated's {body, at}) as {id, title, full, at, link, summary}. title is cut to TITLE_MAX
+// code points, full to FULL_MAX, the summary (the <description>, tags stripped: some feeds write a
+// <ul> of <li>) to SUMMARY_MAX. The title is '' when the item has none, the link and the summary ''.
+function item({ body, at }) {
+  const t = /<title\b[^>]*>([\s\S]*?)<\/title>/.exec(body);
+  const s = /<source\b[^>]*>([\s\S]*?)<\/source>/.exec(body);
+  const full = t ? cutTitle(dropPublisher(elementText(t[1]), s ? elementText(s[1]) : ''), FULL_MAX) : '';
+  const l = /<link\b[^>]*>([\s\S]*?)<\/link>/.exec(body);
+  const link = l ? feedLink(elementText(l[1])) : '';
+  const ds = /<description\b[^>]*>([\s\S]*?)<\/description>/.exec(body);
+  return { id: itemId(link, full), title: cutTitle(full), full, at, link, summary: ds ? cutTitle(elementText(ds[1]), SUMMARY_MAX) : '' };
 }
 
 // True when the dated items of a feed's text are newest first (an item with no date is not
@@ -191,12 +191,19 @@ export function newestFirst(xml) {
 }
 
 // A feed's items as the cache keeps them (index.js's readFeed, shared by /board and /news): the
-// newest first, at most max, each {id, title, full, at, link, summary} (items above). Items with
+// newest first, at most max, each {id, title, full, at, link, summary} (item above). Items with
 // equal dates keep the feed's order, items with no date come last. An item with an empty title
-// is skipped. [] for text that is no RSS.
+// is skipped. [] for text that is no RSS. Only the dates of the items are read first (dated); then
+// the items are parsed in that order until max have a title, so a feed that is not newest first
+// (up to SORT_ITEMS items read) costs the CPU of the kept items only, not of every item read.
 export function feedItems(xml, max = FEED_ITEMS) {
-  return items(String(xml ?? '')).filter((x) => x.title)
-    .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, max);
+  const out = [];
+  for (const x of dated(String(xml ?? '')).sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity))) {
+    if (out.length >= max) break;
+    const it = item(x);
+    if (it.title) out.push(it);
+  }
+  return out;
 }
 
 // NEWS_FEEDS, "Label=https://url,Label*2=https://url,Label*2@economy=https://url" (not CASAS's

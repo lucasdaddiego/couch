@@ -64,8 +64,10 @@ remembered: the next requests answer at once with the old entry, and the
 upstream is tried again after the reply at most once per 300 s. A cold
 `/board` with 3 feeds makes 7 fetches and 14 cache calls, far below the free
 plan's 50 subrequests (6 feeds and both holiday years: 31). At most 6 fetches
-run at once (the runtime's limit of open connections), each with its 4 s
-limit from its own start.
+and Cache API calls wait for their answer at once (the runtime's limit of
+open connections), each fetch with its 4 s limit from its own start. The
+rates' and the holidays' entries have no date in their keys: after midnight,
+or on 1 January, a failed upstream still gives the old values, stale.
 
 ## The Board reply
 

@@ -40,11 +40,6 @@ export function clean(s) {
   return String(s ?? '').replace(/[|\u0000-\u001f\u007f]/g, ' ').replace(/ +/g, ' ').trim();
 }
 
-// Text for a comparison: lower case, the accents removed ("M\u00fcnchen" and "MUNCHEN" give "munchen").
-export function fold(s) {
-  return String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-}
-
 function parts(t, tz) {
   const f = dateFmt('en-US', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
@@ -53,13 +48,6 @@ function parts(t, tz) {
   const p = {};
   for (const x of f.formatToParts(new Date(t * 1000))) p[x.type] = x.value;
   return p;
-}
-
-// The local time of t (Unix seconds) in tz: "HH:MM" on now's local day, else "Ddd HH:MM".
-export function localWhen(t, now, tz) {
-  const a = parts(t, tz), b = parts(now, tz);
-  const hm = `${a.hour}:${a.minute}`;
-  return a.year === b.year && a.month === b.month && a.day === b.day ? hm : `${a.weekday} ${hm}`;
 }
 
 // tz's offset from UTC at now, in seconds (-10800 for Buenos Aires).
@@ -175,14 +163,6 @@ function num(v, locale, min, max) {
   return numFmt(locale, { minimumFractionDigits: min, maximumFractionDigits: max }).format(v);
 }
 
-// "2026-10-12" as "Today" on now's local date, else "12 Oct"; "-" for a value that is not a date.
-export function dayWords(ymd, now, tz) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd ?? ''));
-  if (!m || +m[2] < 1 || +m[2] > 12) return '-';
-  const p = parts(now, tz);
-  return `${p.year}-${p.month}-${p.day}` === m[0] ? 'Today' : `${+m[3]} ${MONTHS[+m[2] - 1]}`;
-}
-
 // holiday=YYYY-MM-DD|name|days: the next national holiday on or after now's local date (index.js's
 // hol: its list, sorted), days 0 for today; none when the list holds none (or a stale one ends).
 export function holidayLine(hol, now, tz) {
@@ -191,7 +171,7 @@ export function holidayLine(hol, now, tz) {
   const today = localDate(now, tz), next = l.find((x) => x && x.fecha >= today);
   if (!next) return null;
   const days = Math.round((Date.parse(`${next.fecha}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86400000);
-  return `holiday=${next.fecha}|${clean(next.nombre).replaceAll('|', '/')}|${days}`;
+  return `holiday=${next.fecha}|${clean(next.nombre)}|${days}`;
 }
 
 // ---- dates, numbers and the weather's codes ----------------------------------------------------

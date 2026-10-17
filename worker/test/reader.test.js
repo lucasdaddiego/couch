@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { clean, MAX_BYTES } from '../src/board.js';
-import { CATEGORY_RE, decodeEntities, feedItems, FEED_ITEMS, ITEMS_MAX, itemId, parseFeeds, SUMMARY_MAX, TITLE_MAX, FULL_MAX } from '../src/news.js';
+import { CATEGORY_RE, decodeEntities, feedItems, FEED_ITEMS, ITEMS_MAX, itemId, parseFeeds, SORT_ITEMS, SUMMARY_MAX, TITLE_MAX, FULL_MAX } from '../src/news.js';
 import { articleText, ARTICLE_BYTES, capParas, dateWords, LINK_BYTES, NEWS_BYTES, NEWS_LIST, newsText, PARA_MAX, quotas, TEXT_BYTES } from '../src/reader.js';
 import { get, handle, LISTED_MAX, newsUpstream, RETRY_S } from '../src/index.js';
 
@@ -94,6 +94,43 @@ test('feedItems: the id, the link, the whole title and the summary of each item,
   const none = feedItems('<rss><item><title>No link</title><link>javascript:alert(1)</link></item></rss>')[0];
   assert.deepEqual([none.link, none.id], ['', itemId('', 'No link')]);
   assert.ok(FEED_ITEMS >= 13);
+});
+
+test('feedItems: a feed that is not newest first: the newest by date, only they parsed, as a parse of every item gives', () => {
+  // 110 items (more than SORT_ITEMS) from the fixtures' 31, each with its own link and a date out of
+  // order; some with the date of the item before, some with no date, some with an empty title
+  const base = Object.values(feeds).flatMap((x) => x.match(/<item\b[\s\S]*?<\/item>/g));
+  let seed = 7, prev = '';
+  const xs = Array.from({ length: 110 }, (_, k) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    const date = k % 13 === 12 ? prev : new Date((NOW - (seed % 86400)) * 1000).toUTCString();
+    prev = date;
+    const x = base[k % base.length].replace(/<link\b[^>]*>[\s\S]*?<\/link>/, `<link>https://news.example.org/x/${k}</link>`)
+      .replace(/<pubDate\b[^>]*>[\s\S]*?<\/pubDate>/, k % 17 === 5 ? '' : `<pubDate>${date}</pubDate>`);
+    return k % 19 === 3 ? x.replace(/<title\b[^>]*>[\s\S]*?<\/title>/, '<title> </title>') : x;
+  });
+  const xml = `<rss><channel>${xs.join('\n')}</channel></rss>`;
+  // the reference: each of the first SORT_ITEMS items parsed alone, the empty titles skipped, then a
+  // stable sort by date (the newest first, no date last)
+  const each = xs.slice(0, SORT_ITEMS).map((x) => feedItems(`<rss>${x}</rss>`, 1)[0]).filter(Boolean)
+    .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity));
+  assert.ok(each.length > 90 && each.some((x) => x.at === null) && new Set(each.map((x) => x.at)).size < each.length);
+  for (const max of [ITEMS_MAX, FEED_ITEMS, SORT_ITEMS]) assert.deepEqual(feedItems(xml, max), each.slice(0, max), `max ${max}`);
+  // only the kept items are parsed (each parse makes one URL, feedLink's), not every item read
+  const RealURL = globalThis.URL, empties = xs.filter((x) => x.includes('<title> </title>')).length;
+  let made = 0;
+  globalThis.URL = class extends RealURL {
+    constructor(...a) {
+      super(...a);
+      made++;
+    }
+  };
+  try {
+    feedItems(xml, FEED_ITEMS);
+  } finally {
+    globalThis.URL = RealURL;
+  }
+  assert.ok(made >= FEED_ITEMS && made <= FEED_ITEMS + empties, `${made} items parsed`);
 });
 
 test('NEWS_FEEDS: the category after the weight; the older forms stay valid; a bad category skips the entry', () => {

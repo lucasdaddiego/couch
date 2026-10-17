@@ -23,10 +23,10 @@ export function cut(s, n) {
 }
 
 // The channels, whole names only, as many as fit in n code points; a
-// name's "(...)" note goes ("Kanal 9 (Fußball-Paket)" is "Kanal 9"). One
-// name longer than n is cut.
+// name's "(...)" note goes ("Kanal 9 (Fußball-Paket)" is "Kanal 9"), before
+// the split, so a note with commas goes whole. One name longer than n is cut.
 export function tvCut(s, n) {
-  const names = clean(s).split(',').map((x) => x.replace(/\s*\([^)]*\)?/g, '').trim()).filter(Boolean);
+  const names = clean(s).replace(/\s*\([^)]*\)?/g, '').split(',').map((x) => x.trim()).filter(Boolean);
   let out = '';
   for (const x of names) {
     const next = out ? `${out}, ${x}` : x;

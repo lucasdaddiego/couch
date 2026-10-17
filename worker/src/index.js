@@ -33,27 +33,30 @@ const KEEP_S = 86400;                    // the Cache API keeps an entry (data o
 // fetch starts, not when it is asked for.
 const fetchOpts = () => ({ timeout: TIMEOUT_MS, headers: { 'user-agent': 'couch-board' } });
 
-// The runtime's 6 connections open at once (Cloudflare's limit for a request): a fetch past them
-// waits in the runtime's queue, and a timer made when it was asked for runs out there, so a
-// healthy upstream behind slow ones could fail with "no answer in 4 s" (the Board asks up to 10 at
-// once). paced() starts at most FETCH_SLOTS fetches at once, in the order they were asked for,
-// each with its own timer from its start (opts.timeout); a slot frees when the answer's head came
-// or the fetch failed. Each read here takes its body at once, so a body holds its connection
-// briefly.
+// The runtime's 6 connections at once (Cloudflare's "Simultaneous open connections",
+// https://developers.cloudflare.com/workers/platform/limits/#simultaneous-open-connections): at
+// most 6 calls of a request wait for their response headers at once, fetch() and the Cache API's
+// match() and put() among them, and a 7th waits in the runtime's queue until one of them has its
+// headers. A body that is being read no longer counts. A timer made when a fetch was asked for
+// runs out in that queue, so a healthy upstream behind slow ones could fail with "no answer in 4 s"
+// (the Board asks up to 10 at once). slots() gives FETCH_SLOTS slots that a request's fetches
+// (paced) and Cache API calls (pacedCache) share: at most that many start at once, in the order
+// they were asked for, each fetch with its own timer from its start (opts.timeout). A slot frees
+// when the answer's headers came (a match: the entry or none; a put: the write done) or the call
+// failed, not when its body is read (the runtime does not count a body).
 export const FETCH_SLOTS = 6;
-export function paced(fetchFn, slots = FETCH_SLOTS) {
+export function slots(n = FETCH_SLOTS) {
   let busy = 0;
   const queue = [];
   const next = () => {
-    while (busy < slots && queue.length) queue.shift()();
+    while (busy < n && queue.length) queue.shift()();
   };
-  return (url, opts = {}) => new Promise((resolve, reject) => {
+  return (start) => new Promise((resolve, reject) => {
     queue.push(() => {
-      const { timeout, ...rest } = opts;
       busy++;
       let p;
       try {
-        p = fetchFn(url, timeout ? { ...rest, signal: AbortSignal.timeout(timeout) } : rest);
+        p = start();
       } catch (e) {
         p = Promise.reject(e);
       }
@@ -64,6 +67,20 @@ export function paced(fetchFn, slots = FETCH_SLOTS) {
     });
     next();
   });
+}
+
+// fetchFn in the slots of run (slots' function, or a number: slots of its own).
+export function paced(fetchFn, run = FETCH_SLOTS) {
+  const take = typeof run === 'function' ? run : slots(run);
+  return (url, opts = {}) => take(() => {
+    const { timeout, ...rest } = opts;
+    return fetchFn(url, timeout ? { ...rest, signal: AbortSignal.timeout(timeout) } : rest);
+  });
+}
+
+// A Cache API (caches.default) whose match and put take the slots of run, as paced's fetches do.
+export function pacedCache(cache, run) {
+  return { match: (k) => run(() => cache.match(k)), put: (k, r) => run(() => cache.put(k, r)) };
 }
 
 // A thrown fetch or body error in words (after the host).
@@ -115,9 +132,18 @@ const fxCodes = (env) => parseRates(env.RATES).map((r) => r.code).filter((c) => 
 // The public holidays (Nager.Date, https://date.nager.at): COUNTRY's list of the local year, and
 // the next year's too when none of this year is left. Kept: the nationwide ones (global) of type
 // Public; the name in the local language (localName), or in English with HOLIDAY_NAMES=english.
-// Cached as one entry under the year and the country: {data: [{fecha, nombre}]} sorted.
+// Cached as one entry under the country (no year: UPSTREAMS.hol): {data: [{fecha, nombre}]} sorted.
 export const HOL_TTL = 86400;
 const country = (env) => (/^[A-Za-z]{2}$/.test(String(env.COUNTRY || '').trim()) ? String(env.COUNTRY).trim().toUpperCase() : '');
+// True when the list holds a holiday on or after now's local date (false for a bad TZ).
+function holAhead(d, env, now) {
+  try {
+    const today = localDate(now, env.TZ || 'UTC');
+    return Array.isArray(d) && d.some((h) => h && h.fecha >= today);
+  } catch {
+    return false;
+  }
+}
 async function loadHolidays(env, now, deps) {
   const today = localDate(now, env.TZ || 'UTC'), year = Number(today.slice(0, 4)), english = String(env.HOLIDAY_NAMES || '').trim() === 'english';
   const list = [];
@@ -169,20 +195,25 @@ export const UPSTREAMS = {
     read: readJson,
     valid: (d) => !!(d && d.current),
   },
-  // The key holds today's local date, CURRENCY and the codes: a new day or a new RATES fetches.
+  // The key holds CURRENCY and the codes, not the date (a new RATES fetches; FX_TTL refreshes the
+  // entry each hour, and the URL takes its dates from now): after local midnight a failed fetch
+  // still gives the last rates, stale.
   fx: {
     host: 'frankfurter.dev',
     url: (env, now) => `https://api.frankfurter.dev/v1/${addDays(localDate(now, env.TZ || 'UTC'), -FX_DAYS)}..?` +
       new URLSearchParams({ base: home(env), symbols: fxCodes(env).join(',') }),
-    key: (env, now) => `https://couch.internal/fx?d=${localDate(now, env.TZ || 'UTC')}&b=${home(env)}&s=${fxCodes(env).join(',')}`,
+    key: (env) => `https://couch.internal/fx?b=${home(env)}&s=${fxCodes(env).join(',')}`,
     ttl: (env) => Number(env.FX_TTL) || FX_TTL,
     read: readFx,
     valid: (d) => !!d && Array.isArray(d.dates) && d.dates.length > 0,
   },
+  // The key holds the country, not the year: on 1 January a failed fetch still gives the entry of
+  // before (it holds the next year's list once this year's are over). An entry with no holiday on
+  // or after today is old at once (ttl 0), so the next year's list comes on the next request.
   hol: {
     host: 'date.nager.at',
-    key: (env, now) => `https://couch.internal/hol?y=${localDate(now, env.TZ || 'UTC').slice(0, 4)}&c=${country(env)}`,
-    ttl: () => HOL_TTL,
+    key: (env) => `https://couch.internal/hol?c=${country(env)}`,
+    ttl: (env, d, now) => (holAhead(d, env, now) ? HOL_TTL : 0),
     load: loadHolidays,
     valid: (d) => Array.isArray(d) && d.length > 0,
   },
@@ -231,7 +262,10 @@ export function articleUpstream(item) {
 async function attempt(u, env, now, deps) {
   if (u.load) return u.load(env, now, deps);
   const r = await deps.fetch(u.url(env, now), fetchOpts());
-  if (!r.ok) return { data: null, bad: `HTTP ${r.status}` };
+  if (!r.ok) {
+    if (r.body) r.body.cancel().catch(() => {});      // an error page is not read
+    return { data: null, bad: `HTTP ${r.status}` };
+  }
   return u.read(r, env);
 }
 
@@ -293,9 +327,9 @@ const textReply = (text) => new Response(text, { headers: { 'content-type': 'tex
 // The items of the feeds that /news listed from (since Couch 0.5.0's review): a headline that left
 // its feed after the list was made still opens (/article). One cache entry, {items: [{id, title,
 // full, at, link, summary, label, category}]}: the newest LISTED_MAX by date, the feed's label and
-// category with each. /news writes it (after the reply) when the feeds hold an id it lacks; the
-// Cache API keeps it KEEP_S. Only items of the configured feeds come in, so /article still
-// fetches no link that a feed did not give.
+// category with each. /news reads it and writes it after the reply (waitUntil) when the feeds
+// hold an id it lacks; the Cache API keeps it KEEP_S. Only items of the configured feeds come in,
+// so /article still fetches no link that a feed did not give.
 const LISTED_KEY = 'https://couch.internal/listed';
 export const LISTED_MAX = 150;
 const listedOk = (x) => !!x && typeof x === 'object' && /^[0-9a-f]{8}$/.test(x.id);
@@ -317,19 +351,19 @@ async function listedSave(feeds, rs, deps) {
   if (!fresh.some((x) => !have.has(x.id))) return;
   const by = new Map([...old, ...fresh].map((x) => [x.id, x]));      // a feed's copy over the old one
   const items = [...by.values()].sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, LISTED_MAX);
-  deps.waitUntil(Promise.resolve().then(() => deps.cache.put(LISTED_KEY, new Response(JSON.stringify({ items }), {
+  await deps.cache.put(LISTED_KEY, new Response(JSON.stringify({ items }), {
     headers: { 'content-type': 'application/json', 'cache-control': `max-age=${KEEP_S}` },
-  }))).catch(() => {}));
+  }));
 }
 
 // GET /news: the list (reader.js's newsText) of every feed of NEWS_FEEDS, from the cache that
-// /board fills (or a fetch, as /board's), and the listed items' entry. Always 200, the states in
-// the body.
+// /board fills (or a fetch, as /board's); the listed items' entry after the reply (the list uses
+// nothing of it). Always 200, the states in the body.
 async function newsReply(env, now, deps) {
   const feeds = parseFeeds(env.NEWS_FEEDS);
   try {
     const rs = await Promise.all(feeds.map((f) => get(newsUpstream(f), env, now, deps)));
-    await listedSave(feeds, rs, deps);
+    deps.waitUntil(listedSave(feeds, rs, deps).catch(() => {}));
     return newsText({ now, feeds: feeds.map((f, i) => ({ ...f, r: rs[i] })), max: Number(env.NEWS_LIST) || NEWS_LIST });
   } catch (e) {
     return [`couch-news 1`, `now=${now}`, 'news_age=0', `news_state=none|worker: ${clean((e && e.message) || e).slice(0, 60)}`, 'end', ''].join('\n');
@@ -386,6 +420,19 @@ function futbolReply(env, now, d) {
   }
 }
 
+// A request's dependencies in the runtime (the default export's; the tests give a fake fetch and
+// cache): the fetches and the Cache API calls in the same slots (slots above).
+export function runtimeDeps(ctx, fetchFn = (u, o) => fetch(u, o), cache = caches.default) {
+  const run = slots();
+  return {
+    fetch: paced(fetchFn, run),
+    cache: pacedCache(cache, run),
+    waitUntil: (p) => ctx.waitUntil(p),
+    now: () => Math.floor(Date.now() / 1000),
+    extract: extractPage,
+  };
+}
+
 // The request with its dependencies, for the tests; the default export wires the runtime's.
 export async function handle(request, env, deps) {
   const url = new URL(request.url);
@@ -425,12 +472,6 @@ export async function handle(request, env, deps) {
 
 export default {
   async fetch(request, env, ctx) {
-    return handle(request, env, {
-      fetch: paced((u, o) => fetch(u, o)),
-      cache: caches.default,
-      waitUntil: (p) => ctx.waitUntil(p),
-      now: () => Math.floor(Date.now() / 1000),
-      extract: extractPage,
-    });
+    return handle(request, env, runtimeDeps(ctx));
   },
 };

@@ -7,12 +7,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  boardText, wmoWords, clean, localWhen, tzOffset, MAX_BYTES, fold, rainWords, sunTimes, dayWords, newsLines,
+  boardText, wmoWords, clean, tzOffset, MAX_BYTES, rainWords, sunTimes, newsLines,
   NEWS_FRESH, geoLine, fxLine, hoursLine, change, addDays, localDate, shortDate, holidayLine, parseRates, fxLines,
   numfmtLine, rateDec, currencySymbol, SPARK_DAYS, soonWords, airLine, AIR_MAX_AGE,
 } from '../src/board.js';
 import { feedItems, ITEMS_MAX, parseFeeds } from '../src/news.js';
-import { get, handle, newsUpstream, RETRY_S, FX_DAYS, FUTBOL_NONE, paced, FETCH_SLOTS } from '../src/index.js';
+import { get, handle, newsUpstream, RETRY_S, FX_DAYS, HOL_TTL, FUTBOL_NONE, paced, pacedCache, runtimeDeps, slots, FETCH_SLOTS } from '../src/index.js';
 import { futbolLine, futbolText, FUTBOL_BYTES, FUT_MAX_AGE, dayName, tvCut } from '../src/futbol.js';
 
 // A feed's 8 newest items as the Board takes them (feedItems).
@@ -139,15 +139,11 @@ test('the helpers', () => {
   assert.equal(wmoWords(82), 'Rain showers');
   assert.equal(wmoWords(4), 'Unknown');
   assert.equal(clean('a|b\nc\u0000d  e'), 'a b c d e');
-  assert.equal(fold('München'), 'munchen');
-  assert.equal(localWhen(NOW - 3600, NOW, env.TZ), '16:20');
-  assert.equal(localWhen(NOW - 20 * 3600, NOW, env.TZ), 'Thu 21:20');
   assert.equal(tzOffset(NOW, env.TZ), 7200);
   assert.equal(tzOffset(NOW, 'UTC'), 0);
   assert.equal(geoLine(env), 'geo=52.52|13.4');
   assert.equal(geoLine({ LAT: '91', LON: '0' }), null);
-  assert.deepEqual([addDays('2026-10-16', -32), localDate(NOW, env.TZ), shortDate('2026-10-15'), dayWords('2026-10-16', NOW, env.TZ)],
-    ['2026-09-14', '2026-10-16', '15 Oct', 'Today']);
+  assert.deepEqual([addDays('2026-10-16', -32), localDate(NOW, env.TZ), shortDate('2026-10-15')], ['2026-09-14', '2026-10-16', '15 Oct']);
 });
 
 test('the rates: RATES, the decimals, the symbol, the number format of LOCALE', () => {
@@ -250,6 +246,8 @@ test('tvCut keeps whole channel names and drops their notes', () => {
   assert.equal(tvCut('Spree TV Premium, Kanal 9 Sport, Havel Stream Plus', 40), 'Spree TV Premium, Kanal 9 Sport');
   assert.equal(tvCut('A channel name that is far too long to fit', 10), 'A channel');
   assert.equal(tvCut('', 40), '-');
+  assert.equal(tvCut('Spree TV (Liga, Konferenz), Kanal 9', 40), 'Spree TV, Kanal 9');            // a note with commas goes whole
+  assert.equal(tvCut('Spree TV (Liga, Konferenz', 40), 'Spree TV');                             // an open note goes to the end
   const g = futDay();
   g.leagues[0].games[1].tv = 'Spree TV (Abo), Kanal 9 (Fu\u00dfball-Paket)';
   assert.ok(futbolText({ now: NOW, tz: env.TZ, d: 0, r: okR(g) }).includes('\ngame=18:30|Havel Rovers|SV Tegelsee|-|-|Spree TV, Kanal 9|pre\n'));
@@ -274,6 +272,48 @@ test('paced: at most FETCH_SLOTS fetches at once, in order, each timer from its 
   assert.deepEqual([most, FETCH_SLOTS], [2, 6]);
   const bad = paced(() => { throw new TypeError('no route'); });
   await assert.rejects(bad('x', {}), /no route/);                                      // a throw frees its slot too
+});
+
+test('slots: the fetches and the Cache API calls share FETCH_SLOTS waiting for their headers; an open body holds none', async () => {
+  const heads = [], tick = () => new Promise((r) => setTimeout(r, 0));
+  let waiting = 0, most = 0;
+  const call = (what) => new Promise((r) => {
+    most = Math.max(most, ++waiting);
+    heads.push([what, () => { waiting--; r(new Response(what)); }]);
+  });
+  const run = slots();
+  const f = paced((url) => call(url), run), c = pacedCache({ match: (k) => call(`match ${k}`), put: (k) => call(`put ${k}`) }, run);
+  const all = [...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((u) => f(u, { timeout: 4000 })), c.match('k'), c.put('k', new Response('x'))];
+  await tick();
+  assert.deepEqual(heads.map((h) => h[0]), ['a', 'b', 'c', 'd', 'e', 'f']);          // g and the cache calls wait in the queue
+  heads.shift()[1]();                                                                  // a's headers; its body stays unread
+  await tick();
+  assert.deepEqual(heads.map((h) => h[0]), ['b', 'c', 'd', 'e', 'f', 'g']);
+  while (heads.length) { heads.shift()[1](); await tick(); }
+  const rs = await Promise.all(all);
+  assert.deepEqual([most, rs.filter((r) => !r.bodyUsed).length], [FETCH_SLOTS, 9]);   // 9 bodies open, never more than 6 waiting
+  assert.deepEqual(await Promise.all(rs.map((r) => r.text())), ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'match k', 'put k']);
+});
+
+test('runtimeDeps: a cold /board has at most FETCH_SLOTS fetches and Cache API calls waiting for their answer at once', async () => {
+  const d = deps({ answers: ok }), tick = () => new Promise((r) => setTimeout(r, 1));
+  let waiting = 0, most = 0, n = 0;
+  const slow = (fn) => async (...a) => {
+    most = Math.max(most, ++waiting);
+    n++;
+    await tick();
+    try {
+      return await fn(...a);
+    } finally {
+      waiting--;
+    }
+  };
+  const rt = runtimeDeps({ waitUntil: (p) => d.waits.push(p) }, slow((u, o) => d.fetch(u, o)),
+    { match: slow((k) => d.cache.match(k)), put: slow((k, r) => d.cache.put(k, r)) });
+  const body = await (await handle(new Request('http://couch.test/board'), env, { ...rt, now: () => NOW })).text();
+  await Promise.all(d.waits);
+  assert.ok(body.includes('\nrate_state=ok\n') && body.includes('\nwx_state=ok\n') && body.endsWith('\nnews_state=ok\nend\n'));
+  assert.deepEqual([n, most], [21, FETCH_SLOTS]);                                     // 7 fetches, 7 reads, 7 writes
 });
 
 // ---- the keys of Couch 0.5.0: the rain of the next 2 h, the air, the fútbol -------------
@@ -445,7 +485,7 @@ const ok = {
   'feeds.bbci.co.uk/news/technology/rss.xml': { body: feedXml.tech },
 };
 
-test('get fx: the series inverted to CURRENCY per unit, from FX_DAYS days back, cached under the day', async () => {
+test('get fx: the series inverted to CURRENCY per unit, from FX_DAYS days back, cached under CURRENCY and the codes', async () => {
   const d = deps({ answers: ok });
   const r = await get('fx', env, NOW, d);
   assert.equal(r.state, 'ok');
@@ -455,7 +495,7 @@ test('get fx: the series inverted to CURRENCY per unit, from FX_DAYS days back, 
   assert.equal(u.pathname, `/v1/${addDays('2026-10-16', -FX_DAYS)}..`);
   assert.deepEqual([u.searchParams.get('base'), u.searchParams.get('symbols')], ['EUR', 'USD,GBP,CHF,JPY']);
   await Promise.all(d.waits);
-  assert.deepEqual([...d.cache.m.keys()], ['https://couch.internal/fx?d=2026-10-16&b=EUR&s=USD,GBP,CHF,JPY']);
+  assert.deepEqual([...d.cache.m.keys()], ['https://couch.internal/fx?b=EUR&s=USD,GBP,CHF,JPY']);
   const bad = await get('fx', env, NOW, deps({ answers: { 'api.frankfurter.dev': { body: { rates: 'x' } } } }));
   assert.deepEqual([bad.state, bad.reason], ['none', 'frankfurter.dev: bad JSON']);
 });
@@ -476,6 +516,45 @@ test('get hol: the nationwide public holidays, local names, sorted; the next yea
   assert.ok(en.data.some((x) => x.nombre === 'Christmas Day'));
 });
 
+test('get fx and hol: no date in the key: after local midnight, and on 1 January, a failed fetch gives the old entry stale', async () => {
+  const cache = fakeCache();
+  const d = deps({ cache, answers: ok });
+  await get('fx', env, NOW, d);
+  await Promise.all(d.waits);
+  const night = Date.UTC(2026, 9, 16, 22, 30) / 1000;                                 // 00:30 on Saturday in Berlin
+  const down = deps({ cache, answers: { 'api.frankfurter.dev': { status: 503, body: 'x' } }, now: night });
+  const s = await get('fx', env, night, down);
+  assert.deepEqual([s.state, s.reason, s.age, s.data.dates.at(-1)], ['stale', 'frankfurter.dev: HTTP 503', night - NOW, '2026-10-16']);
+  assert.equal(new URL(down.calls[0]).pathname, `/v1/${addDays('2026-10-17', -FX_DAYS)}..`);   // the URL's dates from now
+  const t = boardText({ now: night, env, fx: s, wx: NONE }).split('\n');
+  assert.ok(t.includes('rate_state=stale|frankfurter.dev: HTTP 503') && t.includes('feature=USD|$') && t.some((l) => l.startsWith('spark=USD|')));
+  assert.equal(t.filter((l) => l.startsWith('rate=') || l.startsWith('rate_chg=')).length, 8);
+  // the entry of 30 Dec holds 2027's list (none of 2026 is left); on 1 January Nager.Date fails
+  const dec30 = Date.UTC(2026, 11, 30, 9) / 1000, jan1 = Date.UTC(2027, 0, 1, 11) / 1000;
+  const h = deps({ cache, answers: ok, now: dec30 });
+  assert.equal((await get('hol', env, dec30, h)).state, 'ok');
+  await Promise.all(h.waits);
+  const nh = deps({ cache, answers: { 'date.nager.at': { status: 503, body: 'x' } }, now: jan1 });
+  const r = await get('hol', env, jan1, nh);
+  assert.deepEqual([r.state, r.reason, holidayLine(r, jan1, env.TZ)], ['stale', 'date.nager.at: HTTP 503', 'holiday=2027-01-01|Neujahr|0']);
+  assert.deepEqual([...cache.m.keys()], ['https://couch.internal/fx?b=EUR&s=USD,GBP,CHF,JPY', 'https://couch.internal/hol?c=DE']);
+});
+
+test('get hol: an entry with no holiday on or after today is old at once (ttl 0), so the next year comes on the next request', async () => {
+  const cache = fakeCache(), late = Date.UTC(2026, 11, 28, 12) / 1000;
+  const no27 = { ...ok, 'date.nager.at/api/v3/PublicHolidays/2027/DE': { status: 404, body: '' } };
+  const a = deps({ cache, answers: no27, now: late });
+  const r1 = await get('hol', env, late, a);
+  await Promise.all(a.waits);
+  assert.deepEqual([r1.state, a.calls.length, holidayLine(r1, late, env.TZ)], ['ok', 2, null]);         // 2026's list only
+  const b = deps({ cache, answers: ok, now: late + 60 });
+  const r2 = await get('hol', env, late + 60, b);
+  await Promise.all(b.waits);
+  assert.deepEqual([r2.state, b.calls.length, holidayLine(r2, late + 60, env.TZ)], ['ok', 2, 'holiday=2027-01-01|Neujahr|4']);
+  const c = deps({ cache, answers: {}, now: late + 120 });
+  assert.deepEqual([(await get('hol', env, late + 120, c)).state, c.calls.length, HOL_TTL], ['ok', 0, 86400]);   // a holiday ahead: HOL_TTL
+});
+
 test('get: an old entry and a failed upstream give stale with the real age; no entry gives none', async () => {
   const cache = fakeCache();
   const d1 = deps({ cache, answers: ok });
@@ -490,6 +569,18 @@ test('get: an old entry and a failed upstream give stale with the real age; no e
   const broke = { ok: true, status: 200, json: async () => { throw new TypeError('terminated'); } };
   const b = await get('fx', env, NOW, deps({ answers: { 'api.frankfurter.dev': { response: broke } } }));
   assert.deepEqual([b.state, b.reason], ['none', 'frankfurter.dev: terminated']);
+});
+
+test('get: the body of an answer that is not 2xx is cancelled, not left open', async () => {
+  let cancelled = 0;
+  const page = () => new Response(new ReadableStream({
+    pull(c) { c.enqueue(new TextEncoder().encode('<html>down</html>')); },
+    cancel() { cancelled++; },
+  }), { status: 503 });
+  const r = await get('wx', env, NOW, deps({ answers: { 'api.open-meteo.com': { response: page() } } }));
+  const f = await get(newsUpstream(parseFeeds(env.NEWS_FEEDS)[0]), env, NOW, deps({ answers: { 'feeds.bbci.co.uk': { response: page() } } }));
+  await new Promise((res) => setTimeout(res, 0));
+  assert.deepEqual([r.state, r.reason, f.reason, cancelled], ['none', 'open-meteo: HTTP 503', 'feeds.bbci.co.uk: HTTP 503', 2]);
 });
 
 test('get: the negative cache: a failed upstream is not waited for, and is tried again after the reply each RETRY_S', async () => {
