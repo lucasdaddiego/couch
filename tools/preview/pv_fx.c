@@ -11,7 +11,8 @@
  * are fixed numbers (sky 1.2 ms, aurora 0.8 ms, rain 0.09 ms), never the
  * host's time. The outputs go into the preview's RSX arena (the textures)
  * and its vertex area in 32-bit stores, as the PPU's fallback writes.
- *   PV_SPU_FAIL=<n>     syscall n fails (0x80010002)
+ *   PV_SPU_FAIL=<n>     syscall n fails (0x80010002); import: the image's
+ *                       import (sysSpuImageImport) fails
  *   PV_FX_LATE=<kind>   the jobs of kind (sky, aurora or rain) from the
  *                       thread's PV_FX_LATE_AT-th job of that kind on
  *                       (default 1) put no report: the PPU's hard deadline;
@@ -22,8 +23,8 @@
  * two reads (0.5.0) come here too, as PS3 Health's preview answers them:
  *   383 (the temperature): Cell 58 C and RSX 54 C, or PV_TEMPS=<cell>,<rsx>;
  *                       PV_383_RC=<hex> refuses it with that rc
- *   409 (the fan policy): speed 82 of 255 (32 %), or PV_FAN=<0..255>;
- *                       PV_409_RC=<hex> refuses it */
+ *   409 (the fan policy): speed 82 of 255 (32 %); PV_409_RC=<hex>
+ *                       refuses it */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -265,7 +266,7 @@ u64 pv_syscall(int n, u64 a, u64 b, u64 c, u64 d, u64 e, u64 f, u64 g)
         if (getenv("PV_409_RC")) return (u32)strtoul(getenv("PV_409_RC"), NULL, 16);
         *(u8 *)(uintptr_t)b = 0;
         *(u8 *)(uintptr_t)c = 1;
-        *(u8 *)(uintptr_t)d = (u8)(getenv("PV_FAN") ? atoi(getenv("PV_FAN")) : 82);
+        *(u8 *)(uintptr_t)d = 82;
         *(u8 *)(uintptr_t)e = 0;
         return 0;
     }

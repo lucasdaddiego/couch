@@ -7,9 +7,8 @@
  * entry holds 32-bit pointers (Health's resolve reads them). So run.zsh
  * writes board_url.txt with a dotted address, the console round's path, and
  * the default URL shows the DNS failure.
- *   PV_BOARD=<file>       the body (default: the Worker test's reply of
- *                         2026-10-10, a reply of 0.1.0's time, below;
- *                         run.zsh always passes the current one)
+ *   PV_BOARD=<file>       the body (run.zsh always passes one; absent: an
+ *                         empty body, which the Board reads as no reply)
  *   PV_BOARD2=<file>      the body of the second and later connects (a
  *                         refresh with new values: the Board's counting
  *                         and glow); absent: PV_BOARD's
@@ -61,26 +60,6 @@
 #include "netinet/in.h"
 #include "sysutil/sysutil.h"
 #include "lv2/systime.h"
-
-#define DEG "\xc2\xb0"
-
-static const char default_body[] =
-    "couch-board 1\n"
-    "now=1792164000\n"
-    "offset=7200\n"
-    "city=Berlin\n"
-    "rate=USD|-|0,8887|16 Oct\n"
-    "rate=GBP|-|1,1850|16 Oct\n"
-    "rate=CHF|-|1,0785|16 Oct\n"
-    "rate_age=42\n"
-    "rate_state=ok\n"
-    "wx_now=11" DEG "|10" DEG "|92%|Overcast|9 km/h|night\n"
-    "day=Today|Rain showers|16" DEG "|11" DEG "|96%\n"
-    "day=Sat|Overcast|16" DEG "|9" DEG "|2%\n"
-    "day=Sun|Drizzle|16" DEG "|10" DEG "|22%\n"
-    "wx_age=310\n"
-    "wx_state=ok\n"
-    "end\n";
 
 enum { K_OK, K_REFUSED, K_SILENT, K_CUT, K_301, K_V2, K_HANG, K_SLOW, K_404, K_SLOWNET, K_KINDS };
 
@@ -186,19 +165,17 @@ s32 netConnect(s32 s, const struct sockaddr *a, socklen_t l)
 }
 
 /* The body of connect n: PV_BOARD2's file after the first when it is set,
- * else PV_BOARD's, else the default; malloc'd, *len bytes. */
+ * else PV_BOARD's, else empty; malloc'd, *len bytes. */
 static char *body_text(int n, int *len)
 {
     const char *p = n > 0 && getenv("PV_BOARD2") ? getenv("PV_BOARD2") : getenv("PV_BOARD");
     FILE *f = p ? fopen(p, "rb") : NULL;
     char *b = malloc(65536);
     if (!b) return NULL;
+    *len = 0;
     if (f) {
         *len = (int)fread(b, 1, 65535, f);
         fclose(f);
-    } else {
-        *len = (int)strlen(default_body);
-        memcpy(b, default_body, (size_t)*len);
     }
     return b;
 }

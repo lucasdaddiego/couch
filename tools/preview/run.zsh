@@ -44,7 +44,6 @@ mkdir -p $OUT
 SFX= AREA_DEF='67 38 1853 1042'                          # the default visible area (93 %)
 [[ $AREA == narrow ]] && { SFX=_narrow; AREA_DEF='160 90 1760 990' }
 D=$'\xc2\xb0' DASH=$'\xe2\x80\x93' NL=$'\n'           # the degree sign, an en dash (U+2013), a line end
-I_ACUTE=$'\xc3\xad'                                   # i acute (U+00ED)
 TZ_DONE=$'done tz_params rc=0x00000000 ok=1\ndone fan_policy rc=0x00000000 ok=1\n'   # the clock settings and the fan read before: no prompt
 TZ_ONLY=$'done tz_params rc=0x00000000 ok=1\n'        # the clock settings only: the Info page's fan prompt (0.5.0)
 URL_LAN=http://192.168.0.3:8787/board                 # a dotted address: the fake peer needs no DNS
@@ -426,6 +425,10 @@ tz_skip|all)       # a first start: the clock's prompt, CIRCLE skips it, the Boa
     JOURNAL= scn tz_skip "30:SNAP=prompt 32:CIRCLE 150:SNAP=tz_skip 152:SELECT 180:SNAP=tz_skip_info 181:EXIT" ;|
 tz_12h|all)        # CROSS at the prompt; TIME_FORMAT 0 (a 12-hour clock), UTC+5:30
     JOURNAL= scn tz_12h "32:CROSS 150:SNAP=tz_12h 152:SELECT 180:SNAP=tz_12h_info 181:EXIT" PV_TIMEFMT=0 PV_TZ=330 ;|
+tz_fail|all)       # 0.5.1's review: the three clock settings' reads fail: the Board's offset sets the clock; Info names the rc
+    scn tz_fail "120:SNAP=tz_fail 122:SELECT 150:SNAP=tz_fail_info 151:EXIT" PV_TZ_FAIL=1 ;|
+tz_summer|all)     # 0.5.1's review: SUMMERTIME on: the clock an hour on (UTC-2); Info's clock row says "with summer time"
+    scn tz_summer "120:SNAP=tz_summer 122:SELECT 150:SNAP=tz_summer_info 151:EXIT" PV_SUMMER=1 ;|
 utf8_off|all)      # text_utf8 failed (the preview's second build): the fold to ASCII
     BIN=pv_utf8_off BODY=accents scn utf8_off "120:SNAP=utf8_off 122:SELECT 150:SNAP=utf8_off_info 151:EXIT" ;|
 accents|all)       # the same reply with UTF-8 text
@@ -469,6 +472,16 @@ fx_late|all)       # SPU 5 never reports its 30th rain job (inside fx_first): th
 fx_late_sky|all)   # the sky's 10th picture never comes: RSX only 2 s after it was sent
     scn fx_late_sky "200:SNAP=fx_late_sky 201:EXIT" PV_FX_LATE=sky PV_FX_LATE_AT=10
     fxends fx_late_sky ;|
+fx_late_start|all) # 0.5.1's review: SPU 2 never puts its start report: fx_start's 2 s deadline, the terminate and the join, RSX only
+    scn fx_late_start "200:SNAP=fx_late_start 201:EXIT" PV_FX_LATE=start
+    fxends fx_late_start ;|
+fx_late_aurora|all) # 0.5.1's review: the waiting screen at night, the aurora's first picture never comes: RSX only 2 s after it was
+                   # sent, fx_aurora closed as failed; the waiting screen is then RSX only's dimmed page
+    BODY=night scn fx_late_aurora "3900:SNAP=fx_late_aurora 3901:EXIT" PV_TZ=660 PV_FX_LATE=aurora PV_MAXFRAMES=4000
+    fxends fx_late_aurora ;|
+fx_import|all)     # 0.5.1's review: the image's import fails: no group, RSX only
+    scn fx_import "120:EXIT" PV_SPU_FAIL=import
+    fxends fx_import ;|
 fx_kat|all)        # SPU 4's known-answer test is wrong: the group stops before its first job
     scn fx_kat "120:SNAP=fx_kat 121:EXIT" PV_FX_KAT=bad
     fxends fx_kat ;|
@@ -584,6 +597,8 @@ info_console|all)  # 0.5.0: SELECT with no fan_policy in the journal: the fan's 
     JOURNAL=$TZ_ONLY scn info_console "120:SELECT 150:SNAP=info_fan_prompt 152:CROSS 180:SNAP=info_console 182:TRIANGLE 210:SNAP=info_night_edit 212:RIGHT 216:UP 220:UP 240:SNAP=info_night_changed 242:CROSS 270:SNAP=info_night_saved 271:EXIT"
     print -r -- "  night.txt: $(< $P/build/sbx/info_console$SFX/$DIR/night.txt); journal: $(command grep -h -e temps -e fan_policy $P/build/sbx/info_console$SFX/$DIR/journal.txt | tr '\n' ';') couch.txt: $(command grep -h -e '^console' -e '^fan_policy' -e '^night' $P/build/sbx/info_console$SFX/$DIR/couch.txt | tr '\n' ';')"
     JOURNAL=$TZ_ONLY scn info_fan_skip "120:SELECT 150:CIRCLE 180:SNAP=info_fan_skipped 181:EXIT" PV_TEMPS=74,71 ;|
+info_rc|all)       # 0.5.1's review: the Info page's two reads refused (383, the temperatures; 409, the fan): their rcs, YELLOW
+    scn info_rc "120:SELECT 150:SNAP=info_rc 151:EXIT" PV_383_RC=0x80010003 PV_409_RC=0x80010003 ;|
 ambient_nightmode|all) # 0.5.0: night.txt 22-07 and 23:00 at the place: the waiting screen is the dim clock on black; 2 min later it
                    # fades out (half way) and comes back at its next place
     NIGHT=22-07 BODY=night scn ambient_nightmode "3720:SNAP=ambient_nightmode 10800:SNAP=ambient_nightmode_fade 10920:SNAP=ambient_nightmode_moved 10921:EXIT" PV_TZ=660 PV_MAXFRAMES=11000
