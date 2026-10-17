@@ -892,6 +892,10 @@ static void zero_block(gfx_vtx *q, u32 n)
 /* Thread 5's job into the block: the word, then the wait (the PPU makes no
  * gfx call until the report: a ring wrap or a drain then would send the
  * draw before its vertices). 1 when the quads are there. */
+/* The rain jobs whose vertices the PPU checks against the report's sum: the
+ * job asks for the sum (p.rain.check) and the check reads it, by one rule. */
+static int rain_checked(void) { return (first_open && R.frames < FIRST_RAIN) || R.jobs % RAIN_CHECK_EVERY == 0; }
+
 static int rain_spu(fx_ctl *c, gfx_vtx *q, u32 nq)
 {
     c->serial = ++serial[RAIN_T];
@@ -918,7 +922,7 @@ static int rain_spu(fx_ctl *c, gfx_vtx *q, u32 nq)
     }
     if (us > RAIN_SLOW_US && ++R.late <= LOG_LATE) couch_log("effects: a late rain report: %.2f ms (frame %u)", (double)us / 1000, (unsigned)P.frame);
     if ((u32)us > R.slowest_us) R.slowest_us = (u32)us;
-    if ((first_open && R.frames < FIRST_RAIN) || R.jobs % RAIN_CHECK_EVERY == 0) {   /* the word sum of every vertex sent */
+    if (c->p.rain.check) {                   /* the word sum of every vertex sent */
         if (fx_vsum((const fx_vtx *)q, 4 * nq) != r->sum) {
             rsx_only(2, "the rain's vertices differ from SPU 5's sum");
             return 0;
@@ -969,6 +973,7 @@ void fx_draw_rain(float alpha)
     c->p.rain.ox = ox;
     c->p.rain.oy = oy;
     c->p.rain.alpha = alpha;
+    c->p.rain.check = (u32)(spu && rain_checked());   /* the PPU's own rain checks nothing */
     if (spu) {
         if (!rain_spu(c, q, nq)) zero_block(q, 4 * nq);
     } else {
