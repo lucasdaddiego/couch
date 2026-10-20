@@ -176,7 +176,12 @@ review, through webMAN's virtual pad and a camera on the TV): every screen
 of the pad's tour, a sky picture in 1.73 ms on the slowest SPU (1.84 ms at
 most; 0.5.0: 2.23 ms), 59.9 frames a second, and the unattended round's two
 screenshots, now copied by the RSX, whole and right; the journal 34 calls
-ok, no freeze. The aurora (the night sky) was not on the TV.
+ok, no freeze. With the second review's fixes (rc2, 2026-10-19, the
+author's own session, "flawless"): a sky picture in 1.42 ms on the slowest
+SPU (1.55 ms at most), SPU 5's rain job in 0.003 ms (0.007 before), the
+frame's busy time 1.20 ms (1.52 before), 59.85 frames a second over 142 s,
+the journal's calls all ok, no freeze. The aurora (the night sky) was not on
+the TV.
 
 ## License
 
