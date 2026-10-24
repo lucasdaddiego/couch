@@ -1,6 +1,6 @@
 #!/bin/zsh
 # The Worker on the Mac's LAN address, for the PS3 and for curl: a git archive of the last commit
-# of worker/ (commit first), a node:22 image, npm ci, the tests, then wrangler dev on
+# of worker/ (commit first), a node:26 image, npm ci, the tests, then wrangler dev on
 # 0.0.0.0:8787 published on the Mac. Ctrl-C stops it; the image is removed at the end.
 #   zsh worker/dev.zsh            (then: curl http://<the Mac's IP>:8787/board)
 #   zsh worker/dev.zsh test       (only the tests)
