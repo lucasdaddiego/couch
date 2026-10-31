@@ -791,7 +791,10 @@ static void article_body(void)
     for (int i = 0; i < nrows; i++) {
         float y = L.bt + row[i].y - (float)s;
         if (y > L.bb + 4) break;
-        if (y + 70 < L.bt) continue;
+        /* a row above the band: a line reaches 70 px below its y, the photo its height (0.6.0 rc1 skipped the photo
+         * once its top was 70 px above the band: a gap where its lower part should have shown) */
+        float reach = row[i].kind == R_PHOTO ? (photo_state == PH_SHOWN ? (float)photo_h : (float)PHOTO_H) : 70;
+        if (y + reach < L.bt) continue;
         switch (row[i].kind) {
         case R_TITLE:
             if (row[i].para) stext_fit(L.col_x, y, F_TITLE, WHITE, L.col_w, A.title + row[i].off);   /* the rest, cut with "..." */
