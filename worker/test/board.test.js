@@ -623,7 +623,7 @@ test('handle: /board on a cold cache: every upstream once; the reply as the firs
   const one = deps({ answers: { ...ok, 'feeds.bbci.co.uk/news/business/rss.xml': { status: 500, body: '' } } });
   const t = await (await handle(new Request('http://couch.test/board'), env, one)).text();
   assert.ok(t.includes('\nnews_state=stale|feeds.bbci.co.uk: HTTP 500\n'));
-  assert.ok(newsUpstream(parseFeeds(env.NEWS_FEEDS)[0]).key().startsWith('https://couch.internal/news2?u='));
+  assert.ok(newsUpstream(parseFeeds(env.NEWS_FEEDS)[0]).key().startsWith('https://couch.internal/news3?u='));
 });
 
 test('handle: /futbol answers the format with no source: state none, today or tomorrow, always 200', async () => {

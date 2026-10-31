@@ -37,7 +37,7 @@
 #define SLIDE_S 0.28                 /* a page's slide */
 
 int page = PAGE_BOARD;
-const char *const page_name[PAGE_N] = {"Board", "News", "Futbol", "Info"};
+const char *const page_name[PAGE_N] = {"Board", "News", "Futbol", "Economia", "Info"};
 int ambient;
 int page_dx;
 
@@ -323,6 +323,7 @@ static void body(int pg, int dx)
     if (pg == PAGE_INFO) info_body();
     else if (pg == PAGE_NEWS) news_body();
     else if (pg == PAGE_FUTBOL) futbol_body();
+    else if (pg == PAGE_ECON) econ_body();
     else board_body();
     shift_pop();
 }
@@ -335,6 +336,7 @@ static void bar_of(int pg, const char *msg, u32 msg_color)
     if (pg == PAGE_INFO) info_bar(y);
     else if (pg == PAGE_NEWS) news_bar(y);
     else if (pg == PAGE_FUTBOL) futbol_bar(y);
+    else if (pg == PAGE_ECON) econ_bar(y);
     else board_bar(y, msg, msg_color);
     shift_pop();
 }

@@ -129,6 +129,46 @@ futbol_state=ok
 end
 "
 }
+econ_ok() {      # 0.6.0: the Economía page's reply, the sources' readings of 2026-10-29 (the catalogue of the Worker's economia.js)
+    print -rn -- "couch-economia 1
+now=1793297934
+ind=inflacion|Inflación mensual|Precios|%|1.9|2026-09-30|1.7|2026-08-31|BCRA
+ind=inflacion_interanual|Inflación interanual|Precios|%|33.4|2026-09-30|33.5|2026-08-31|BCRA
+ind=rem|Inflación esperada 12 meses (REM)|Precios|%|21.1|2026-09-30|21|2026-08-31|BCRA
+ind=uva|UVA|Precios|ARS|2174.89|2026-10-29|2173.56|2026-10-28|BCRA
+ind=cer|CER|Precios|index|861.75|2026-10-29|861.2|2026-10-28|BCRA
+ind=icl|ICL (alquileres)|Precios|index|37.15|2026-10-29|37.13|2026-10-28|BCRA
+ind=linea_pobreza|Línea de pobreza (INDEC)|Precios|ARS|1605497.3487|2026-08-01|1564715.8995|2026-07-01|INDEC
+ind=mayorista|Dólar mayorista (A3500)|Dólar|ARS|1538.4739|2026-10-28|1538.741|2026-10-27|BCRA
+ind=minorista|Dólar minorista (BCRA)|Dólar|ARS|1560.12|2026-10-28|1560|2026-10-27|BCRA
+ind=blue|Dólar blue|Dólar|ARS|1565|2026-10-29|-|-|DolarAPI
+ind=brecha|Brecha blue / oficial|Dólar|%|0.3205|2026-10-29|-|-|DolarAPI
+ind=badlar|BADLAR bancos privados|Tasas y BCRA|%|23.5|2026-10-27|22.1875|2026-10-26|BCRA
+ind=tamar|TAMAR bancos privados|Tasas y BCRA|%|24.5625|2026-10-27|24.125|2026-10-26|BCRA
+ind=plazo_fijo|Plazo fijo 30 días|Tasas y BCRA|%|22.6|2026-10-27|20.92|2026-10-26|BCRA
+ind=reservas|Reservas internacionales|Tasas y BCRA|USDM|50482|2026-10-26|50208|2026-10-23|BCRA
+ind=base_monetaria|Base monetaria|Tasas y BCRA|ARSM|46804518|2026-10-26|46813000|2026-10-23|BCRA
+ind=riesgo_pais|Riesgo país|Tasas y BCRA|pts|763|2026-10-28|-|-|ArgentinaDatos
+ind=emae|EMAE desestacionalizado|Actividad|index|149.6479|2026-07-01|154.1173|2026-06-01|INDEC
+ind=desocupacion|Desocupación (EPH, trimestral)|Actividad|%|7.9|2026-04-01|7.8|2026-01-01|INDEC
+hist=inflacion|2.4,2.7,2.4,2.2,2,2.4,2.9,2.5,2.1,1.9,2.1,1.7,1.9
+econ_age=7
+econ_state=ok
+end
+"
+}
+econ_stale() {   # the entry old, a source failed, two lines missing
+    econ_ok | sed -e '/^ind=tamar/d' -e '/^ind=emae/d' -e 's/^econ_age=7$/econ_age=9000/' -e 's/^econ_state=ok$/econ_state=stale|api.bcra.gob.ar: no answer in 4 s/' |
+        awk '/^econ_age=/ { print "econ_missing=44,143.3_NO_PR_2004_A_31" } { print }'
+}
+econ_none() {    # every source failed: no indicator
+    print -rn -- "couch-economia 1
+now=1793297934
+econ_age=0
+econ_state=none|api.bcra.gob.ar: HTTP 503
+end
+"
+}
 futbol_tomorrow() {
     print -rn -- "couch-futbol 1
 now=1792164000
@@ -330,7 +370,7 @@ scn() {   # name script [VAR=value ...]; JOURNAL, BODY, NEWS, URL, AUTO, BIN, SA
     [[ -n $LAST ]] && { print -r -- "couch-last 1|$(( 1791460800 - LAST ))|${LASTURL:-${URL-$URL_LAN}}"; body_ok } > $sbx/$DIR/board_last.txt   # the last reply, LAST s old
     local b2=()
     [[ -n $BODY2 ]] && { body_$BODY2 > $sbx/body2.txt; b2=(PV_BOARD2=$sbx/body2.txt) }   # the second and later replies
-    local rd=(PV_ARTICLES=$FIX/articles)                 # the reader: /news from the fixture (NEWS=none, 404), the articles
+    local rd=(PV_ARTICLES=$FIX/articles PV_IMAGES=$P/fixtures/images)   # the reader: /news from the fixture (NEWS=none, 404), the articles, the photos (0.6.0) articles
     if [[ ${FUT:-day} != 404 ]]; then                   # the Futbol page: d0 and d1 (FUT=empty, none: d0 so; 404: no /futbol)
         mkdir -p $sbx/futbol
         case ${FUT:-day} in
@@ -339,6 +379,10 @@ scn() {   # name script [VAR=value ...]; JOURNAL, BODY, NEWS, URL, AUTO, BIN, SA
         esac
         futbol_tomorrow > $sbx/futbol/d1.txt
         rd+=(PV_FUTBOL=$sbx/futbol)
+    fi
+    if [[ ${ECON:-ok} != 404 ]]; then                   # the Economía page (0.6.0): ECON=ok (default), stale, none; 404: no /economia
+        econ_${ECON:-ok} > $sbx/econ.txt
+        rd+=(PV_ECON=$sbx/econ.txt)
     fi
     case ${NEWS:-list} in
     (list) rd+=(PV_NEWS=$FIX/news.txt);;
@@ -387,9 +431,10 @@ board_stale|all)   # the dollar upstream failed, the Worker kept its old rates: 
     BODY=stale scn board_stale "120:SNAP=board_stale 121:EXIT" ;|
 board_none|all)    # both upstreams failed with no old data
     BODY=none scn board_none "120:SNAP=board_none 121:EXIT" ;|
-pages|all)         # L1 and R1 cycle the Board, the News and the Futbol page (0.5.0): R1 to the News, R1 to the Futbol page, R1
-                   # wraps to the Board, L1 to the Futbol page; SELECT opens the Info page, R1 there does nothing, CIRCLE goes back
-    scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_futbol 182:R1 210:SNAP=pages_back 212:L1 240:SNAP=pages_l1 242:SELECT 270:SNAP=pages_info 272:R1 300:SNAP=pages_info_r1 302:CIRCLE 330:SNAP=pages_circle 331:EXIT" ;|
+pages|all)         # L1 and R1 cycle the Board, the News, the Futbol and the Economía page (0.6.0): R1 to the News, R1 to the Futbol page,
+                   # R1 to the Economía page, R1 wraps to the Board, L1 to the Economía page; SELECT opens the Info page, R1 there does
+                   # nothing, CIRCLE goes back
+    scn pages "120:SNAP=pages_board 122:R1 128:SNAP=pages_slide 150:SNAP=pages_news 152:R1 180:SNAP=pages_futbol 182:R1 210:SNAP=pages_econ 212:R1 240:SNAP=pages_back 242:L1 270:SNAP=pages_l1 272:SELECT 300:SNAP=pages_info 302:R1 330:SNAP=pages_info_r1 332:CIRCLE 360:SNAP=pages_circle 361:EXIT" ;|
 board_nonews|all)  # a dry forecast, the news feeds failed (0.5.1: no extras, which no Worker sends): no ticker, the News page says why
     NEWS=none BODY=nonews scn board_nonews "120:SNAP=board_nonews 122:R1 150:SNAP=news_none 151:EXIT" ;|
 board_v1|all)      # a Worker of 0.1.0's time: no money, no sky, no news lines, no /news (the new Couch draws what came)
@@ -557,6 +602,10 @@ reader_article|all) # CROSS on the second headline: the loading (a 4 s answer: t
                    # then DOWN held a second: it glides; CIRCLE: the list, its selection kept
     scn reader_article "120:R1 160:DOWN 166:CROSS 200:SNAP=article_loading 460:SNAP=article 462:DOWN 470-540:DOWN 600:SNAP=article_scrolled 602:CIRCLE 640:SNAP=article_back 641:EXIT" PV_ARTICLE_FAIL=slow
     print -r -- "  requests: $(command grep -h '^GET /article' $P/build/sbx/reader_article$SFX/peer.log | tr -d '\r' | tr '\n' ';') couch.txt: $(command grep -h '^article' $P/build/sbx/reader_article$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+reader_photo|all)  # 0.6.0: CROSS on the second headline (f80706d6, photo=1): the article with the place for its photo, then the photo
+                   # (a 1200 x 675 JPEG, decoded to 960 x 540 on the Board thread); DOWN held: the photo scrolls with the text, faded at the band
+    scn reader_photo "120:R1 160:DOWN 166:CROSS 200:SNAP=photo_loading 500:SNAP=photo 502-560:DOWN 620:SNAP=photo_scrolled 622:CIRCLE 660:EXIT"
+    print -r -- "  requests: $(command grep -h -e '^GET /article' -e '^GET /image' $P/build/sbx/reader_photo$SFX/peer.log | tr -d '\r' | tr '\n' ';') couch.txt: $(command grep -h -e '^article' -e '^photo' $P/build/sbx/reader_photo$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
 reader_states|all) # the article's other forms, each one line: the feed's summary (the publisher refused the page), a text cut at 12 KB, an
                    # id the Worker does not know, no answer (SO_RCVTIMEO); CIRCLE back each time; then BBC's article
     scn reader_states "120:R1 160:DOWN 164:DOWN 168:CROSS 210:SNAP=article_summary 212:CIRCLE 220:RIGHT 224:CROSS 270:SNAP=article_cut 272:CIRCLE 280:DOWN 284:LEFT 288:CROSS 330:SNAP=article_none 332:CIRCLE 340:RIGHT 344:CROSS 390:SNAP=article_error 392:CIRCLE 400:SNAP=article_error_back 402:CROSS 450:SNAP=article_bbc 451:EXIT" PV_ARTICLE_FAIL=ok,ok,ok,silent,ok
@@ -578,19 +627,29 @@ board_soon|all)    # 0.5.0: the rain of the next 2 h in the hero's band, the air
                    # with the holiday (8 s each: frame 600 is the futbol line); then raining until 19:30, a poor air, the next game
     BODY=soon scn board_soon "120:SNAP=board_soon 600:SNAP=board_soon_futbol 601:EXIT"
     BODY=soon2 scn board_soon2 "120:SNAP=board_soon2 600:SNAP=board_soon2_futbol 601:EXIT" ;|
-futbol|all)        # 0.5.0: the Futbol page (L1 from the Board): today's leagues with live games, the list scrolled, tomorrow (RIGHT),
+futbol|all)        # 0.5.0: the Futbol page (R1 twice from the Board; L1 since 0.6.0 opens the Economía page): today's leagues with live games, the list scrolled, tomorrow (RIGHT),
                    # back to today (LEFT); a minute later the live list again (every 60 s while a game is live), before the
                    # waiting screen (60 s after the last press in the preview's build)
-    scn futbol "120:L1 160:SNAP=futbol_today 162:DOWN 166:DOWN 170:DOWN 174:DOWN 178:DOWN 182:DOWN 186:DOWN 190:DOWN 230:SNAP=futbol_scrolled 232:RIGHT 280:SNAP=futbol_tomorrow 282:LEFT 300:SNAP=futbol_back 3840:SNAP=futbol_live 3841:EXIT" PV_MAXFRAMES=4000
+    scn futbol "120:R1 124:R1 160:SNAP=futbol_today 162:DOWN 166:DOWN 170:DOWN 174:DOWN 178:DOWN 182:DOWN 186:DOWN 190:DOWN 230:SNAP=futbol_scrolled 232:RIGHT 280:SNAP=futbol_tomorrow 282:LEFT 300:SNAP=futbol_back 3840:SNAP=futbol_live 3841:EXIT" PV_MAXFRAMES=4000
     print -r -- "  requests: $(command grep -h '^GET /futbol' $P/build/sbx/futbol$SFX/peer.log | tr -d '\r' | tr '\n' ';') couch.txt: $(command grep -h '^futbol' $P/build/sbx/futbol$SFX/$DIR/couch.txt | tr '\n' ';')" ;|
+econ|all)          # 0.6.0: the Economía page (L1 from the Board): the indicators by section with the inflation chart; a stale
+                   # reply with two sources missing; the Worker's state none; no /economia (a Worker before the page: 404); SQUARE asks again
+    scn econ "120:L1 170:SNAP=econ 171:EXIT"
+    print -r -- "  requests: $(command grep -h '^GET /economia' $P/build/sbx/econ$SFX/peer.log | tr -d '\r' | tr '\n' ';') couch.txt: $(command grep -h '^econ' $P/build/sbx/econ$SFX/$DIR/couch.txt | tr '\n' ';')"
+    ECON=stale scn econ_stale "120:L1 170:SNAP=econ_stale 171:EXIT"
+    ECON=none scn econ_none "120:L1 170:SNAP=econ_none 171:EXIT"
+    ECON=404 scn econ_404 "120:L1 170:SNAP=econ_404 171:EXIT"
+    scn econ_square "120:L1 800:SQUARE 900:SNAP=econ_square 901:EXIT"
+    print -r -- "  requests: $(command grep -h '^GET /economia' $P/build/sbx/econ_square$SFX/peer.log | tr -d '\r' | tr '\n' ';')"
+    scn econ_slow "120:L1 170:SNAP=econ_skeleton 171:EXIT" PV_ECON_FAIL=slow ;|
 futbol_states|all) # 0.5.0: no games today, the source failed (the Worker's state none), no /futbol (a Worker without the page: 404), the
                    # skeleton of a slow answer
-    FUT=empty scn futbol_empty "120:L1 160:SNAP=futbol_empty 161:EXIT"
-    FUT=none scn futbol_none "120:L1 160:SNAP=futbol_none 161:EXIT"
-    FUT=404 scn futbol_404 "120:L1 160:SNAP=futbol_404 161:EXIT"
-    scn futbol_slow "120:L1 160:SNAP=futbol_skeleton 161:EXIT" PV_FUTBOL_FAIL=slow
+    FUT=empty scn futbol_empty "120:R1 124:R1 160:SNAP=futbol_empty 161:EXIT"
+    FUT=none scn futbol_none "120:R1 124:R1 160:SNAP=futbol_none 161:EXIT"
+    FUT=404 scn futbol_404 "120:R1 124:R1 160:SNAP=futbol_404 161:EXIT"
+    scn futbol_slow "120:R1 124:R1 160:SNAP=futbol_skeleton 161:EXIT" PV_FUTBOL_FAIL=slow
     # 0.5.0's review: SQUARE on the Futbol page asks only its list, not the Board
-    scn futbol_square "120:L1 800:SQUARE 900:SNAP=futbol_square 901:EXIT"
+    scn futbol_square "120:R1 124:R1 800:SQUARE 900:SNAP=futbol_square 901:EXIT"
     print -r -- "  requests: $(command grep -c '^GET /futbol' $P/build/sbx/futbol_square$SFX/peer.log) of /futbol, $(command grep -c '^GET /board' $P/build/sbx/futbol_square$SFX/peer.log) of /board" ;|
 info_console|all)  # 0.5.0: SELECT with no fan_policy in the journal: the fan's first-run prompt, CROSS; the Info page with the Hardware row;
                    # TRIANGLE edits the night, RIGHT to the start, UP twice; CROSS saves night.txt; then SELECT on a hot console

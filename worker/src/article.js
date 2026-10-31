@@ -1,9 +1,10 @@
-// An article page's paragraphs for /article, with the runtime's HTMLRewriter:
+// An article page's paragraphs for /article (since 2026-10-14), with the runtime's HTMLRewriter:
 // a streaming parser (lol-html), no DOM, so the CPU stays in the free plan's 10 ms per request.
 // The publisher's rule picks the body's <p> elements (RULES, by the page's host); a generic rule
 // ("article p", paragraphs of 40 code points or more) runs in the same pass and is used when the
 // publisher's rule finds less than MIN_TEXT code points (a new layout). The read stops early:
 // QUIET_BYTES after the last body paragraph, at ENOUGH_CHARS of body text, or at PAGE_BYTES.
+// The selectors were read on the pages of 2026-10-14 (test/fixtures/article_*.html).
 
 import { clean } from './board.js';
 import { decodeEntities } from './news.js';
@@ -12,15 +13,21 @@ export const PAGE_BYTES = 768 * 1024;  // bytes of a page read, at most (BBC's a
 export const QUIET_BYTES = 64 * 1024;  // bytes read after the last body paragraph, at most
 export const ENOUGH_CHARS = 16384;     // body text (as the page writes it) that is enough for TEXT_BYTES
 export const MIN_TEXT = 200;           // code points of a usable body, at least
-export const MIN_PARA = 3;             // code points of a paragraph, at least (an author's initials)
+export const MIN_PARA = 3;             // code points of a paragraph, at least ("PB": Clarin's initials)
 export const GENERIC_MIN = 40;         // code points of a paragraph of the generic rule, at least
 export const GENERIC = 'article p';
 
-// The publishers' body paragraphs: add a rule for a feed whose pages the generic rule reads
-// badly (a host, and the CSS selector of its body's <p> elements). BBC's (read on 2026-10-14): the
-// <p> inside the text blocks (<div data-block="text">); captions, video notes and the promo
-// links' <p> are in other blocks.
+// The publishers' body paragraphs (each read on 2026-10-14):
+// - Ambito: the <p> children of each <article class="article-body"> (the body comes in several
+//   such articles between the related links; a <p> inside an embedded picture's caption is not a
+//   child, and the lead in <h2 class="news-headline__article-summary"> is outside).
+// - Clarin: the <p> children of the text blocks (<div class="... text-embed">) inside
+//   <div id="cuerpo">; an embedded tweet's <p> sits in a <section> and stays out.
+// - BBC: the <p> inside the text blocks (<div data-block="text">); captions, video notes and
+//   the promo links' <p> are in other blocks.
 export const RULES = [
+  { name: 'ambito', hosts: ['ambito.com'], select: 'article.article-body > p' },
+  { name: 'clarin', hosts: ['clarin.com'], select: '#cuerpo div.text-embed > p' },
   { name: 'bbc', hosts: ['bbc.co.uk', 'bbc.com'], select: 'div[data-block="text"] p' },
 ];
 
@@ -36,7 +43,8 @@ export function ruleFor(url) {
 }
 
 // A page's paragraphs: {paras, how: the rule's name, 'generic' or 'none', bytes: the bytes read,
-// stopped: true when the read stopped before the end}. response: the page's (its body a stream of
+// stopped: true when the read stopped before the end, image: the page's og:image URL or '' (Couch
+// 0.6.0: the reader's photo when the feed names none)}. response: the page's (its body a stream of
 // bytes, UTF-8), url: the page's URL after redirects. Each paragraph's text is the text of the
 // element and its children, entities decoded, spaces collapsed, "|" removed. Rewriter: the
 // runtime's HTMLRewriter (a test passes its own).
@@ -58,6 +66,13 @@ export async function extractPage(response, url, Rewriter = globalThis.HTMLRewri
     },
   });
   const rw = new Rewriter();
+  let image = '';
+  rw.on('meta', {
+    element(e) {
+      const p = String(e.getAttribute('property') || e.getAttribute('name') || '').toLowerCase();
+      if (!image && (p === 'og:image' || p === 'og:image:url' || p === 'twitter:image')) image = String(e.getAttribute('content') || '').trim();
+    },
+  });
   if (rule) rw.on(rule.select, collect(own, true));
   rw.on(GENERIC, collect(generic, !rule));
   const src = response.body ? response.body.getReader() : null;
@@ -98,5 +113,5 @@ export async function extractPage(response, url, Rewriter = globalThis.HTMLRewri
     paras = [];
     how = 'none';
   }
-  return { paras, how, bytes: st.pushed, stopped };
+  return { paras, how, bytes: st.pushed, stopped, image };
 }

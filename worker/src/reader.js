@@ -1,4 +1,4 @@
-// The news reader's replies for Couch: GET /news (the list) and GET
+// The news reader's replies for Couch (since 2026-10-14): GET /news (the list) and GET
 // /article?id= (one item's text), each its own request because a Couch 0.2.0 refuses a Board over
 // 4 KB. Plain UTF-8 text as the Board's (board.js): line 1 the format and its version, then
 // key=value lines with "|" between the fields of a value, then "end". No value holds "|", CR or LF
@@ -128,13 +128,14 @@ export function dateWords(t, tz) {
 //   state=ok | cut | summary|<reason> | none|<reason>
 //   p=<paragraph>                  (0 or more)
 //   end
-export function articleText({ now, tz = 'UTC', item = null, feed = null, a }) {
+export function articleText({ now, tz = 'UTC', item = null, feed = null, a, photo = false }) {
   const out = [`couch-article ${ARTICLE_VERSION}`, `now=${now}`];
   if (!item || a.state === 'none') return [...out, `state=none|${clean(a.reason)}`, 'end', ''].join('\n');
   out.push(`id=${item.id}`, `source=${clean(feed && feed.label) || '-'}`, `category=${clean(feed && feed.category) || '-'}`,
     `title=${clean(item.full || item.title)}`, `date=${dateWords(item.at, tz)}|${age(item.at, now)}`);
   const link = String(item.link || '').replace(/[\u0000- \u007f|]/g, (c) => `%${c.charCodeAt(0).toString(16).padStart(2, '0').toUpperCase()}`);
   if (link && utf8(`link=${link}`) <= LINK_BYTES) out.push(`link=${link}`);
+  if (photo) out.push('photo=1');          // Couch 0.6.0 asks /image?id= for it; an older Couch skips the key
   out.push(a.state === 'ok' || a.state === 'cut' ? `state=${a.state}` : `state=summary|${clean(a.reason)}`);
   const ps = (a.paras || []).map((p) => `p=${p}`);
   // A guard only: the caps above keep the reply within ARTICLE_BYTES (title 300 code points, link

@@ -29,7 +29,12 @@
  *                         an id with no file; absent: HTTP 404
  *   PV_FUTBOL=<dir>       GET /futbol?d=<0 or 1> answers <dir>/d<n>.txt
  *                         (0.5.0's Futbol page); absent, or no file: 404
- *   PV_NEWS_FAIL, PV_ARTICLE_FAIL, PV_FUTBOL_FAIL=<list>  per /news, /article or /futbol request (in
+ *   PV_ECON=<file>        the body of GET /economia (0.6.0's Economía
+ *                         page); absent: 404
+ *   PV_IMAGES=<dir>       GET /image?id=<id> answers <dir>/<id>.jpg as
+ *                         image/jpeg (0.6.0's photo in the reader); absent,
+ *                         or no file: 404
+ *   PV_NEWS_FAIL, PV_ARTICLE_FAIL, PV_FUTBOL_FAIL, PV_ECON_FAIL=<list>  per /news, /article, /futbol or /economia request (in
  *                         their own counts, the last entry repeats), the
  *                         answer of PV_BOARD_FAIL's kinds but refused (a
  *                         connect cannot see its path), and 404; it takes
@@ -108,7 +113,7 @@ static struct {
     char in[2048];
     char *out;
 } sk[NSOCK];
-static int connects, news_reqs, art_reqs, fut_reqs;
+static int connects, news_reqs, art_reqs, fut_reqs, econ_reqs;
 static s32 err_val = NET_ENETDOWN;
 
 s32 *netErrnoLoc(void) { return &err_val; }
@@ -187,16 +192,20 @@ static void req_path(int i, char *path, int n)
     if (!strncmp(sk[i].in, "GET ", 4)) snprintf(path, (size_t)n, "%.*s", (int)strcspn(sk[i].in + 4, " \r\n"), sk[i].in + 4);
 }
 
-/* A file's bytes, malloc'd (64 KB at most), or NULL. */
+#define BODY_CAP (1600 * 1024)              /* a body at most: a photo of 1.5 MB (IMG_MAX) and a bit over, to test the cap */
+
+/* A file's bytes, malloc'd (BODY_CAP at most), or NULL. */
 static char *file_text(const char *p, int *len)
 {
     FILE *f = p ? fopen(p, "rb") : NULL;
     if (!f) return NULL;
-    char *b = malloc(65536);
-    if (b) *len = (int)fread(b, 1, 65535, f);
+    char *b = malloc(BODY_CAP + 1);
+    if (b) *len = (int)fread(b, 1, BODY_CAP, f);
     fclose(f);
     return b;
 }
+
+static int image_req;                        /* the request's body is a picture (image/jpeg), not text */
 
 /* The reader's paths (0.3.1) and the Futbol page's (0.5.0): the body of
  * /news, /article or /futbol, and the request's kind from PV_NEWS_FAIL,
@@ -229,6 +238,25 @@ static int reader_body(int i, char **body, int *len)
         if (!*body) sk[i].kind = K_404;
         return 1;
     }
+    if (!strncmp(q, "image?id=", 9)) {
+        const char *d = getenv("PV_IMAGES");
+        *body = NULL;
+        if (d) {
+            snprintf(p, sizeof p, "%s/%.8s.jpg", d, q + 9);
+            *body = file_text(p, len);
+        }
+        if (!*body) sk[i].kind = K_404;
+        else image_req = 1;
+        return 1;
+    }
+    if (!strcmp(q, "economia")) {
+        const char *f = getenv("PV_ECON_FAIL"), *e = getenv("PV_ECON");
+        if (f) sk[i].kind = kind_of(f, econ_reqs);
+        econ_reqs++;
+        *body = e ? file_text(e, len) : NULL;
+        if (!*body) sk[i].kind = K_404;
+        return 1;
+    }
     if (!strncmp(q, "article?id=", 11)) {
         const char *f = getenv("PV_ARTICLE_FAIL"), *d = getenv("PV_ARTICLES");
         if (f) sk[i].kind = kind_of(f, art_reqs);
@@ -252,9 +280,10 @@ static void answer(int i)
 {
     int blen = 0;
     char *body = NULL;
+    image_req = 0;
     if (!reader_body(i, &body, &blen)) body = body_text(sk[i].n, &blen);
     else if (!body && (body = malloc(1))) blen = 0;
-    char *out = malloc(65536 + 512);
+    char *out = malloc(BODY_CAP + 512);
     if (!body || !out) {
         free(body);
         free(out);
@@ -271,8 +300,8 @@ static void answer(int i)
         if (sk[i].kind == K_V2 && blen >= 12 && !memcmp(body, "couch-news 1", 12)) body[11] = '2';
         if (sk[i].kind == K_V2 && blen >= 14 && !memcmp(body, "couch-futbol 1", 14)) body[13] = '2';
         int send_len = sk[i].kind == K_CUT ? (blen > 30 ? blen - 30 : 0) : blen;
-        n = snprintf(out, 512, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\n"
-                               "Connection: close\r\n\r\n", blen);
+        n = snprintf(out, 512, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nCache-Control: no-store\r\n"
+                               "Connection: close\r\n\r\n", image_req ? "image/jpeg" : "text/plain; charset=utf-8", blen);
         memcpy(out + n, body, (size_t)send_len);
         n += send_len;
     }

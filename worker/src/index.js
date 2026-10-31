@@ -10,10 +10,11 @@
 // usable TLS (README.md, "The Worker").
 
 import { addDays, boardText, clean, localDate, parseRates } from './board.js';
-import { FEED_ITEMS, feedItems, parseFeeds, readFeedHead } from './news.js';
+import { FEED_ITEMS, feedItems, parseFeeds, readFeedHead, imageUrl } from './news.js';
 import { articleText, capParas, NEWS_LIST, newsText } from './reader.js';
 import { extractPage } from './article.js';
 import { futbolText } from './futbol.js';
+import { economiaText } from './economia.js';
 
 const TIMEOUT_MS = 4000;
 export const ARTICLE_TIMEOUT_MS = 8000;  // a publisher's page: the viewer waits for it, the Board does not
@@ -226,7 +227,7 @@ export function newsUpstream(feed) {
   return {
     host: new URL(feed.url).hostname.replace(/^www\./, ''),
     url: () => feed.url,
-    key: () => `https://couch.internal/news2?u=${encodeURIComponent(feed.url)}`,
+    key: () => `https://couch.internal/news3?u=${encodeURIComponent(feed.url)}`,
     ttl: (env) => Number(env.NEWS_TTL) || 600,
     read: readFeed,
     valid: (d) => Array.isArray(d) && d.length > 0,
@@ -251,7 +252,7 @@ export function articleUpstream(item) {
         return { data: null, bad: `HTTP ${r.status}` };
       }
       const page = await (deps.extract || extractPage)(r, r.url || item.link);
-      return { data: capParas(page.paras), bad: 'no paragraphs' };
+      return { data: { ...capParas(page.paras), image: imageUrl(page.image) }, bad: 'no paragraphs' };
     },
     valid: (d) => !!d && Array.isArray(d.paras) && d.paras.length > 0,
   };
@@ -374,22 +375,117 @@ async function newsReply(env, now, deps) {
 // listed (none: state none, and no fetch, so only a link that a configured feed gave is ever
 // fetched), then its page's paragraphs (articleUpstream), else its summary. Always 200, the state
 // in the body.
+// The item of an id: in the cached feeds, else in the listed items (a headline that has left its
+// feed since /news listed it). {item, feed}, or null.
+async function findItem(env, now, deps, id) {
+  const feeds = parseFeeds(env.NEWS_FEEDS);
+  const rs = await Promise.all(feeds.map((f) => get(newsUpstream(f), env, now, deps)));
+  let item = null, feed = null;
+  feeds.forEach((f, i) => {
+    const x = !item && Array.isArray(rs[i].data) ? rs[i].data.find((d) => d && d.id === id) : null;
+    if (x) [item, feed] = [x, f];
+  });
+  if (!item) {
+    const x = (await listedRead(deps)).find((d) => d.id === id);
+    if (x) [item, feed] = [x, { label: x.label, category: x.category }];
+  }
+  return item ? { item, feed } : null;
+}
+
+// GET /image?id=<item id> (Couch 0.6.0): the item's picture, the feed's (news.js's itemImage) or
+// the page's og:image from the article's cache entry (read only: no page fetch here), fetched
+// once and kept in the Cache API as bytes for IMAGE_TTL. 200 with the image's own type (JPEG or
+// PNG only) and its length; a text 404 for anything else (no image, too large, not an image, the
+// fetch failed). Only an item of a cached feed is served: the Worker is no open proxy.
+export const IMAGE_MAX = 1572864;       // 1.5 MB: Couch's IMG_MAX
+export const IMAGE_TTL = 86400;
+export const IMAGE_TIMEOUT_MS = 6000;
+const IMAGE_TYPES = ['image/jpeg', 'image/png'];
+const imageResponse = (bytes, type) => new Response(bytes, {
+  headers: { 'content-type': type, 'content-length': String(bytes.byteLength), 'cache-control': 'no-store' },
+});
+async function readBytes(r, cap) {
+  const reader = r.body.getReader(), chunks = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > cap) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.byteLength;
+  }
+  return out;
+}
+async function imageReply(env, now, deps, id) {
+  const bad = (reason) => new Response(`${reason}\n`, { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+  try {
+    if (!/^[0-9a-f]{8}$/.test(id)) return bad('bad id');
+    const found = await findItem(env, now, deps, id);
+    if (!found) return bad('unknown id');
+    let url = imageUrl(found.item.image);
+    if (!url && found.item.link) {
+      try {
+        const r = await get(articleUpstream({ ...found.item, link: new URL(found.item.link).href }), env, now, deps, { cacheOnly: true });
+        url = imageUrl(r.data && r.data.image);
+      } catch {
+        url = '';
+      }
+    }
+    if (!url) return bad('no image');
+    const key = `https://couch.internal/image?u=${encodeURIComponent(url)}`;
+    try {
+      const hit = await deps.cache.match(key);
+      if (hit) return imageResponse(new Uint8Array(await hit.arrayBuffer()), hit.headers.get('content-type') || 'image/jpeg');
+    } catch { /* no cache: fetched */ }
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    let r;
+    try {
+      r = await deps.fetch(url, { timeout: IMAGE_TIMEOUT_MS, headers: { 'user-agent': 'couch-board' } });
+    } catch (e) {
+      return bad(`${host}: ${errWords(e, IMAGE_TIMEOUT_MS)}`);
+    }
+    const drop = () => { if (r.body) r.body.cancel().catch(() => {}); };
+    if (!r.ok) {
+      drop();
+      return bad(`${host}: HTTP ${r.status}`);
+    }
+    const type = String(r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!IMAGE_TYPES.includes(type)) {
+      drop();
+      return bad(`${host}: not an image (${type || 'no type'})`);
+    }
+    const len = Number(r.headers.get('content-length'));
+    if (Number.isFinite(len) && len > IMAGE_MAX) {
+      drop();
+      return bad(`${host}: too large (${len} bytes)`);
+    }
+    const bytes = r.body ? await readBytes(r, IMAGE_MAX) : null;
+    if (!bytes || !bytes.byteLength) return bad(`${host}: ${bytes ? 'empty' : `too large (over ${IMAGE_MAX} bytes)`}`);
+    deps.waitUntil(Promise.resolve().then(() => deps.cache.put(key, new Response(bytes, {
+      headers: { 'content-type': type, 'cache-control': `max-age=${IMAGE_TTL}` },
+    }))).catch(() => {}));
+    return imageResponse(bytes, type);
+  } catch (e) {
+    return bad(`worker: ${clean((e && e.message) || e).slice(0, 60)}`);
+  }
+}
+
 async function articleReply(env, now, deps, id) {
   const tz = env.TZ || 'UTC';
   try {
     if (!/^[0-9a-f]{8}$/.test(id)) return articleText({ now, tz, a: { state: 'none', reason: 'bad id' } });
-    const feeds = parseFeeds(env.NEWS_FEEDS);
-    const rs = await Promise.all(feeds.map((f) => get(newsUpstream(f), env, now, deps)));
-    let item = null, feed = null;
-    feeds.forEach((f, i) => {
-      const x = !item && Array.isArray(rs[i].data) ? rs[i].data.find((d) => d && d.id === id) : null;
-      if (x) [item, feed] = [x, f];
-    });
-    if (!item) {                                          // a headline that has left its feed since /news listed it
-      const x = (await listedRead(deps)).find((d) => d.id === id);
-      if (x) [item, feed] = [x, { label: x.label, category: x.category }];
-    }
-    if (!item) return articleText({ now, tz, a: { state: 'none', reason: 'unknown id' } });
+    const found = await findItem(env, now, deps, id);
+    if (!found) return articleText({ now, tz, a: { state: 'none', reason: 'unknown id' } });
+    const { item, feed } = found;
     const summary = { state: 'summary', paras: item.summary ? [item.summary] : [] };
     let link = null;
     try {
@@ -401,7 +497,7 @@ async function articleReply(env, now, deps, id) {
     // An old entry (stale) still has the page's text: only no text gives the summary.
     const a = r.data && Array.isArray(r.data.paras) && r.data.paras.length
       ? { state: r.data.cut ? 'cut' : 'ok', paras: r.data.paras } : { ...summary, reason: r.reason };
-    return articleText({ now, tz, item, feed, a });
+    return articleText({ now, tz, item, feed, a, photo: !!(imageUrl(item.image) || imageUrl(r.data && r.data.image)) });
   } catch (e) {
     return articleText({ now, tz, a: { state: 'none', reason: `worker: ${clean((e && e.message) || e).slice(0, 60)}` } });
   }
@@ -411,6 +507,7 @@ async function articleReply(env, now, deps, id) {
 // source of fixtures, so its state is none: a Worker with one gives futbolText that day's data (the
 // normalized form of futbol.js) as get() gives it.
 export const FUTBOL_NONE = 'no f\u00fatbol source in this Worker';
+export const ECON_NONE = 'no economy source in this Worker';
 function futbolReply(env, now, d) {
   const tz = env.TZ || 'UTC';
   try {
@@ -418,6 +515,16 @@ function futbolReply(env, now, d) {
   } catch (e) {
     return ['couch-futbol 1', `now=${now}`, 'futbol_age=0', `futbol_state=none|worker: ${clean((e && e.message) || e).slice(0, 60)}`, 'end', ''].join('\n');
   }
+}
+
+// GET /economia: the Economía page's reply (economia.js, Couch 0.6.0): the indicators of the
+// Argentine economy. The template has no source (the author's private Worker reads the BCRA,
+// INDEC on datos.gob.ar, DolarAPI and ArgentinaDatos: economia.js's catalogue names the ids), so
+// its state is none: a Worker with the sources gives economiaText the econ entry's data, the
+// dollar quotes and the country risk as get() gives them.
+function economiaReply(env, now) {
+  const tz = env.TZ || 'UTC';
+  return economiaText({ now, tz, r: { state: 'none', reason: ECON_NONE, age: 0, data: null }, usd: null, rp: null });
 }
 
 // A request's dependencies in the runtime (the default export's; the tests give a fake fetch and
@@ -440,6 +547,8 @@ export async function handle(request, env, deps) {
   if (route === '/news') return textReply(await newsReply(env, deps.now(), deps));
   if (route === '/article') return textReply(await articleReply(env, deps.now(), deps, url.searchParams.get('id') || ''));
   if (route === '/futbol') return textReply(futbolReply(env, deps.now(), url.searchParams.get('d') === '1' ? 1 : 0));
+  if (route === '/economia') return textReply(economiaReply(env, deps.now()));
+  if (route === '/image') return imageReply(env, deps.now(), deps, url.searchParams.get('id') || '');
   if (route !== '/board') {
     return new Response('not found\n', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   }

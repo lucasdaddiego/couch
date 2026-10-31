@@ -9,6 +9,7 @@
  * began. */
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <net/net.h>
 #include <net/netctl.h>
@@ -178,36 +179,38 @@ static int tcp_connect(in_addr_t ip, int port, s32 *err, volatile int *on)
  * reply, /news's 32 KB (0.3.1's reader; the Board's is 4 KB) */
 static char rx[HEAD_MAX + NEWS_MAX + 1] __attribute__((aligned(128)));
 
-void http_get(const http_url *u, char *body, int max, http_result *r, volatile int *on)
+/* The GET's start, shared by both GETs: the result cleared, the lookup, the
+ * connect, the request sent. The socket, or -1 with r->step set. */
+static int get_start(const http_url *u, http_result *r, volatile int *on)
 {
     char req[400];
     in_addr_t ip;
     s64 t0 = sysGetSystemTime();
     memset(r, 0, sizeof *r);
     r->connect_us = -1;
-    body[0] = 0;
+    r->expect = -1;
     if (!*on) {
         r->step = H_STOPPED;
-        return;
+        return -1;
     }
     if (resolve(u->host, &ip)) {             /* the one call no shutdown ends: the resolver's own timeout */
         r->step = H_DNS;
-        return;
+        return -1;
     }
     if (!*on) {
         r->step = H_STOPPED;
-        return;
+        return -1;
     }
     int s = tcp_connect(ip, u->port, &r->err, on);
     if (s < 0) {
         r->step = s == -1 ? H_SOCKET : s == -2 ? H_CONNECT : H_STOPPED;
-        return;
+        return -1;
     }
     r->connect_us = sysGetSystemTime() - t0;   /* the DNS lookup and the TCP connect */
     if (!*on) {                              /* the exit came during the connect: a shutdown before it may not end a connect */
         sock_close(s);
         r->step = H_STOPPED;
-        return;
+        return -1;
     }
     char port[8] = "";
     if (u->port != 80) snprintf(port, sizeof port, ":%d", u->port);
@@ -217,8 +220,32 @@ void http_get(const http_url *u, char *body, int max, http_result *r, volatile i
         r->err = net_errno;
         sock_close(s);
         r->step = H_SEND;
-        return;
+        return -1;
     }
+    return s;
+}
+
+/* The head's Content-Length (the head's n bytes, case not counted), -1 for none or a bad one. */
+static int content_length(const char *h, int n)
+{
+    for (int i = 0; i + 16 < n; i++) {
+        if ((h[i] == '\n') && !strncasecmp(h + i + 1, "content-length:", 15)) {
+            const char *p = h + i + 16;
+            while (p < h + n && *p == ' ') p++;
+            long v = 0;
+            int d = 0;
+            while (p < h + n && *p >= '0' && *p <= '9' && d < 10) v = v * 10 + (*p++ - '0'), d++;
+            return d ? (int)(v > 0x7fffffff ? 0x7fffffff : v) : -1;
+        }
+    }
+    return -1;
+}
+
+void http_get(const http_url *u, char *body, int max, http_result *r, volatile int *on)
+{
+    body[0] = 0;
+    int s = get_start(u, r, on);
+    if (s < 0) return;
     int got = 0, head = 0, fail = 0, chunked = 0, scanned = 0;   /* scanned: the body's bytes read for the end line */
     while (1) {
         if (!*on) {
@@ -277,4 +304,76 @@ void http_get(const http_url *u, char *body, int max, http_result *r, volatile i
         body[len] = 0;
         r->len = len;
     }
+}
+
+void http_get_bin(const http_url *u, unsigned char *buf, int cap, http_result *r, volatile int *on)
+{
+    int s = get_start(u, r, on);
+    if (s < 0) return;
+    int got = 0, head = 0, fail = 0, chunked = 0, len = 0;   /* got: the head's bytes in rx; len: the body's bytes in buf */
+    while (1) {
+        if (!*on) {
+            fail = H_STOPPED;
+            break;
+        }
+        ssize_t k;
+        if (!head) {                         /* the head through rx, as the text GET */
+            int room = HEAD_MAX - got;
+            if (room <= 0) {
+                fail = H_HEAD;
+                break;
+            }
+            k = netRecv(s, rx + got, (size_t)room, 0);
+            if (k < 0) {
+                r->err = net_errno;
+                fail = H_RECV;
+                break;
+            }
+            if (k == 0) break;
+            got += (int)k;
+            head = http_head(rx, got, &r->http, r->location, sizeof r->location, &chunked);
+            if (head < 0) {
+                head = 0;
+                fail = H_NOT_HTTP;
+                break;
+            }
+            if (!head) continue;
+            if (r->http != 200 || chunked) break;
+            r->expect = content_length(rx, head);
+            if (r->expect > cap) {
+                fail = H_OVER;
+                break;
+            }
+            len = got - head;                /* the body's first bytes came with the head */
+            if (len > cap) {
+                fail = H_OVER;
+                break;
+            }
+            memcpy(buf, rx + head, (size_t)len);
+        } else {
+            int room = cap - len;
+            if (room <= 0) {                 /* a body past cap: one more byte tells */
+                unsigned char one;
+                k = netRecv(s, &one, 1, 0);
+                if (k > 0) fail = H_OVER;
+                break;
+            }
+            k = netRecv(s, buf + len, (size_t)room, 0);
+            if (k < 0) {
+                r->err = net_errno;
+                fail = H_RECV;
+                break;
+            }
+            if (k == 0) break;
+            len += (int)k;
+        }
+        if (r->expect >= 0 && len >= r->expect) break;   /* the whole body: no wait for the close */
+    }
+    sock_close(s);
+    if (!head) r->step = fail ? fail : H_CLOSED;
+    else if (r->http != 200) r->step = H_STATUS;
+    else if (chunked) r->step = H_CHUNKED;
+    else if (fail == H_OVER || fail == H_STOPPED) r->step = fail;
+    else r->step = H_OK;                     /* a recv error after the head: the bytes as they came, r->expect tells a cut */
+    r->len = head && r->step == H_OK ? len : 0;
 }

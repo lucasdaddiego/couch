@@ -46,6 +46,7 @@ typedef struct {
     int http;                        /* the status, 0 before a head */
     char location[128];              /* a 3xx answer's Location */
     int len;                         /* the body's bytes */
+    int expect;                      /* http_get_bin: the head's Content-Length, -1 when it has none; a len below it is a cut body */
     s64 connect_us;                  /* from the GET's start to the connect's end (DNS and TCP), -1 with no connection */
 } http_result;
 
@@ -57,6 +58,12 @@ typedef struct {
  * body gets the body and a NUL (max + 1 bytes). *on is read between the
  * steps: 0 stops the GET (H_STOPPED). The Board thread's: a static buffer. */
 void http_get(const http_url *u, char *body, int max, http_result *r, volatile int *on);
+/* The same GET for a binary body (0.6.0: the reader's photo from /image):
+ * the body goes straight into buf (cap bytes, no NUL), read until the
+ * server closes or the head's Content-Length came (r->expect; -1 when the
+ * head names none), H_OVER past cap. No end line is looked for: a picture
+ * can hold those bytes. The Board thread's. */
+void http_get_bin(const http_url *u, unsigned char *buf, int cap, http_result *r, volatile int *on);
 /* The exit (board_stop), after it set *on to 0: netShutdown on the GET's
  * socket while one is open, so that a recv or send in the Board thread
  * returns at once. It does not end a DNS lookup, and a connect may run on

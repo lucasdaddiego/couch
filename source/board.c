@@ -24,6 +24,8 @@
 #include "spu_fx_run.h"
 #include "reader.h"
 #include "futbol.h"
+#include "econ.h"
+#include <ps3gfx/image.h>
 
 #define PERIOD_US 300000000LL        /* a fetch every 5 min */
 #define RETRY_US 60000000LL          /* 60 s after a failure */
@@ -38,6 +40,8 @@ static http_url url;                 /* set before the thread starts, only read 
 static char news_path[160];          /* /news and /article?id= beside the Board's path (url_sibling) */
 static char art_base[160];
 static char fut_base[160];           /* /futbol?d= (0.5.0) */
+static char econ_path[160];          /* /economia (0.6.0) */
+static char img_base[160];           /* /image?id= (0.6.0) */
 
 /* The handoff: the thread writes the slot only while ready is 0 and sets
  * ready after a fence; the main thread parses it and clears ready after a
@@ -55,6 +59,8 @@ static struct {
     news_data news;
     article_data art;
     futbol_data fut;
+    econ_data econ;
+    int img_ok, img_w, img_h, img_rc;   /* an image reply: decoded into img_px; img_rc the decoder's (-3: the body was cut) */
     int qr_ok;
     u8 qr[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAX_VERSION)];
     u8 qr_tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAX_VERSION)];
@@ -70,6 +76,14 @@ static volatile int busy = -1;       /* the request in flight (REQ_*), -1 none *
  * id is not the one open). */
 static volatile int want_news, want_art;
 static volatile int want_fut;        /* the futbol day asked for, plus 1 (0: none) */
+static volatile int want_econ;       /* 1 asks for /economia (0.6.0) */
+static volatile int want_img;        /* the number of the latest image request (0: none), as want_art */
+static volatile char img_req[9];
+static int img_seq;
+/* the photo's buffers (0.6.0): the bytes as they come, the texels, the decoder's arena */
+static unsigned char img_raw[IMG_MAX] __attribute__((aligned(128)));
+static u32 img_px[PHOTO_W * PHOTO_H] __attribute__((aligned(128)));
+static unsigned char img_arena[IMAGE_ARENA_MIN] __attribute__((aligned(16)));
 static volatile char art_req[9];
 static int art_seq;
 static volatile s64 next_us, last_us;   /* the thread's schedule: the next fetch, the last one's start */
@@ -128,11 +142,24 @@ static void reader_paths(void)
         snprintf(art_base, sizeof art_base, "/article?id=");
     if (url_sibling(url.path, "futbol?d=", fut_base, sizeof fut_base) || strlen(fut_base) + 2 >= sizeof url.path)
         snprintf(fut_base, sizeof fut_base, "/futbol?d=");
+    if (url_sibling(url.path, "economia", econ_path, sizeof econ_path)) snprintf(econ_path, sizeof econ_path, "/economia");
+    if (url_sibling(url.path, "image?id=", img_base, sizeof img_base) || strlen(img_base) + 8 >= sizeof url.path)
+        snprintf(img_base, sizeof img_base, "/image?id=");
 }
 
 void board_ask_news(void) { want_news = 1; }
 
 void board_ask_futbol(int day) { want_fut = (day ? 1 : 0) + 1; }
+
+void board_ask_econ(void) { want_econ = 1; }
+
+void board_ask_image(const char *id)
+{
+    for (int i = 0; i < 9; i++) img_req[i] = id[i];
+    __sync_synchronize();
+    if (++img_seq <= 0) img_seq = 1;
+    want_img = img_seq;
+}
 
 void board_ask_article(const char *id)
 {
@@ -160,18 +187,42 @@ static int take_article(void)
 /* A news or article reply: the parse and the QR code, in this thread. The
  * QR code: the smallest version at ECC low (big modules for a phone across
  * the room), its ECC raised where that version has room (Health's call). */
+/* The image's request, when one waits: 1 and its id in slot.id (as take_article). */
+static int take_image(void)
+{
+    int s = want_img;
+    if (!s) return 0;
+    __sync_synchronize();
+    for (int i = 0; i < 9; i++) slot.id[i] = img_req[i];
+    slot.id[8] = 0;
+    __sync_synchronize();
+    return __sync_bool_compare_and_swap(&want_img, s, 0);
+}
+
 static void reader_work(void)
 {
     int fold = utf8_rc != 0;                 /* set before the thread started */
     slot.prc = -1;
     slot.qr_ok = 0;
+    slot.img_ok = 0;
     if (slot.r.step != H_OK) return;
+    if (slot.kind == REQ_IMAGE) {            /* the decode on this thread: a second or two for a big JPEG, no frame pays */
+        int whole = slot.r.expect < 0 || slot.r.len >= slot.r.expect;
+        slot.img_rc = whole ? image_decode(img_raw, slot.r.len, img_px, PHOTO_W, PHOTO_H, &slot.img_w, &slot.img_h, img_arena, sizeof img_arena) : -3;
+        slot.img_ok = slot.img_rc == 0;
+        slot.prc = slot.img_ok ? BP_OK : BP_NOT_BOARD;
+        return;
+    }
     if (slot.kind == REQ_NEWS) {
         slot.prc = news_parse(slot.body, slot.r.len, fold, &slot.news);
         return;
     }
     if (slot.kind == REQ_FUTBOL) {
         slot.prc = futbol_parse(slot.body, slot.r.len, fold, &slot.fut);
+        return;
+    }
+    if (slot.kind == REQ_ECON) {
+        slot.prc = econ_parse(slot.body, slot.r.len, fold, &slot.econ);
         return;
     }
     slot.prc = article_parse(slot.body, slot.r.len, fold, &slot.art);
@@ -228,7 +279,9 @@ static void board_thread(void *unused)
         int kind = -1;
         if (!ready) {
             if (take_article()) kind = REQ_ARTICLE;     /* the viewer waits for it: first */
+            else if (take_image()) kind = REQ_IMAGE;    /* its photo (0.6.0): right after */
             else if (want_fut) kind = REQ_FUTBOL;   /* the page waits for it: before the Board (0.5.0's review) and the news list */
+            else if (want_econ) kind = REQ_ECON;    /* the Economía page waits for it (0.6.0) */
             else if (now >= next || (want && now - last_us >= GAP_US)) kind = REQ_BOARD;
             else if (want_news) kind = REQ_NEWS;
         }
@@ -248,12 +301,20 @@ static void board_thread(void *unused)
                 want_fut = 0;
                 snprintf(u.path, sizeof u.path, "%s%d", fut_base, slot.day);
                 max = FUTBOL_MAX;
+            } else if (kind == REQ_ECON) {
+                want_econ = 0;
+                snprintf(u.path, sizeof u.path, "%s", econ_path);
+                max = ECON_MAX;
+            } else if (kind == REQ_IMAGE) {
+                snprintf(u.path, sizeof u.path, "%s%s", img_base, slot.id);
+                max = IMG_MAX;
             } else {
                 snprintf(u.path, sizeof u.path, "%s%s", art_base, slot.id);
                 max = ARTICLE_MAX;
             }
             busy = kind;
-            http_get(&u, slot.body, max, &slot.r, &board_on);
+            if (kind == REQ_IMAGE) http_get_bin(&u, img_raw, IMG_MAX, &slot.r, &board_on);
+            else http_get(&u, slot.body, max, &slot.r, &board_on);
             slot.at = sysGetSystemTime();
             slot.us = slot.at - now;
             if (kind != REQ_BOARD && board_on) reader_work();
@@ -332,10 +393,10 @@ void board_refresh(void)
  * number of a reply of another version. */
 static void fetch_words(char *w, int n, const http_result *r, int prc, int brief, int kind, int version)
 {
-    static const char *const what[4] = {"Board", "news list", "article", "futbol list"};
-    static const int cap_kb[4] = {BOARD_MAX / 1024, NEWS_MAX / 1024, ARTICLE_MAX / 1024, FUTBOL_MAX / 1024};
+    static const char *const what[6] = {"Board", "news list", "article", "futbol list", "economy data", "photo"};
+    static const int cap_kb[6] = {BOARD_MAX / 1024, NEWS_MAX / 1024, ARTICLE_MAX / 1024, FUTBOL_MAX / 1024, ECON_MAX / 1024, IMG_MAX / 1024};
     char e[24];
-    if (kind < REQ_BOARD || kind > REQ_FUTBOL) kind = REQ_BOARD;
+    if (kind < REQ_BOARD || kind > REQ_IMAGE) kind = REQ_BOARD;
     switch (r->step) {
     case H_OK:
         if (prc == BP_OK) snprintf(w, (size_t)n, "ok");
@@ -400,13 +461,22 @@ static void take_reader(void)
     b.news = &slot.news;
     b.art = &slot.art;
     b.fut = &slot.fut;
+    b.econ = &slot.econ;
+    b.img_ok = slot.img_ok;
+    b.img_rc = slot.img_rc;
+    b.img_w = slot.img_w;
+    b.img_h = slot.img_h;
+    b.img = img_px;
     b.qr_ok = slot.qr_ok;
     b.qr = slot.qr;
     fetch_words(b.words, sizeof b.words, &slot.r, slot.prc, 0, slot.kind,
-                slot.kind == REQ_NEWS ? slot.news.version : slot.kind == REQ_FUTBOL ? slot.fut.version : slot.art.version);
+                slot.kind == REQ_NEWS ? slot.news.version : slot.kind == REQ_FUTBOL ? slot.fut.version : slot.kind == REQ_ECON ? slot.econ.version
+                : slot.kind == REQ_IMAGE ? 1 : slot.art.version);
     net_seen(&slot.r, clock_utc());
     if (net_state == NET_UP) net_addr();    /* the thread is idle while ready is set (board_take's note) */
     if (slot.kind == REQ_FUTBOL) futbol_take(&b);
+    else if (slot.kind == REQ_ECON) econ_take(&b);
+    else if (slot.kind == REQ_IMAGE) reader_take_image(&b);
     else reader_take(&b);
 }
 

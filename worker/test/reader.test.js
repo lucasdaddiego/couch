@@ -306,11 +306,11 @@ test('articleText: the lines in order; a long link goes; the date in TZ', () => 
   assert.equal(dateWords(NOW, 'Europe/Berlin'), 'Fri 16 Oct 17:20');
 });
 
-test('get: a feed\'s cache entry holds the items /news and /article need, under news2', async () => {
+test('get: a feed\'s cache entry holds the items /news and /article need, under news3', async () => {
   const d = deps({ answers: feedRoutes });
   const f = parseFeeds(env.NEWS_FEEDS)[0];
   const r = await get(newsUpstream(f), env, NOW, d);
   await Promise.all(d.waits);
-  assert.deepEqual([r.state, r.data.length, Object.keys(r.data[0]).sort()], ['ok', 13, ['at', 'full', 'id', 'link', 'summary', 'title']]);
-  assert.deepEqual([...d.cache.m.keys()], [`https://couch.internal/news2?u=${encodeURIComponent(f.url)}`]);
+  assert.deepEqual([r.state, r.data.length, Object.keys(r.data[0]).sort()], ['ok', 13, ['at', 'full', 'id', 'image', 'link', 'summary', 'title']]);
+  assert.deepEqual([...d.cache.m.keys()], [`https://couch.internal/news3?u=${encodeURIComponent(f.url)}`]);
 });

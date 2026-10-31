@@ -45,6 +45,7 @@
 #include "marquee.h"
 #include "reader.h"
 #include "futbol.h"
+#include "econ.h"
 #include "stext.h"
 
 #ifndef PS3GFX_COMMIT
@@ -312,6 +313,10 @@ static int square(void)
             futbol_refresh();
             return 0;
         }
+        if (page == PAGE_ECON) {
+            econ_refresh();
+            return 0;
+        }
         board_refresh();
         if (page == PAGE_NEWS) reader_refresh();
         return 0;
@@ -432,6 +437,7 @@ int main(void)
         if (stext_on) stext_tick();          /* the scrolls' atlases: from the first News or Futbol page, a few rows a frame until built */
         reader_tick();                       /* the reader's scrolls and the news list's schedule */
         futbol_tick();                       /* the Futbol page's scroll and its schedule */
+        econ_tick();                         /* the Economía page's schedule (0.6.0) */
         info_tick();                         /* the Info page's console temperatures, every 10 s while it shows */
         if (page != was) frame_ev |= EV_PAGE;
         page_draw();

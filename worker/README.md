@@ -114,6 +114,32 @@ when the 16 KB cap left whole leagues out, `futbol_age`, `futbol_state`, `end`.
 `src/futbol.js` formats it from one day in a plain form (its first comment): a
 Worker with a source of fixtures fills that form; this template has none.
 
+`/article` since Couch 0.6.0 adds `photo=1` after `link` when the item has a
+picture: the feed's (`src/news.js`'s `itemImage`: the first `media:content`
+that is an image, else `media:thumbnail`, else an image `enclosure`, else the
+first `<img>` of the description) or the page's `og:image` (read by
+`extractPage` into the article's cache entry). `GET /image?id=<item id>`
+then answers the picture's own bytes (JPEG or PNG only, 1.5 MB at most, read
+once and kept in the Cache API for a day) with its type and length, or a
+text 404 (no picture, too large, not an image, the fetch failed, an unknown
+id). Only an item of a cached feed is served: the Worker is no open proxy. The
+feeds' cache entries moved to `news3` (the items gained `image`).
+
+`/economia` (Couch 0.6.0) is `couch-economia 1`, then `now`, an
+`ind=key|label|section|unit|value|date|previous|previous date|source` line
+per indicator (the sections `Precios`, `Dólar`, `Tasas y BCRA` and
+`Actividad`; the units `%`, `ARS`, `USDM`, `ARSM`, `pts` and `index`; the
+numbers in the C form, a dot decimal; `-` for no previous reading), a
+`hist=inflacion|v1,v2,...` line (the monthly inflation of the last 13
+months, oldest first), `econ_missing=ids` when a source gave nothing,
+`econ_age`, `econ_state`, `end`; at most 8 KB. `src/economia.js` holds the
+catalogue (the same as the `dolar economia` command's) with each source's
+id: the BCRA's statistics API v4 by variable, INDEC's series on datos.gob.ar,
+DolarAPI's blue and oficial for the gap, ArgentinaDatos' country risk, all
+public and keyless. This template answers with no source (state `none`); a
+Worker with them fetches the readings into one cache entry and gives
+`economiaText` that entry with the dollar quotes and the country risk.
+
 ## Tests and deploy
 
 - `zsh dev.zsh test` (from the repo: `zsh worker/dev.zsh test`) runs every

@@ -14,8 +14,8 @@
 
 #include <ppu-types.h>
 
-enum { PAGE_BOARD, PAGE_NEWS, PAGE_FUTBOL, PAGE_INFO, PAGE_N };
-#define PAGE_CYCLE 3                 /* L1/R1 cycle the Board, the News and the Futbol page; SELECT opens the Info page */
+enum { PAGE_BOARD, PAGE_NEWS, PAGE_FUTBOL, PAGE_ECON, PAGE_INFO, PAGE_N };
+#define PAGE_CYCLE 4                 /* L1/R1 cycle the Board, the News, the Futbol and the Economía page; SELECT opens the Info page */
 extern int page;                     /* the page on the TV (during a slide: the page that comes in) */
 extern const char *const page_name[PAGE_N];
 
@@ -96,6 +96,8 @@ void news_body(void);
 void news_bar(float y);
 void futbol_body(void);
 void futbol_bar(float y);
+void econ_body(void);
+void econ_bar(float y);
 void info_body(void);
 void info_bar(float y);
 

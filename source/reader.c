@@ -63,8 +63,16 @@ static char art_err[220];
 static double as_pos, as_target, hold_t0 = -1;
 static float a_view = 1, a_total = 1, a_step = 50;   /* the article's band, content and line step, from the last draw */
 
-/* the article's rows: the title's lines, the meta row, the state line, the rule, the paragraphs' lines, the end */
-enum { R_TITLE, R_META, R_STATE, R_RULE, R_LINE, R_END };
+/* the article's photo (0.6.0): asked right after an article reply with photo=1, decoded on
+ * the Board thread (board.c), shown in a texture pair of PHOTO_W x PHOTO_H made at the first
+ * photo (RSX memory is never given back: one pair for every article) */
+enum { PH_NONE, PH_LOADING, PH_SHOWN, PH_FAILED };
+static int photo_state, photo_w, photo_h, photo_tex;   /* photo_tex: the pair exists (1), or could not be made (-1) */
+static tex_pair photo;
+#define PHOTO_GAP 26
+
+/* the article's rows: the title's lines, the meta row, the state line, the rule, the photo, the paragraphs' lines, the end */
+enum { R_TITLE, R_META, R_STATE, R_RULE, R_PHOTO, R_LINE, R_END };
 #define AROWS 900
 #define TITLE_LINES 6                /* the title's lines, at most: the last ends in "..." when it goes on */
 static struct {
@@ -199,6 +207,7 @@ static void open_article(void)
     hold_t0 = -1;
     nrows = wrapped_w = 0;
     qr_ok = 0;
+    photo_state = PH_NONE;
     if (net_state != NET_UP || !board_running()) {
         art = ART_ERROR;
         snprintf(art_err, sizeof art_err, "The article cannot load: the network is not up.");
@@ -332,12 +341,45 @@ void reader_take(const board_reply *b)
         nrows = wrapped_w = 0;
         as_pos = as_target = 0;
         art = ART_SHOWN;
+        photo_state = PH_NONE;
+        if (A.has_photo) {                   /* 0.6.0: the photo right after, the row reserved meanwhile */
+            photo_state = PH_LOADING;
+            board_ask_image(art_id);
+        }
     } else {
         art = ART_ERROR;
         if (b->prc == BP_OK)
             snprintf(art_err, sizeof art_err, "The Worker has no article for this headline: %s.", a->reason[0] ? a->reason : "no reason given");
         else snprintf(art_err, sizeof art_err, "The article did not load: %s.", b->words);
     }
+}
+
+/* The photo's reply (0.6.0): the texels into the pair's written texture, then the swap (after
+ * ui_flip returned: board_take runs at the loop's top, no frame in flight), the rows made again
+ * with its height. A reply of another article, or of a closed one, is dropped. */
+void reader_take_image(const board_reply *b)
+{
+    char head[64], what[120] = "";
+    int open = art == ART_SHOWN && !strcmp(b->id, art_id) && photo_state == PH_LOADING;
+    if (b->img_ok) snprintf(what, sizeof what, "%d x %d texels, pair %s", b->img_w, b->img_h, photo_tex > 0 ? "ok" : photo_tex < 0 ? "failed" : "new");
+    else if (b->r->step == H_OK) snprintf(what, sizeof what, "%s (rc %d)", b->img_rc == -3 ? "cut: the bytes ended before Content-Length" : b->img_rc == -2 ? "the decoder's arena ran out" : "not a PNG or JPEG the decoder reads", b->img_rc);
+    snprintf(head, sizeof head, "photo %s%s", b->id, open ? "" : " (closed: dropped)");
+    log_reply(b, head, what);
+    if (!open) return;
+    if (b->img_ok && !photo_tex) photo_tex = tex_pair_new(&photo, PHOTO_W, PHOTO_H, GFX_TEX_A8R8G8B8, 1) == 0 ? 1 : -1;
+    if (b->img_ok && photo_tex > 0 && b->img_w > 0 && b->img_h > 0) {
+        /* the pair's texture is PHOTO_W x PHOTO_H: the image's rows (b->img_w wide) land in its top left, the draw shows that part */
+        const gfx_tex *t = tex_pair_wtex(&photo);
+        gfx_tex sub = *t;
+        sub.w = (u16)b->img_w;
+        sub.h = (u16)b->img_h;
+        tex_upload(&sub, tex_pair_written(&photo), b->img, (u32)b->img_w);
+        tex_pair_swap(&photo);
+        photo_w = b->img_w;
+        photo_h = b->img_h;
+        photo_state = PH_SHOWN;
+    } else photo_state = PH_FAILED;
+    nrows = wrapped_w = 0;                   /* the rows again: the photo's own height, or none */
 }
 
 /* ---- the drawing's parts ----------------------------------------------------------------------- */
@@ -639,6 +681,10 @@ static void make_rows(float w)
     }
     row[nrows].kind = R_RULE, row[nrows].y = y, nrows++;
     y += 26;
+    if (photo_state == PH_LOADING || photo_state == PH_SHOWN) {   /* the photo, or its place while it loads (PHOTO_H: the rows move when a smaller one comes) */
+        row[nrows].kind = R_PHOTO, row[nrows].y = y, nrows++;
+        y += (float)(photo_state == PH_SHOWN ? photo_h : PHOTO_H) + PHOTO_GAP;
+    }
     f = BODY_FONT;
     static int poff[ART_TEXT / 8], plen[ART_TEXT / 8];
     for (int p = 0; p < A.n_para && nrows < AROWS - 1; p++) {
@@ -762,6 +808,20 @@ static void article_body(void)
         case R_RULE: {
             float k = stext_alpha(y, y + 1);
             if (k > 0) rect(L.col_x, y, L.col_w, 1, alpha_times(0xffffff30, k));
+            break;
+        }
+        case R_PHOTO: {
+            /* the part inside the band (the band hides an element not whole in it: its rule for text lines), one alpha for it;
+             * the corners rounded only when the whole photo shows */
+            float ph = photo_state == PH_SHOWN ? (float)photo_h : (float)PHOTO_H, pw = photo_state == PH_SHOWN ? (float)photo_w : (float)PHOTO_W;
+            float y0 = y > L.bt ? y : L.bt, y1 = y + ph < L.bb ? y + ph : L.bb;
+            if (y1 - y0 < 2) break;
+            float k = stext_alpha(y0, y1), v0 = (y0 - y) / PHOTO_H, v1 = (y1 - y) / PHOTO_H;
+            if (k <= 0) break;
+            u32 tint = 0xffffff00u | (u32)(k * 255);
+            if (photo_state != PH_SHOWN) round_rect(L.col_x, y0, pw, y1 - y0, 18, alpha_times(0xffffff14, k));   /* loading: a dim place */
+            else if (y0 == y && y1 == y + ph) tex_round(tex_pair_shown(&photo), L.col_x, y, pw, ph, 18, 0, 0, pw / PHOTO_W, ph / PHOTO_H, tint);
+            else tex_sub(tex_pair_shown(&photo), L.col_x, y0, pw, y1 - y0, 0, v0, pw / PHOTO_W, v1, tint);
             break;
         }
         case R_LINE: stext(L.col_x, y, BODY_FONT, BODY_COLOUR, A.text + row[i].off, row[i].len); break;

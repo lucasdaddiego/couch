@@ -229,6 +229,40 @@ const char *wind_compass(int deg);
 /* The dial's foot: "SE, gusts 22", "SE", "Gusts 22" or "". */
 void wind_words(char *buf, int n, int deg, int gusts);
 
+/* The Economía page's reply (0.6.0, GET /economia): "couch-economia 1",
+ * now, an ind line per indicator (key|label|section|unit|value|date|prev|
+ * prev date|source: the numbers in the C form, "-" for no previous
+ * reading), hist=key|v1,v2,... (the last months of one indicator, oldest
+ * first), econ_missing (the sources that gave nothing), econ_age,
+ * econ_state, end. At most ECON_MAX. */
+#define ECON_MAX 8192
+#define ECON_N 24
+#define ECON_HIST 13
+typedef struct {
+    char key[24];
+    char label[124];                 /* 40 code points of 3 bytes and the NUL */
+    char section[32], unit[8];
+    double value, prev;
+    int has_prev;
+    char date[12], prev_date[12];
+    char source[24];
+} econ_ind;
+typedef struct {
+    int version;
+    long now;
+    int n, more;                     /* more: ind lines past ECON_N */
+    econ_ind ind[ECON_N];
+    int n_hist;
+    double hist[ECON_HIST];
+    char hist_key[24];
+    char missing[160];               /* econ_missing's text, "" for none */
+    board_feed feed;                 /* econ_age and econ_state */
+} econ_data;
+/* The body into *d, with the return values of news_parse (line 1
+ * "couch-economia 1"). fold as board_parse's. An ind line with fewer than
+ * nine fields or a value that is not a number is skipped. */
+int econ_parse(const char *body, int n, int fold, econ_data *d);
+
 /* 1 when the body holds its end line with the line end ("\nend\n" or
  * "\nend\r\n"): the thread stops reading there, without the server's close. */
 int board_has_end(const char *body, int n);
@@ -399,6 +433,7 @@ typedef struct {
     int n_para;
     int para_off[ART_PARAS];         /* each paragraph's start in text, NUL-ended */
     int text_cut;                    /* 1 when a p= line did not fit in text (or past ART_PARAS) */
+    int has_photo;                   /* photo=1 (0.6.0): the Worker has a picture for it, /image?id= gives it */
     char text[ART_TEXT];
 } article_data;
 /* The body into *a, with the return values of news_parse (line 1

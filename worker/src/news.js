@@ -1,11 +1,11 @@
-// The Board's news (index.js's news upstreams, one per feed of NEWS_FEEDS): an RSS 2.0 feed's
-// items as [{id, title, full, at, link, summary}] (feedItems; the id, the link and the summary for
-// /news and /article), with no XML library (Workers have no DOMParser): each <item>'s <title>
-// and <pubDate>, the CDATA unwrapped, the tags stripped, the entities decoded, the publisher that
-// Google News appends removed, the title cut to TITLE_MAX code points at a word, then the newest
-// first. The Worker reads only the head of a feed's body (readFeedHead): a feed can be 1 MB, and
-// the free plan gives about 10 ms of CPU per request. Then pure functions: the Worker caches the
-// parsed items, not the XML.
+// The Board's news (index.js's news upstreams, one per feed of NEWS_FEEDS): an RSS 2.0 feed's items
+// as [{id, title, full, at, link, summary}] (feedItems; the id, the link and the summary for /news
+// and /article since 2026-10-14), with no XML library (Workers have no DOMParser): each <item>'s
+// <title> and <pubDate>, the CDATA unwrapped, the tags stripped, the entities decoded, the
+// publisher that Google News appends removed, the title cut to TITLE_MAX code points at a word,
+// then the newest first. The Worker reads only the head of a feed's body (readFeedHead): a feed can
+// be 1 MB, and the free plan gives about 10 ms of CPU per request. Then pure functions: the Worker
+// caches the parsed items, not the XML.
 
 import { clean } from './board.js';
 
@@ -69,7 +69,7 @@ export function readFeedHead(body, keep = ITEMS_MAX) {
   return readHead(body, { items: keep, more: (head) => (newestFirst(head) ? null : { items: SORT_ITEMS, bytes: SORT_BYTES }) });
 }
 
-// The named entities that feeds use (&bull;, &nbsp;) and those of Spanish and other Latin text.
+// The named entities of the feeds read on 2026-10-13 (&bull;, &nbsp;) and of Spanish text.
 const NAMED = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', bull: '•', hellip: '...', ndash: '–',
   mdash: '—', laquo: '«', raquo: '»', ldquo: '“', rdquo: '”', lsquo: '‘', rsquo: '’',
@@ -112,7 +112,7 @@ export function cutTitle(s, max = TITLE_MAX) {
   return cut.replace(/[\s,.;:–—-]+$/, '') + '...';
 }
 
-// A title without the publisher at its end: Google News writes "Title - Publisher" and names the
+// A title without the publisher at its end: Google News writes "Title - Infobae" and names the
 // publisher in the item's <source>. Only that exact end goes ("-", "–" or "—" between spaces); a
 // title that is only the publisher stays.
 export function dropPublisher(title, publisher) {
@@ -162,9 +162,45 @@ function dated(xml) {
   return out;
 }
 
-// An item (dated's {body, at}) as {id, title, full, at, link, summary}. title is cut to TITLE_MAX
-// code points, full to FULL_MAX, the summary (the <description>, tags stripped: some feeds write a
-// <ul> of <li>) to SUMMARY_MAX. The title is '' when the item has none, the link and the summary ''.
+// The item's picture, when the feed names one (Couch 0.6.0, the reader's photo): the first
+// media:content that is an image (medium="image", a type image/*, or no type), else the first
+// media:thumbnail, else an image enclosure, else the first <img> of the description (also when the
+// description holds its HTML as entities). An http(s) URL of at most IMAGE_URL_MAX characters,
+// else ''. The bytes come through /image, never from the feed's host to the console.
+export const IMAGE_URL_MAX = 512;
+const tagsOf = (name, s) => Array.from(s.matchAll(new RegExp(`<${name}\\b[^>]*>`, 'gi')), (m) => m[0]);
+const attrOf = (tag, name) => {
+  const m = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(tag);
+  return m ? m[1] : '';
+};
+// An http(s) URL as the feed wrote it (no URL object: feedItems makes one URL per kept item, a
+// test counts them), at most IMAGE_URL_MAX characters, no space or control character, else ''.
+export function imageUrl(s) {
+  const u = String(s ?? '').trim();
+  if (!u || u.length > IMAGE_URL_MAX || !/^https?:\/\/[^\s"'<>\u0000-\u001f\u007f]+$/i.test(u)) return '';
+  return u;
+}
+export function itemImage(body) {
+  const cands = [];
+  for (const t of tagsOf('media:content', body)) {
+    const type = attrOf(t, 'type').toLowerCase(), medium = attrOf(t, 'medium').toLowerCase();
+    if (medium === 'image' || type.startsWith('image/') || (!type && !medium)) cands.push(attrOf(t, 'url'));
+  }
+  for (const t of tagsOf('media:thumbnail', body)) cands.push(attrOf(t, 'url'));
+  for (const t of tagsOf('enclosure', body)) if (attrOf(t, 'type').toLowerCase().startsWith('image/')) cands.push(attrOf(t, 'url'));
+  const ds = /<description\b[^>]*>([\s\S]*?)<\/description>/.exec(body);
+  if (ds) for (const t of tagsOf('img', decodeEntities(ds[1].replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, '$1')))) cands.push(attrOf(t, 'src'));
+  for (const c of cands) {
+    const u = imageUrl(decodeEntities(c));
+    if (u) return u;
+  }
+  return '';
+}
+
+// An item (dated's {body, at}) as {id, title, full, at, link, summary, image}. title is cut to
+// TITLE_MAX code points, full to FULL_MAX, the summary (the <description>, tags stripped: Clarin
+// writes a <ul> of <li>) to SUMMARY_MAX. The title is '' when the item has none, the link, the
+// summary and the image ''.
 function item({ body, at }) {
   const t = /<title\b[^>]*>([\s\S]*?)<\/title>/.exec(body);
   const s = /<source\b[^>]*>([\s\S]*?)<\/source>/.exec(body);
@@ -172,7 +208,7 @@ function item({ body, at }) {
   const l = /<link\b[^>]*>([\s\S]*?)<\/link>/.exec(body);
   const link = l ? feedLink(elementText(l[1])) : '';
   const ds = /<description\b[^>]*>([\s\S]*?)<\/description>/.exec(body);
-  return { id: itemId(link, full), title: cutTitle(full), full, at, link, summary: ds ? cutTitle(elementText(ds[1]), SUMMARY_MAX) : '' };
+  return { id: itemId(link, full), title: cutTitle(full), full, at, link, summary: ds ? cutTitle(elementText(ds[1]), SUMMARY_MAX) : '', image: itemImage(body) };
 }
 
 // True when the dated items of a feed's text are newest first (an item with no date is not
@@ -209,7 +245,7 @@ export function feedItems(xml, max = FEED_ITEMS) {
 // NEWS_FEEDS, "Label=https://url,Label*2=https://url,Label*2@economy=https://url" (not CASAS's
 // ':', which a URL holds): at most FEEDS_MAX feeds, each {label, url, weight, category} with an
 // http or https URL. The weight ("*2" after the label, 1 to WEIGHT_MAX) is the feed's share of
-// the news lines; no "*": weight 1. The category ("@economy" after the weight:
+// the news lines; no "*": weight 1. The category ("@economy" after the weight, since 2026-10-14:
 // 1 to 16 letters a to z, case not counted, kept in lower case) names the feed's section on
 // /news; no "@": ''. The first "=" ends the label part (a URL holds "="). A bad entry is skipped
 // (also a bad category). A URL with a comma cannot be written here.

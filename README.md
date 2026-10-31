@@ -14,11 +14,23 @@ deploy for your place (`worker/`).
   smaller tiles, each with its change since the day before; a news ticker.
   The sky behind the tiles follows the sun, the clouds and the rain.
 - **News:** the latest headlines of your feeds. CROSS opens one in a reader
-  with a QR code for the full article on a phone.
+  with a QR code for the full article on a phone, and since 0.6.0 the
+  article's photo (the feed's picture, or the page's `og:image`), fetched
+  through the Worker's `/image` and decoded on the console (ps3gfx's
+  `image.h`, a JPEG or PNG up to 1.5 MB and 1600 px a side, shown up to
+  960 x 540).
 - **Futbol:** today's or tomorrow's games by league, with the time or the
   minute, the score and the TV channels; live games marked and refreshed
   every minute. It needs a Worker with `/futbol` (the template has the
   reply's format, not a source of fixtures).
+- **Economía:** the indicators of the Argentine economy in one tile, by
+  section: Precios (inflation, the REM forecast, UVA, CER, ICL, the poverty
+  line), Dólar (the wholesale and retail dollar, the blue, the gap), Tasas y
+  BCRA (BADLAR, TAMAR, the 30-day rate, the reserves, the monetary base, the
+  country risk) and Actividad (EMAE, unemployment), each with its date and
+  the move since the previous reading, and the inflation of the last 13
+  months as bars. It needs a Worker with `/economia` (the template has the
+  reply's format and the sources' ids; the author's Worker reads them).
 - **Info:** the Board's last fetch, the console's time settings, the Cell
   and RSX temperatures and the fan duty, night mode's hours (TRIANGLE edits
   them), and the effects' and the display's times.
@@ -28,6 +40,8 @@ deploy for your place (`worker/`).
   In night mode's hours (`night.txt`) it is only a small dim clock on black.
 
 <img src="docs/news.jpg" width="640" alt="The News page"> <img src="docs/article.jpg" width="640" alt="The reader">
+
+<img src="docs/economia.jpg" width="640" alt="The Economía page">
 
 (The screenshots come from the preview on the Mac, with the template
 Worker's test data for Berlin and made-up headlines.)
@@ -56,6 +70,7 @@ sources and answers Couch in one small text reply:
 | Weather now, rain in the next 2 hours, 12 hours, 3 days, sun | [Open-Meteo](https://open-meteo.com) | `CITY`, `LAT`, `LON`, `TZ` |
 | Air quality (US AQI) and UV index | [Open-Meteo](https://open-meteo.com) air quality | `LAT`, `LON`, `AIR_TTL` |
 | Fixtures for the Futbol page and the header's futbol line | none in the template: `/futbol` documents the reply | |
+| The Economía page's indicators | none in the template: `/economia` documents the reply and names the public sources (BCRA, INDEC, DolarAPI, ArgentinaDatos) | |
 | Exchange rates, 30-day chart, change | [Frankfurter](https://frankfurter.dev) (the ECB's reference rates) | `CURRENCY`, `RATES`, `FEATURE` |
 | Next public holiday | [Nager.Date](https://date.nager.at) | `COUNTRY`, `HOLIDAY_NAMES` |
 | Headlines and articles | your RSS feeds | `NEWS_FEEDS` |
@@ -135,6 +150,26 @@ night mode, the background; `reader.c`: the News page and the reader;
 `Makefile`, `build.sh`, `sfo.xml`, `pkgfiles/`, `art/`, `docs/`.
 
 ## Versions
+
+**0.6.0** (in progress, 2026-10-29): the Economía page, after Futbol in the
+L1/R1 cycle (four pages): the indicators of the Argentine economy from the
+Worker's `/economia` (`parse.h`'s `econ_data`, at most 8 KB and 24
+indicators), three columns of rows (the label, the date and the move since
+the previous reading in points for a rate or a percentage for a level, the
+value in the Argentine style) and the Actividad band with the inflation
+chart; fetched when the page opens (unless the reply came in the last 10
+min), every 30 min while it shows, 60 s after a failure, SQUARE at most once
+in 10 s. The preview's `PV_ECON` and the `econ` scenarios. The Futbol page
+is R1 twice from the Board now (L1 opens Economía).
+The reader's photo: an article reply with `photo=1` asks `/image?id=` right
+after it (`board.c`'s `REQ_IMAGE`, a binary GET of up to `IMG_MAX` 1.5 MB
+into its own buffer, `http_get_bin` with the head's Content-Length), the
+Board thread decodes it (ps3gfx 0.4.0's `image_decode` on a 24 MB arena,
+scaled to fit 960 x 540) and the reader shows it under the rule in a texture
+pair made once, the part inside the text band, rounded when whole; its
+place is kept while it loads, and the rows are made again when it comes or
+fails. The preview's `PV_IMAGES` and the `reader_photo` scenario. Couch
+links ps3gfx 0.4.0 (`image.h`).
 
 **0.5.1** (2026-10-17): Couch on
 ps3gfx 57b2eb0 and the fixes of its two reviews: `read_pad` cancels Info's

@@ -33,10 +33,18 @@ extern char board_url_note[160];     /* why board_url.txt was not used, or "" */
 /* The thread's requests. board_ask_news and board_ask_article (the
  * reader, the main thread) ask for one at the thread's next free moment;
  * a new article replaces one that has not started. */
-enum { REQ_BOARD, REQ_NEWS, REQ_ARTICLE, REQ_FUTBOL };
+enum { REQ_BOARD, REQ_NEWS, REQ_ARTICLE, REQ_FUTBOL, REQ_ECON, REQ_IMAGE };
+/* The reader's photo (0.6.0): the open article's picture from /image?id=,
+ * IMG_MAX bytes at most, decoded on the thread into PHOTO_W x PHOTO_H
+ * texels at most (ps3gfx's image.h, the aspect kept). */
+#define IMG_MAX 1572864
+#define PHOTO_W 960
+#define PHOTO_H 540
 void board_ask_news(void);
 void board_ask_article(const char *id);
 void board_ask_futbol(int day);      /* 0 today, 1 tomorrow; a new day replaces one that has not started */
+void board_ask_econ(void);           /* the Economía page's reply (0.6.0) */
+void board_ask_image(const char *id);   /* the article's photo (0.6.0): as board_ask_article, a new id replaces one not started */
 
 /* A news or article reply as board_take hands it to reader_take (a futbol
  * reply to futbol_take): the request, the GET's result, the parse (the
@@ -54,6 +62,9 @@ typedef struct {
     const news_data *news;
     const article_data *art;
     const futbol_data *fut;
+    const econ_data *econ;           /* an economia reply (0.6.0) */
+    int img_ok, img_w, img_h, img_rc;   /* an image reply (0.6.0): decoded, its size, the decoder's rc (-3: the body was cut); img the texels, row y at img + y * img_w */
+    const u32 *img;
     int qr_ok;
     const unsigned char *qr;
     char words[160];                 /* "ok", "HTTP 404", "no answer in 10 s", ... */

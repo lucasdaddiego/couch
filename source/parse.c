@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 #include "parse.h"
 
 /* ---- text ------------------------------------------------------------------ */
@@ -815,6 +816,8 @@ int article_parse(const char *body, int n, int fold, article_data *a)
             text_field(a->date, sizeof a->date, f[0], fl[0], fold);
             if (!strcmp(a->date, "-")) a->date[0] = 0;
             a->age = c > 1 ? age_field(f[1], fl[1]) : -1;
+        } else if (key_is(k, kl, "photo")) {
+            a->has_photo = vl == 1 && val[0] == '1';
         } else if (key_is(k, kl, "link")) {
             if (vl > (int)sizeof a->link - 1) continue;      /* a cut link is a broken one: none (the Worker sends 1019 bytes at most) */
             text_field(a->link, sizeof a->link, val, vl, 0);   /* bytes as they came: a fold would break the link */
@@ -1298,4 +1301,86 @@ void ambient_spot(long k, float *x, float *y)
     if (k < 0) k = 0;
     *x = (float)floor(AMBIENT_DRIFT_X * sin((double)k * 2.399963229728653) + 0.5);   /* the golden angle: no place soon again */
     *y = (float)floor(AMBIENT_DRIFT_Y * sin((double)k * 1.3) + 0.5);
+}
+
+/* ---- the Economía page's reply (0.6.0) ------------------------------------------------------- */
+
+/* A number in the C form (a dot decimal, an optional sign) from field i:
+ * 1 and *out, 0 for "-", a missing field or anything else. */
+static int num_field(const char **f, const int *fl, int c, int i, double *out)
+{
+    char s[40];
+    if (i >= c || fl[i] <= 0 || fl[i] >= (int)sizeof s) return 0;
+    memcpy(s, f[i], (size_t)fl[i]);
+    s[fl[i]] = 0;
+    char *e;
+    double v = strtod(s, &e);
+    if (e == s || *e || v != v || v > 1e15 || v < -1e15) return 0;
+    *out = v;
+    return 1;
+}
+
+int econ_parse(const char *body, int n, int fold, econ_data *d)
+{
+    const char *p = body, *end = body + n, *ls;
+    int ll;
+    memset(d, 0, sizeof *d);
+    d->feed.age = -1;
+    int rc = head_line(&p, end, "couch-economia ", &d->version);
+    if (rc != BP_OK) return rc;
+    while (next_line(&p, end, &ls, &ll)) {
+        if (ll == 3 && !memcmp(ls, "end", 3)) return BP_OK;
+        const char *eq = memchr(ls, '=', (size_t)ll);
+        if (!eq) continue;
+        const char *k = ls, *val = eq + 1;
+        int kl = (int)(eq - ls), vl = ll - kl - 1;
+        const char *f[9];
+        int fl[9], c;
+        double v;
+        if (key_is(k, kl, "now")) {
+            c = split(val, vl, f, fl, 1);
+            if (num_field(f, fl, c, 0, &v) && v > 0 && v < 4e9) d->now = (long)v;
+        } else if (key_is(k, kl, "ind")) {
+            if (d->n == ECON_N) {
+                d->more++;
+                continue;
+            }
+            c = split(val, vl, f, fl, 9);
+            if (c < 9 || !num_field(f, fl, c, 4, &v)) continue;
+            econ_ind *x = &d->ind[d->n];
+            memset(x, 0, sizeof *x);
+            put(x->key, sizeof x->key, f, fl, c, 0, 1);
+            put(x->label, sizeof x->label, f, fl, c, 1, fold);
+            put(x->section, sizeof x->section, f, fl, c, 2, fold);
+            put(x->unit, sizeof x->unit, f, fl, c, 3, 1);
+            x->value = v;
+            put(x->date, sizeof x->date, f, fl, c, 5, 1);
+            x->has_prev = num_field(f, fl, c, 6, &x->prev);
+            put(x->prev_date, sizeof x->prev_date, f, fl, c, 7, 1);
+            put(x->source, sizeof x->source, f, fl, c, 8, fold);
+            if (!x->key[0] || !x->label[0]) continue;
+            d->n++;
+        } else if (key_is(k, kl, "hist")) {
+            c = split(val, vl, f, fl, 2);
+            if (c < 2) continue;
+            put(d->hist_key, sizeof d->hist_key, f, fl, c, 0, 1);
+            d->n_hist = 0;
+            const char *s = f[1], *e = f[1] + fl[1];
+            while (s < e && d->n_hist < ECON_HIST) {
+                const char *comma = memchr(s, ',', (size_t)(e - s));
+                const char *vf[1] = {s};
+                int vfl[1] = {(int)((comma ? comma : e) - s)};
+                if (!num_field(vf, vfl, 1, 0, &v)) break;
+                d->hist[d->n_hist++] = v;
+                s = comma ? comma + 1 : e;
+            }
+        } else if (key_is(k, kl, "econ_missing")) {
+            text_field(d->missing, sizeof d->missing, val, vl, fold);
+        } else if (key_is(k, kl, "econ_age")) {
+            feed_age(&d->feed, val, vl);
+        } else if (key_is(k, kl, "econ_state")) {
+            feed_state(&d->feed, val, vl, fold);
+        }
+    }
+    return BP_CUT;
 }

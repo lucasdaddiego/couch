@@ -32,5 +32,6 @@ int reader_reading(void);
 void reader_refresh(void);
 /* A news or article reply (board_take). */
 void reader_take(const board_reply *b);
+void reader_take_image(const board_reply *b);   /* the open article's photo (0.6.0, board_take) */
 
 #endif
