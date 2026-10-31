@@ -151,7 +151,7 @@ night mode, the background; `reader.c`: the News page and the reader;
 
 ## Versions
 
-**0.6.0** (in progress, 2026-10-29): the Economía page, after Futbol in the
+**0.6.0** (2026-10-31): the Economía page, after Futbol in the
 L1/R1 cycle (four pages): the indicators of the Argentine economy from the
 Worker's `/economia` (`parse.h`'s `econ_data`, at most 8 KB and 24
 indicators), three columns of rows (the label, the date and the move since
@@ -169,7 +169,18 @@ scaled to fit 960 x 540) and the reader shows it under the rule in a texture
 pair made once, the part inside the text band, rounded when whole; its
 place is kept while it loads, and the rows are made again when it comes or
 fails. The preview's `PV_IMAGES` and the `reader_photo` scenario. Couch
-links ps3gfx 0.4.0 (`image.h`).
+links ps3gfx 047e850 (0.4.0, `image.h`). On the author's console
+(2026-10-31, rc2, the released bytes, through webMAN's virtual pad and a
+camera on the TV): the Economía page with 19 indicators and the 13-month
+chart (the Worker's reply of 1.8 KB in 0.07 s), a BBC item's thumbnail
+(6.8 KB, 240 x 135, shown at its own size) and a Clarín picture (209 KB,
+1200 x 630 decoded to 960 x 504, fetched in 0.12 s) under the article's
+rule and scrolled past the band's top (rc1 lost a photo once its top was
+70 px above the band: the reader skipped every row by a line's reach; rc2
+skips the photo row by its height), the L1/R1 cycle of four pages; 59.92
+frames a second over 121 s, the frame's busy time 1.31 ms mean (18.3 ms
+at the first frame), a sky picture in 1.42 ms on the slowest SPU, the
+journal's 10 calls ok, no freeze.
 
 **0.5.1** (2026-10-17): Couch on
 ps3gfx 57b2eb0 and the fixes of its two reviews: `read_pad` cancels Info's
