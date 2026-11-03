@@ -17,7 +17,7 @@
 {
   "name": "couch-board",
   "main": "src/index.js",
-  "compatibility_date": "2026-09-01",
+  "compatibility_date": "2026-10-23",
   "workers_dev": false,
   "routes": [{ "pattern": "board.example.com", "custom_domain": true }],
   "vars": {
