@@ -4,9 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Supply-chain cooldown: a version update waits 7 days (security updates do not).
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
   - package-ecosystem: npm
     directory: /worker
     schedule:
       interval: weekly
+    # Supply-chain cooldown: a version update waits 7 days (security updates do not).
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
